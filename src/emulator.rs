@@ -313,7 +313,9 @@ impl Ppu {
 
     #[inline]
     fn chr_read(&self, addr: usize) -> u8 {
-        self.chr_rom[addr & self.chr_addr_mask]
+        let idx = addr & self.chr_addr_mask;
+        // SAFETY: SMB/NROM CHR ROM sizes are power-of-two and chr_addr_mask is len - 1.
+        unsafe { *self.chr_rom.get_unchecked(idx) }
     }
 
     #[inline]
@@ -380,7 +382,7 @@ impl Ppu {
         for y in 0..NES_HEIGHT {
             for x in 0..NES_WIDTH {
                 let color = self.bg_color_index(x, y);
-                dst[y * NES_WIDTH + x] = nes_gray(color);
+                dst[y * NES_WIDTH + x] = NES_GRAY_PALETTE[color as usize];
             }
         }
         self.draw_sprites_gray(dst);
@@ -393,8 +395,9 @@ impl Ppu {
     }
 
     fn write_bg_gray_cropped_tiled(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        let palette_gray = self.palette_gray();
         if self.mask & 0x08 == 0 {
-            dst.fill(nes_gray(self.palette[0]));
+            dst.fill(palette_gray[0]);
             return;
         }
 
@@ -437,12 +440,12 @@ impl Ppu {
                 for col in 0..run {
                     let bit = 7 - (fine_x + col);
                     let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                    let color = if pixel == 0 {
-                        self.palette[0]
+                    let gray = if pixel == 0 {
+                        palette_gray[0]
                     } else {
-                        self.palette[(palette_id as usize) * 4 + pixel as usize]
+                        palette_gray[(palette_id as usize) * 4 + pixel as usize]
                     };
-                    dst[row_start + x + col] = nes_gray(color);
+                    dst[row_start + x + col] = gray;
                 }
 
                 x += run;
@@ -559,6 +562,7 @@ impl Ppu {
             return;
         }
 
+        let palette_gray = self.palette_gray();
         let pattern_base = if self.ctrl & 0x08 != 0 {
             0x1000
         } else {
@@ -599,8 +603,8 @@ impl Ppu {
                     {
                         continue;
                     }
-                    let color = self.palette[palette_base + pixel as usize];
-                    dst[screen_y as usize * NES_WIDTH + screen_x as usize] = nes_gray(color);
+                    dst[screen_y as usize * NES_WIDTH + screen_x as usize] =
+                        palette_gray[palette_base + pixel as usize];
                 }
             }
         }
@@ -611,6 +615,7 @@ impl Ppu {
             return;
         }
 
+        let palette_gray = self.palette_gray();
         let crop_top = crop_top as i16;
         let crop_bottom = crop_top + height as i16;
         let pattern_base = if self.ctrl & 0x08 != 0 {
@@ -653,9 +658,9 @@ impl Ppu {
                     {
                         continue;
                     }
-                    let color = self.palette[palette_base + pixel as usize];
                     let out_y = (screen_y - crop_top) as usize;
-                    dst[out_y * NES_WIDTH + screen_x as usize] = nes_gray(color);
+                    dst[out_y * NES_WIDTH + screen_x as usize] =
+                        palette_gray[palette_base + pixel as usize];
                 }
             }
         }
@@ -792,6 +797,15 @@ impl Ppu {
     }
 
     #[inline]
+    fn palette_gray(&self) -> [u8; 32] {
+        let mut out = [0; 32];
+        for (dst, &color) in out.iter_mut().zip(self.palette.iter()) {
+            *dst = NES_GRAY_PALETTE[color as usize];
+        }
+        out
+    }
+
+    #[inline]
     fn bg_world_pos(&self, x: usize, y: usize) -> (usize, usize) {
         if y < 32 {
             (x, y)
@@ -804,13 +818,18 @@ impl Ppu {
     }
 }
 
-#[inline]
-fn nes_gray(color: u8) -> u8 {
-    let hue = color & 0x0f;
-    let level = (color >> 4) & 0x03;
-    level
-        .saturating_mul(56)
-        .saturating_add(hue.saturating_mul(5))
+const NES_GRAY_PALETTE: [u8; 64] = build_nes_gray_palette();
+
+const fn build_nes_gray_palette() -> [u8; 64] {
+    let mut table = [0; 64];
+    let mut color = 0;
+    while color < 64 {
+        let hue = (color & 0x0f) as u8;
+        let level = ((color >> 4) & 0x03) as u8;
+        table[color] = level * 56 + hue * 5;
+        color += 1;
+    }
+    table
 }
 
 #[inline]
@@ -1003,15 +1022,16 @@ impl NesEmulator {
 
     fn run_frame(&mut self, buttons: u8) {
         self.controller_state = buttons;
-        let target_frame = self.ppu.frame.wrapping_add(1);
         let mut cpu_cycle_guard = 0usize;
-        while self.ppu.frame != target_frame && cpu_cycle_guard < CPU_CYCLES_PER_FRAME_GUARD {
+        loop {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
             }
             let cycles = self.cpu_step() as usize;
             cpu_cycle_guard += cycles;
-            self.ppu.tick(cycles * 3);
+            if self.ppu.tick(cycles * 3) || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD {
+                break;
+            }
         }
     }
 
@@ -1049,7 +1069,9 @@ impl NesEmulator {
 
     #[inline]
     fn prg_read(&self, addr: u16) -> u8 {
-        self.prg_rom[((addr - 0x8000) as usize) & self.prg_addr_mask]
+        let idx = ((addr - 0x8000) as usize) & self.prg_addr_mask;
+        // SAFETY: SMB/NROM PRG ROM sizes are power-of-two and prg_addr_mask is len - 1.
+        unsafe { *self.prg_rom.get_unchecked(idx) }
     }
 
     #[inline]
