@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use crate::cartridge::Cartridge;
-use crate::emulator::{NES_HEIGHT, NES_WIDTH};
+use crate::emulator::{NES_HEIGHT, NES_WIDTH, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH};
 use crate::vec_env::{InitialState, MarioVecEnv, VecEnvConfig};
 
 #[pyclass]
@@ -41,9 +41,9 @@ impl FastMarioVecEnv {
         if frame_stack == 0 {
             return Err(PyValueError::new_err("frame_stack must be > 0"));
         }
-        if crop_top + crop_bottom >= NES_HEIGHT {
+        if crop_top + crop_bottom >= VISIBLE_FRAME_HEIGHT {
             return Err(PyValueError::new_err(format!(
-                "crop_top + crop_bottom must be less than {NES_HEIGHT}, got {}",
+                "crop_top + crop_bottom must be less than {VISIBLE_FRAME_HEIGHT}, got {}",
                 crop_top + crop_bottom
             )));
         }
@@ -470,5 +470,7 @@ fn _supermariobrosnes_turbo(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResul
     m.add_class::<FastMarioVecEnv>()?;
     m.add("NES_WIDTH", NES_WIDTH)?;
     m.add("NES_HEIGHT", NES_HEIGHT)?;
+    m.add("VISIBLE_FRAME_WIDTH", VISIBLE_FRAME_WIDTH)?;
+    m.add("VISIBLE_FRAME_HEIGHT", VISIBLE_FRAME_HEIGHT)?;
     Ok(())
 }

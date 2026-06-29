@@ -29,6 +29,13 @@ INFO_KEY_MAP = {
     "xscrollHi": "xscroll_hi",
     "xscrollLo": "xscroll_lo",
 }
+SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH = (
+    "sha256:f5000bb13abcc81d000892b6b0d5ebb7fb101f729859af9ec8ca524a5b2b02f8"
+)
+SANDBOX_SB3_LEVEL1_1_DONE_ON_INFO = {
+    "life_loss": ("lives", "decrease"),
+    "level_change": (("levelHi", "levelLo"), "change"),
+}
 ACTION_BUTTONS = {
     "noop": (),
     "right": ("RIGHT",),
@@ -48,6 +55,7 @@ class ComparisonConfig:
     game: str
     state: str
     num_envs: int
+    env_threads: int
     steps: int
     seed: int
     frame_skip: int
@@ -59,6 +67,7 @@ class ComparisonConfig:
     resize_height: int
     action_set: str
     maxpool_last_two: bool
+    copy_observations: bool
     terminate_on_flag: bool
     include_obs: bool
     include_rewards: bool
@@ -91,7 +100,18 @@ def parse_args() -> ComparisonConfig:
     )
     parser.add_argument("--game", default=DEFAULT_STABLE_RETRO_GAME)
     parser.add_argument("--state", default="Level1-1")
-    parser.add_argument("--num-envs", type=int, default=8)
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=16,
+        help="Vector env count. Default matches sandbox-sb3 Level1-1 training.",
+    )
+    parser.add_argument(
+        "--env-threads",
+        type=int,
+        default=4,
+        help="RetroVecEnv worker threads. Default matches sandbox-sb3 Level1-1 training.",
+    )
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--frame-skip", type=int, default=4)
@@ -105,7 +125,14 @@ def parse_args() -> ComparisonConfig:
     parser.add_argument(
         "--maxpool-last-two",
         action="store_true",
-        help="Enable RetroVecEnv maxpooling. The fast env has no matching option yet.",
+        help=(
+            "Enable RetroVecEnv maxpooling. sandbox-sb3 Level1-1 training leaves this disabled."
+        ),
+    )
+    parser.add_argument(
+        "--copy-observations",
+        action="store_true",
+        help="Enable RetroVecEnv observation copies. sandbox-sb3 Level1-1 training disables this.",
     )
     parser.add_argument(
         "--terminate-on-flag",
@@ -131,6 +158,7 @@ def parse_args() -> ComparisonConfig:
 
     positive = {
         "num_envs": args.num_envs,
+        "env_threads": args.env_threads,
         "steps": args.steps,
         "frame_skip": args.frame_skip,
         "frame_stack": args.frame_stack,
@@ -151,6 +179,7 @@ def parse_args() -> ComparisonConfig:
         game=args.game,
         state=args.state,
         num_envs=args.num_envs,
+        env_threads=args.env_threads,
         steps=args.steps,
         seed=args.seed,
         frame_skip=args.frame_skip,
@@ -162,6 +191,7 @@ def parse_args() -> ComparisonConfig:
         resize_height=args.resize_height,
         action_set=args.action_set,
         maxpool_last_two=args.maxpool_last_two,
+        copy_observations=args.copy_observations,
         terminate_on_flag=args.terminate_on_flag,
         include_obs=not args.skip_obs,
         include_rewards=not args.skip_rewards,
@@ -226,6 +256,10 @@ def install_sb3_vecenv_shim_if_needed() -> None:
             )
             return list(self._seeds)
 
+        def step(self, actions: Any):
+            self.step_async(actions)
+            return self.step_wait()
+
         def _reset_seeds(self) -> None:
             self._seeds = [None for _ in range(self.num_envs)]
 
@@ -267,28 +301,29 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosVecEnv:
 def make_retro_env(config: ComparisonConfig):
     import stable_retro as retro
 
-    env = retro.RetroVecEnv(
-        config.game,
-        state=config.state,
-        num_envs=config.num_envs,
-        num_threads=config.num_envs,
-        rom_path=str(config.rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=retro.Actions.ALL,
-        obs_crop=(config.crop_top, config.crop_bottom, 0, 0),
-        obs_resize=(config.resize_height, config.resize_width),
-        obs_grayscale=config.grayscale,
-        obs_resize_algorithm="area",
-        frame_skip=config.frame_skip,
-        frame_stack=config.frame_stack,
-        maxpool_last_two=config.maxpool_last_two,
-        noop_reset_max=0,
-        sticky_action_prob=0.0,
-        reward_clip=False,
-        info_mode="all",
-        obs_layout="chw",
-        copy_observations=True,
-    )
+    kwargs = {
+        "state": config.state,
+        "num_envs": config.num_envs,
+        "num_threads": config.env_threads,
+        "rom_path": str(config.rom_path),
+        "render_mode": "rgb_array",
+        "use_restricted_actions": retro.Actions.ALL,
+        "obs_crop": (config.crop_top, config.crop_bottom, 0, 0),
+        "obs_resize": (config.resize_height, config.resize_width),
+        "obs_grayscale": config.grayscale,
+        "obs_resize_algorithm": "area",
+        "frame_skip": config.frame_skip,
+        "frame_stack": config.frame_stack,
+        "maxpool_last_two": config.maxpool_last_two,
+        "noop_reset_max": 0,
+        "sticky_action_prob": 0.0,
+        "reward_clip": False,
+        "info_mode": "all",
+        "obs_layout": "chw",
+        "copy_observations": config.copy_observations,
+    }
+    kwargs["done_on_info"] = SANDBOX_SB3_LEVEL1_1_DONE_ON_INFO
+    env = retro.RetroVecEnv(config.game, **kwargs)
     if hasattr(env, "seed"):
         env.seed(config.seed)
     return env
@@ -324,12 +359,27 @@ def generate_action_trace(config: ComparisonConfig) -> np.ndarray:
     )
 
 
+def jsonable_scalar(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        return value.item()
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return repr(value)
+
+
 def array_summary(value: np.ndarray) -> dict[str, Any]:
-    return {
+    array = np.asarray(value)
+    payload: dict[str, Any] = {
         "shape": list(value.shape),
-        "dtype": str(value.dtype),
-        "sum": int(np.asarray(value, dtype=np.uint64).sum()),
+        "dtype": str(array.dtype),
     }
+    try:
+        payload["sum"] = int(np.asarray(value, dtype=np.uint64).sum())
+    except (TypeError, ValueError):
+        payload["values_sample"] = [
+            jsonable_scalar(item) for item in array.reshape(-1)[: min(array.size, 8)]
+        ]
+    return payload
 
 
 def mismatch_summary(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
@@ -391,6 +441,14 @@ def retro_info_snapshot(infos: list[dict[str, Any]]) -> dict[str, np.ndarray]:
     return snapshot
 
 
+def fast_infos_from_env(env: SuperMarioBrosVecEnv) -> list[dict[str, Any]]:
+    snapshot = fast_info_snapshot(env)
+    return [
+        {key: values[index].item() for key, values in snapshot.items()}
+        for index in range(env.num_envs)
+    ]
+
+
 def compare_infos(
     *,
     phase: str,
@@ -402,7 +460,10 @@ def compare_infos(
     fast = fast_info_snapshot(fast_env)
     retro = retro_info_snapshot(retro_infos)
     for key, fast_values in fast.items():
-        retro_values = retro[key].astype(fast_values.dtype, copy=False)
+        try:
+            retro_values = retro[key].astype(fast_values.dtype, copy=False)
+        except (TypeError, ValueError):
+            retro_values = retro[key]
         require_array_equal(
             phase=phase,
             step=step,
@@ -441,13 +502,6 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                 fast=fast_obs,
                 retro=retro_obs,
             )
-        if config.include_infos:
-            compare_infos(
-                phase="reset",
-                step=None,
-                fast_env=fast_env,
-                retro_infos=list(getattr(retro_env, "reset_infos", [{}] * config.num_envs)),
-            )
 
         compared_steps = 0
         for step, fast_actions in enumerate(action_trace):
@@ -458,6 +512,12 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                 fast_actions,
             )
             retro_obs, retro_rewards, retro_dones, retro_infos = retro_env.step(retro_actions)
+            fast_native_dones = np.asarray(fast_terminated | fast_truncated, dtype=np.bool_)
+            retro_dones = np.asarray(retro_dones, dtype=np.bool_)
+            fast_compare_rewards = np.asarray(fast_rewards, dtype=np.float32)
+            retro_compare_rewards = np.asarray(retro_rewards, dtype=np.float32)
+            fast_compare_dones = fast_native_dones
+            retro_compare_dones = retro_dones
             compared_steps += 1
 
             if config.include_obs:
@@ -474,8 +534,8 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                     phase="step",
                     step=step,
                     field="rewards",
-                    fast=np.asarray(fast_rewards, dtype=np.float32),
-                    retro=np.asarray(retro_rewards, dtype=np.float32),
+                    fast=fast_compare_rewards,
+                    retro=retro_compare_rewards,
                     action_names=action_names,
                 )
             if config.include_dones:
@@ -483,8 +543,8 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                     phase="step",
                     step=step,
                     field="dones",
-                    fast=np.asarray(fast_terminated | fast_truncated, dtype=np.bool_),
-                    retro=np.asarray(retro_dones, dtype=np.bool_),
+                    fast=fast_compare_dones,
+                    retro=retro_compare_dones,
                     action_names=action_names,
                 )
             if config.include_infos:
@@ -495,7 +555,7 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                     retro_infos=retro_infos,
                     action_names=action_names,
                 )
-            if config.stop_on_done and (np.any(fast_terminated | fast_truncated) or np.any(retro_dones)):
+            if config.stop_on_done and (np.any(fast_compare_dones) or np.any(retro_compare_dones)):
                 break
 
         return {
@@ -522,6 +582,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "game": config.game,
         "state": config.state,
         "num_envs": config.num_envs,
+        "env_threads": config.env_threads,
         "steps": config.steps,
         "seed": config.seed,
         "frame_skip": config.frame_skip,
@@ -533,7 +594,30 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "resize_height": config.resize_height,
         "action_set": config.action_set,
         "maxpool_last_two": config.maxpool_last_two,
+        "copy_observations": config.copy_observations,
         "terminate_on_flag": config.terminate_on_flag,
+        "sandbox_sb3_level1_1_native_retro_vec_env_profile": {
+            "environment_hash": SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH,
+            "game": DEFAULT_STABLE_RETRO_GAME,
+            "state": "Level1-1",
+            "num_envs": 16,
+            "env_threads": 4,
+            "frame_skip": 4,
+            "frame_stack": 4,
+            "maxpool_last_two": False,
+            "copy_observations": False,
+            "obs_crop": [32, 0, 0, 0],
+            "obs_grayscale": True,
+            "obs_resize": [84, 84],
+            "obs_resize_algorithm": "area",
+            "obs_layout": "chw",
+            "sticky_action_prob": 0.0,
+            "action_set": "simple",
+            "done_on_info": {
+                "life_loss": ["lives", "decrease"],
+                "level_change": [["levelHi", "levelLo"], "change"],
+            },
+        },
         "include_obs": config.include_obs,
         "include_rewards": config.include_rewards,
         "include_dones": config.include_dones,

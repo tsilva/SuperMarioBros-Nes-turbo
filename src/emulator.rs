@@ -4,6 +4,10 @@ use thiserror::Error;
 
 pub const NES_WIDTH: usize = 256;
 pub const NES_HEIGHT: usize = 240;
+pub const VISIBLE_FRAME_LEFT: usize = 8;
+pub const VISIBLE_FRAME_TOP: usize = 8;
+pub const VISIBLE_FRAME_WIDTH: usize = 240;
+pub const VISIBLE_FRAME_HEIGHT: usize = 224;
 pub const RGB_CHANNELS: usize = 3;
 pub const FRAME_PIXELS_RGB: usize = NES_WIDTH * NES_HEIGHT * RGB_CHANNELS;
 pub const FRAME_PIXELS_GRAY: usize = NES_WIDTH * NES_HEIGHT;
@@ -16,11 +20,11 @@ const PPU_SPRITE0_DOT: usize = 30 * PPU_DOTS_PER_SCANLINE + 1;
 const PPU_VBLANK_DOT: usize = 241 * PPU_DOTS_PER_SCANLINE + 1;
 const PPU_PRERENDER_DOT: usize = 261 * PPU_DOTS_PER_SCANLINE + 1;
 const DEFAULT_GRAY_CROP_TOP: usize = 32;
-const DEFAULT_GRAY_CROP_HEIGHT: usize = NES_HEIGHT - DEFAULT_GRAY_CROP_TOP;
+const DEFAULT_GRAY_CROP_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - DEFAULT_GRAY_CROP_TOP;
 const DEFAULT_GRAY_RESIZE_WIDTH: usize = 84;
 const DEFAULT_GRAY_RESIZE_HEIGHT: usize = 84;
 const DEFAULT_GRAY_RESIZE_PIXELS: usize = DEFAULT_GRAY_RESIZE_WIDTH * DEFAULT_GRAY_RESIZE_HEIGHT;
-const DEFAULT_GRAY_AREA_DENOM: u32 = (NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT) as u32;
+const DEFAULT_GRAY_AREA_DENOM: u32 = (VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT) as u32;
 const SPRITE_SHADOW_EMPTY: u8 = 255;
 
 const FLAG_C: u8 = 0x01;
@@ -587,6 +591,19 @@ impl Ppu {
         self.draw_sprites_gray_cropped(dst, crop_top, height);
     }
 
+    fn write_gray_frame_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
+        debug_assert_eq!(dst.len(), width * height);
+        self.write_bg_gray_region_tiled(dst, crop_top, crop_left, width, height);
+        self.draw_sprites_gray_region(dst, crop_top, crop_left, width, height);
+    }
+
     fn write_gray_frame_cropped_area_84x84(&self, dst: &mut [u8], sprite_shadow: &mut [u8]) {
         debug_assert_eq!(dst.len(), DEFAULT_GRAY_RESIZE_PIXELS);
         debug_assert!(sprite_shadow.len() >= NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT);
@@ -662,6 +679,73 @@ impl Ppu {
                 }
 
                 x += run;
+            }
+        }
+    }
+
+    fn write_bg_gray_region_tiled(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
+        let palette_gray = self.palette_gray();
+        if self.mask & 0x08 == 0 {
+            dst.fill(palette_gray[0]);
+            return;
+        }
+
+        let pattern_base = if self.ctrl & 0x10 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        let scroll_x = self.render_scroll_x_px() as usize;
+        let scroll_y = self.scroll_y_px as usize;
+
+        for out_y in 0..height {
+            let y = crop_top + out_y;
+            let world_y = if y < 32 { y } else { y + scroll_y };
+            let table_y = (world_y / 240) & 1;
+            let local_y = world_y % 240;
+            let tile_y = local_y / 8;
+            let fine_y = local_y & 7;
+            let row_start = out_y * width;
+            let mut out_x = 0usize;
+
+            while out_x < width {
+                let screen_x = crop_left + out_x;
+                let world_x = if y < 32 { screen_x } else { screen_x + scroll_x };
+                let table_x = (world_x / 256) & 1;
+                let table = table_y * 2 + table_x;
+                let local_x = world_x & 0xff;
+                let tile_x = local_x / 8;
+                let fine_x = local_x & 7;
+                let nt_base = 0x2000 + (table as u16) * 0x400;
+                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
+                let attr =
+                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
+                let palette_id = (attr >> shift) & 0x03;
+                let pattern_addr = pattern_base + tile_id * 16 + fine_y;
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
+                let run = (8 - fine_x).min(width - out_x);
+
+                for col in 0..run {
+                    let bit = 7 - (fine_x + col);
+                    let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
+                    let gray = if pixel == 0 {
+                        palette_gray[0]
+                    } else {
+                        palette_gray[(palette_id as usize) * 4 + pixel as usize]
+                    };
+                    dst[row_start + out_x + col] = gray;
+                }
+
+                out_x += run;
             }
         }
     }
@@ -757,6 +841,30 @@ impl Ppu {
             }
         }
         self.draw_sprites_rgb_cropped(dst, crop_top, height);
+    }
+
+    fn write_rgb_frame_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
+        debug_assert_eq!(dst.len(), width * height * RGB_CHANNELS);
+        let plane = width * height;
+        for out_y in 0..height {
+            let y = crop_top + out_y;
+            for out_x in 0..width {
+                let x = crop_left + out_x;
+                let color = nes_rgb(self.bg_color_index(x, y));
+                let idx = out_y * width + out_x;
+                dst[idx] = color[0];
+                dst[plane + idx] = color[1];
+                dst[plane * 2 + idx] = color[2];
+            }
+        }
+        self.draw_sprites_rgb_region(dst, crop_top, crop_left, width, height);
     }
 
     #[inline]
@@ -982,6 +1090,71 @@ impl Ppu {
         }
     }
 
+    fn draw_sprites_gray_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
+        if self.mask & 0x10 == 0 {
+            return;
+        }
+
+        let palette_gray = self.palette_gray();
+        let crop_top_i = crop_top as i16;
+        let crop_bottom = crop_top_i + height as i16;
+        let crop_left_i = crop_left as i16;
+        let crop_right = crop_left_i + width as i16;
+        let pattern_base = if self.ctrl & 0x08 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        for sprite in (0..64).rev() {
+            let base = sprite * 4;
+            let sprite_y = self.oam[base] as i16 + 1;
+            let tile = self.oam[base + 1] as usize;
+            let attr = self.oam[base + 2];
+            let sprite_x = self.oam[base + 3] as i16;
+            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
+            let flip_h = attr & 0x40 != 0;
+            let flip_v = attr & 0x80 != 0;
+            let behind_background = attr & 0x20 != 0;
+
+            for row in 0..8usize {
+                let screen_y = sprite_y + row as i16;
+                if screen_y < crop_top_i || screen_y >= crop_bottom {
+                    continue;
+                }
+                let tile_row = if flip_v { 7 - row } else { row };
+                let pattern_addr = pattern_base + tile * 16 + tile_row;
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
+                for col in 0..8usize {
+                    let screen_x = sprite_x + col as i16;
+                    if screen_x < crop_left_i || screen_x >= crop_right {
+                        continue;
+                    }
+                    let tile_col = if flip_h { col } else { 7 - col };
+                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
+                    if pixel == 0 {
+                        continue;
+                    }
+                    if behind_background
+                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
+                    {
+                        continue;
+                    }
+                    let out_y = (screen_y - crop_top_i) as usize;
+                    let out_x = (screen_x - crop_left_i) as usize;
+                    dst[out_y * width + out_x] = palette_gray[palette_base + pixel as usize];
+                }
+            }
+        }
+    }
+
     fn accumulate_sprite_gray_area_84x84_deltas(
         &self,
         sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
@@ -1169,6 +1342,75 @@ impl Ppu {
         }
     }
 
+    fn draw_sprites_rgb_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
+        if self.mask & 0x10 == 0 {
+            return;
+        }
+
+        let crop_top_i = crop_top as i16;
+        let crop_bottom = crop_top_i + height as i16;
+        let crop_left_i = crop_left as i16;
+        let crop_right = crop_left_i + width as i16;
+        let plane = width * height;
+        let pattern_base = if self.ctrl & 0x08 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        for sprite in (0..64).rev() {
+            let base = sprite * 4;
+            let sprite_y = self.oam[base] as i16 + 1;
+            let tile = self.oam[base + 1] as usize;
+            let attr = self.oam[base + 2];
+            let sprite_x = self.oam[base + 3] as i16;
+            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
+            let flip_h = attr & 0x40 != 0;
+            let flip_v = attr & 0x80 != 0;
+            let behind_background = attr & 0x20 != 0;
+
+            for row in 0..8usize {
+                let screen_y = sprite_y + row as i16;
+                if screen_y < crop_top_i || screen_y >= crop_bottom {
+                    continue;
+                }
+                let tile_row = if flip_v { 7 - row } else { row };
+                let pattern_addr = pattern_base + tile * 16 + tile_row;
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
+                for col in 0..8usize {
+                    let screen_x = sprite_x + col as i16;
+                    if screen_x < crop_left_i || screen_x >= crop_right {
+                        continue;
+                    }
+                    let tile_col = if flip_h { col } else { 7 - col };
+                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
+                    if pixel == 0 {
+                        continue;
+                    }
+                    if behind_background
+                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
+                    {
+                        continue;
+                    }
+                    let color = nes_rgb(self.palette[palette_base + pixel as usize]);
+                    let out_y = (screen_y - crop_top_i) as usize;
+                    let out_x = (screen_x - crop_left_i) as usize;
+                    let idx = out_y * width + out_x;
+                    dst[idx] = color[0];
+                    dst[plane + idx] = color[1];
+                    dst[plane * 2 + idx] = color[2];
+                }
+            }
+        }
+    }
+
     #[inline]
     fn update_scroll_x_px(&mut self) {
         self.scroll_x_px = (((self.ctrl & 0x01) as u16) << 8) | self.scroll_x_low as u16;
@@ -1212,9 +1454,12 @@ const fn build_nes_gray_palette() -> [u8; 64] {
     let mut table = [0; 64];
     let mut color = 0;
     while color < 64 {
-        let hue = (color & 0x0f) as u8;
-        let level = ((color >> 4) & 0x03) as u8;
-        table[color] = level * 56 + hue * 5;
+        let rgb = NES_RGB_PALETTE[color];
+        table[color] = (((rgb[0] as u32) * 77
+            + (rgb[1] as u32) * 150
+            + (rgb[2] as u32) * 29
+            + 128)
+            >> 8) as u8;
         color += 1;
     }
     table
@@ -1226,68 +1471,68 @@ fn nes_rgb(color: u8) -> [u8; 3] {
 }
 
 const NES_RGB_PALETTE: [[u8; 3]; 64] = [
-    [84, 84, 84],
-    [0, 30, 116],
-    [8, 16, 144],
-    [48, 0, 136],
-    [68, 0, 100],
-    [92, 0, 48],
-    [84, 4, 0],
-    [60, 24, 0],
-    [32, 42, 0],
-    [8, 58, 0],
-    [0, 64, 0],
-    [0, 60, 0],
-    [0, 50, 60],
+    [112, 116, 112],
+    [32, 24, 136],
+    [0, 0, 168],
+    [64, 0, 152],
+    [136, 0, 112],
+    [168, 0, 16],
+    [160, 0, 0],
+    [120, 8, 0],
+    [64, 44, 0],
+    [0, 68, 0],
+    [0, 80, 0],
+    [0, 60, 16],
+    [24, 60, 88],
     [0, 0, 0],
     [0, 0, 0],
     [0, 0, 0],
-    [152, 150, 152],
-    [8, 76, 196],
-    [48, 50, 236],
-    [92, 30, 228],
-    [136, 20, 176],
-    [160, 20, 100],
-    [152, 34, 32],
-    [120, 60, 0],
-    [84, 90, 0],
-    [40, 114, 0],
-    [8, 124, 0],
-    [0, 118, 40],
-    [0, 102, 120],
+    [184, 188, 184],
+    [0, 112, 232],
+    [32, 56, 232],
+    [128, 0, 240],
+    [184, 0, 184],
+    [224, 0, 88],
+    [216, 40, 0],
+    [200, 76, 8],
+    [136, 112, 0],
+    [0, 148, 0],
+    [0, 168, 0],
+    [0, 144, 56],
+    [0, 128, 136],
     [0, 0, 0],
     [0, 0, 0],
     [0, 0, 0],
-    [236, 238, 236],
-    [76, 154, 236],
-    [120, 124, 236],
-    [176, 98, 236],
-    [228, 84, 236],
-    [236, 88, 180],
-    [236, 106, 100],
-    [212, 136, 32],
-    [160, 170, 0],
-    [116, 196, 0],
-    [76, 208, 32],
-    [56, 204, 108],
-    [56, 180, 204],
-    [60, 60, 60],
+    [248, 252, 248],
+    [56, 188, 248],
+    [88, 148, 248],
+    [64, 136, 248],
+    [240, 120, 248],
+    [248, 116, 176],
+    [248, 116, 96],
+    [248, 152, 56],
+    [240, 188, 56],
+    [128, 208, 16],
+    [72, 220, 72],
+    [88, 248, 152],
+    [0, 232, 216],
+    [120, 120, 120],
     [0, 0, 0],
     [0, 0, 0],
-    [236, 238, 236],
-    [168, 204, 236],
-    [188, 188, 236],
-    [212, 178, 236],
-    [236, 174, 236],
-    [236, 174, 212],
-    [236, 180, 176],
-    [228, 196, 144],
-    [204, 210, 120],
-    [180, 222, 120],
-    [168, 226, 144],
-    [152, 226, 180],
-    [160, 214, 228],
-    [160, 162, 160],
+    [248, 252, 248],
+    [168, 228, 248],
+    [192, 212, 248],
+    [208, 200, 248],
+    [248, 196, 248],
+    [248, 196, 216],
+    [248, 188, 176],
+    [248, 216, 168],
+    [248, 228, 160],
+    [224, 252, 160],
+    [168, 240, 184],
+    [176, 252, 200],
+    [152, 252, 240],
+    [192, 196, 192],
     [0, 0, 0],
     [0, 0, 0],
 ];
@@ -1487,6 +1732,17 @@ impl NesEmulator {
     }
 
     #[inline]
+    pub fn write_rgb_visible_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        self.ppu.write_rgb_frame_region(
+            dst,
+            VISIBLE_FRAME_TOP + crop_top,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            height,
+        );
+    }
+
+    #[inline]
     pub fn write_gray_frame(&self, dst: &mut [u8]) {
         self.ppu.write_gray_frame(dst);
     }
@@ -1494,6 +1750,22 @@ impl NesEmulator {
     #[inline]
     pub fn write_gray_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         self.ppu.write_gray_frame_cropped(dst, crop_top, height);
+    }
+
+    #[inline]
+    pub fn write_gray_visible_frame_cropped(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
+        self.ppu.write_gray_frame_region(
+            dst,
+            VISIBLE_FRAME_TOP + crop_top,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            height,
+        );
     }
 
     #[inline]
