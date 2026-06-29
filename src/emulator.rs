@@ -142,16 +142,29 @@ struct Area84AxisContribution {
     weight: u16,
 }
 
+#[derive(Clone, Copy)]
+struct Area84RowContribution {
+    row: u16,
+    weight: u16,
+}
+
 struct DefaultGrayArea84Plan {
     x: [[Area84AxisContribution; 2]; NES_WIDTH],
-    y: [[Area84AxisContribution; 2]; DEFAULT_GRAY_CROP_HEIGHT],
+    y: [[Area84RowContribution; 2]; DEFAULT_GRAY_CROP_HEIGHT],
 }
 
 fn default_gray_area84_plan() -> &'static DefaultGrayArea84Plan {
     static PLAN: OnceLock<DefaultGrayArea84Plan> = OnceLock::new();
     PLAN.get_or_init(|| DefaultGrayArea84Plan {
         x: build_area84_inverse_axis::<NES_WIDTH, DEFAULT_GRAY_RESIZE_WIDTH>(),
-        y: build_area84_inverse_axis::<DEFAULT_GRAY_CROP_HEIGHT, DEFAULT_GRAY_RESIZE_HEIGHT>(),
+        y: build_area84_inverse_axis::<DEFAULT_GRAY_CROP_HEIGHT, DEFAULT_GRAY_RESIZE_HEIGHT>().map(
+            |contributions| {
+                contributions.map(|contribution| Area84RowContribution {
+                    row: contribution.dst * DEFAULT_GRAY_RESIZE_WIDTH as u16,
+                    weight: contribution.weight,
+                })
+            },
+        ),
     })
 }
 
@@ -179,56 +192,79 @@ fn build_area84_inverse_axis<const SRC: usize, const DST: usize>(
     out
 }
 
-#[inline]
+#[inline(always)]
 fn accumulate_area_84x84_pixel(
     sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-    src_x: usize,
-    src_y: usize,
+    x_contributions: &[Area84AxisContribution; 2],
+    y_contributions: &[Area84RowContribution; 2],
     gray: u8,
 ) {
-    let plan = default_gray_area84_plan();
     let value = gray as u32;
-    for y_contribution in plan.y[src_y] {
-        if y_contribution.weight == 0 {
-            continue;
-        }
-        let row = y_contribution.dst as usize * DEFAULT_GRAY_RESIZE_WIDTH;
-        let y_weight = y_contribution.weight as u32;
-        for x_contribution in plan.x[src_x] {
-            if x_contribution.weight == 0 {
-                continue;
-            }
-            sums[row + x_contribution.dst as usize] +=
-                value * y_weight * x_contribution.weight as u32;
+    let x0 = x_contributions[0];
+    let x1 = x_contributions[1];
+    let y0 = y_contributions[0];
+    let y1 = y_contributions[1];
+
+    let row0 = y0.row as usize;
+    let weighted_y0 = value * y0.weight as u32;
+    sums[row0 + x0.dst as usize] += weighted_y0 * x0.weight as u32;
+    if x1.weight != 0 {
+        sums[row0 + x1.dst as usize] += weighted_y0 * x1.weight as u32;
+    }
+
+    if y1.weight != 0 {
+        let row1 = y1.row as usize;
+        let weighted_y1 = value * y1.weight as u32;
+        sums[row1 + x0.dst as usize] += weighted_y1 * x0.weight as u32;
+        if x1.weight != 0 {
+            sums[row1 + x1.dst as usize] += weighted_y1 * x1.weight as u32;
         }
     }
 }
 
-#[inline]
+#[inline(always)]
 fn add_area_84x84_delta(
     sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-    src_x: usize,
-    src_y: usize,
+    x_contributions: &[Area84AxisContribution; 2],
+    y_contributions: &[Area84RowContribution; 2],
     delta: i16,
 ) {
-    let plan = default_gray_area84_plan();
     let magnitude = delta.unsigned_abs() as u32;
-    for y_contribution in plan.y[src_y] {
-        if y_contribution.weight == 0 {
-            continue;
+    let x0 = x_contributions[0];
+    let x1 = x_contributions[1];
+    let y0 = y_contributions[0];
+    let y1 = y_contributions[1];
+
+    if delta >= 0 {
+        let row0 = y0.row as usize;
+        let weighted_y0 = magnitude * y0.weight as u32;
+        sums[row0 + x0.dst as usize] += weighted_y0 * x0.weight as u32;
+        if x1.weight != 0 {
+            sums[row0 + x1.dst as usize] += weighted_y0 * x1.weight as u32;
         }
-        let row = y_contribution.dst as usize * DEFAULT_GRAY_RESIZE_WIDTH;
-        let y_weight = y_contribution.weight as u32;
-        for x_contribution in plan.x[src_x] {
-            if x_contribution.weight == 0 {
-                continue;
+
+        if y1.weight != 0 {
+            let row1 = y1.row as usize;
+            let weighted_y1 = magnitude * y1.weight as u32;
+            sums[row1 + x0.dst as usize] += weighted_y1 * x0.weight as u32;
+            if x1.weight != 0 {
+                sums[row1 + x1.dst as usize] += weighted_y1 * x1.weight as u32;
             }
-            let weighted = magnitude * y_weight * x_contribution.weight as u32;
-            let dst = &mut sums[row + x_contribution.dst as usize];
-            if delta >= 0 {
-                *dst += weighted;
-            } else {
-                *dst -= weighted;
+        }
+    } else {
+        let row0 = y0.row as usize;
+        let weighted_y0 = magnitude * y0.weight as u32;
+        sums[row0 + x0.dst as usize] -= weighted_y0 * x0.weight as u32;
+        if x1.weight != 0 {
+            sums[row0 + x1.dst as usize] -= weighted_y0 * x1.weight as u32;
+        }
+
+        if y1.weight != 0 {
+            let row1 = y1.row as usize;
+            let weighted_y1 = magnitude * y1.weight as u32;
+            sums[row1 + x0.dst as usize] -= weighted_y1 * x0.weight as u32;
+            if x1.weight != 0 {
+                sums[row1 + x1.dst as usize] -= weighted_y1 * x1.weight as u32;
             }
         }
     }
@@ -473,6 +509,22 @@ impl Ppu {
         }
     }
 
+    #[inline(always)]
+    fn nametable_read(&self, table: usize, offset: usize) -> u8 {
+        let physical_table = if self.vertical_mirroring {
+            table & 1
+        } else {
+            (table >> 1) & 1
+        };
+        // SAFETY: mirroring maps the four logical nametables into the two
+        // physical 1 KiB VRAM pages, and the offset is masked to that page.
+        unsafe {
+            *self
+                .vram
+                .get_unchecked(physical_table * 0x400 + (offset & 0x3ff))
+        }
+    }
+
     #[inline]
     fn ppu_write(&mut self, addr: u16, value: u8) {
         let addr = addr & 0x3fff;
@@ -539,12 +591,15 @@ impl Ppu {
         debug_assert_eq!(dst.len(), DEFAULT_GRAY_RESIZE_PIXELS);
         debug_assert!(sprite_shadow.len() >= NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT);
 
+        let plan = default_gray_area84_plan();
         let mut sums = [0u32; DEFAULT_GRAY_RESIZE_PIXELS];
-        let sprite_shadow = &mut sprite_shadow[..NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
-        sprite_shadow.fill(SPRITE_SHADOW_EMPTY);
 
-        self.accumulate_bg_gray_area_84x84(&mut sums);
-        self.accumulate_sprite_gray_area_84x84_deltas(&mut sums, sprite_shadow);
+        self.accumulate_bg_gray_area_84x84(&mut sums, plan);
+        if self.mask & 0x10 != 0 {
+            let sprite_shadow = &mut sprite_shadow[..NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
+            sprite_shadow.fill(SPRITE_SHADOW_EMPTY);
+            self.accumulate_sprite_gray_area_84x84_deltas(&mut sums, sprite_shadow, plan);
+        }
 
         let rounding = DEFAULT_GRAY_AREA_DENOM / 2;
         for (dst, &sum) in dst.iter_mut().zip(sums.iter()) {
@@ -611,14 +666,14 @@ impl Ppu {
         }
     }
 
-    fn accumulate_bg_gray_area_84x84(&self, sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS]) {
+    fn accumulate_bg_gray_area_84x84(
+        &self,
+        sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
+        plan: &DefaultGrayArea84Plan,
+    ) {
         let palette_gray = self.palette_gray();
         if self.mask & 0x08 == 0 {
-            for out_y in 0..DEFAULT_GRAY_CROP_HEIGHT {
-                for x in 0..NES_WIDTH {
-                    accumulate_area_84x84_pixel(sums, x, out_y, palette_gray[0]);
-                }
-            }
+            sums.fill(palette_gray[0] as u32 * DEFAULT_GRAY_AREA_DENOM);
             return;
         }
 
@@ -632,26 +687,26 @@ impl Ppu {
 
         for out_y in 0..DEFAULT_GRAY_CROP_HEIGHT {
             let y = DEFAULT_GRAY_CROP_TOP + out_y;
-            let world_y = if y < 32 { y } else { y + scroll_y };
+            let world_y = y + scroll_y;
             let table_y = (world_y / 240) & 1;
             let local_y = world_y % 240;
             let tile_y = local_y / 8;
             let fine_y = local_y & 7;
+            let y_contributions = &plan.y[out_y];
             let mut x = 0usize;
 
             while x < NES_WIDTH {
-                let world_x = if y < 32 { x } else { x + scroll_x };
+                let world_x = x + scroll_x;
                 let table_x = (world_x / 256) & 1;
                 let table = table_y * 2 + table_x;
                 let local_x = world_x & 0xff;
                 let tile_x = local_x / 8;
                 let fine_x = local_x & 7;
-                let nt_base = 0x2000 + (table as u16) * 0x400;
-                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
-                let attr =
-                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                let tile_id = self.nametable_read(table, tile_y * 32 + tile_x) as usize;
+                let attr = self.nametable_read(table, 0x3c0 + (tile_y / 4) * 8 + (tile_x / 4));
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
+                let bg_palette_base = (palette_id as usize) * 4;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
@@ -663,9 +718,9 @@ impl Ppu {
                     let gray = if pixel == 0 {
                         palette_gray[0]
                     } else {
-                        palette_gray[(palette_id as usize) * 4 + pixel as usize]
+                        palette_gray[bg_palette_base + pixel as usize]
                     };
-                    accumulate_area_84x84_pixel(sums, x + col, out_y, gray);
+                    accumulate_area_84x84_pixel(sums, &plan.x[x + col], y_contributions, gray);
                 }
 
                 x += run;
@@ -931,11 +986,8 @@ impl Ppu {
         &self,
         sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
         sprite_shadow: &mut [u8],
+        plan: &DefaultGrayArea84Plan,
     ) {
-        if self.mask & 0x10 == 0 {
-            return;
-        }
-
         let palette_gray = self.palette_gray();
         let crop_top = DEFAULT_GRAY_CROP_TOP as i16;
         let crop_bottom = crop_top + DEFAULT_GRAY_CROP_HEIGHT as i16;
@@ -989,7 +1041,12 @@ impl Ppu {
                     };
                     let new_gray = palette_gray[palette_base + pixel as usize];
                     if new_gray != old_gray {
-                        add_area_84x84_delta(sums, x, out_y, new_gray as i16 - old_gray as i16);
+                        add_area_84x84_delta(
+                            sums,
+                            &plan.x[x],
+                            &plan.y[out_y],
+                            new_gray as i16 - old_gray as i16,
+                        );
                         sprite_shadow[shadow_idx] = new_gray;
                     }
                 }
@@ -2747,6 +2804,24 @@ mod tests {
         ppu.write_gray_frame_cropped_area_84x84(&mut actual, &mut sprite_shadow);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn direct_nametable_read_matches_ppu_read_mirroring() {
+        for vertical_mirroring in [true, false] {
+            let chr_rom = vec![0; 8192];
+            let mut ppu = Ppu::new(chr_rom, vertical_mirroring);
+            for (idx, value) in ppu.vram.iter_mut().enumerate() {
+                *value = ((idx * 29 + idx / 5 + 17) & 0xff) as u8;
+            }
+
+            for table in 0..4usize {
+                for offset in 0..0x400usize {
+                    let addr = 0x2000 + (table * 0x400 + offset) as u16;
+                    assert_eq!(ppu.nametable_read(table, offset), ppu.ppu_read(addr));
+                }
+            }
+        }
     }
 
     #[test]
