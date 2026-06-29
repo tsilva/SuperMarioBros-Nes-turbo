@@ -23,6 +23,9 @@ env = SuperMarioBrosVecEnv(
     frame_skip=4,
     grayscale=True,
     frame_stack=4,
+    crop_top=32,
+    resize_width=84,
+    resize_height=84,
 )
 
 obs = env.reset()
@@ -45,6 +48,7 @@ uv run maturin develop --release
 ```bash
 uv run python scripts/smoke_smb.py
 uv run python scripts/benchmark_vec_env.py --num-envs 8 --frame-skip 4 --frame-stack 4
+uv run python scripts/benchmark_sps.py --num-envs 64 --steps 500 --repeats 3
 ```
 
 The `start` action is included so the raw ROM can leave the title screen without
@@ -54,13 +58,17 @@ special Python-side reset logic.
 
 ```bash
 uv run python scripts/play.py --mode external
+uv run python scripts/play.py --mode external --view preprocessed --scale 4
 ```
 
 `external` mode reads keyboard input in Python, maps it to the discrete
 Gymnasium-style action IDs, and calls `SuperMarioBrosEnv.step(action)` each
-frame. It disables RL preprocessing for play: no frame stack, no grayscale, and
-no frame skip. It also disables RL flagpole termination so the game can continue
-through SMB's own end-of-level sequence. Play mode uses the native SDL2 backend
-for fast scaled display.
+frame. The default raw view disables RL preprocessing for play: no frame stack,
+no grayscale, and no frame skip. Both views disable RL flagpole termination so
+the game can continue through SMB's own end-of-level sequence. Play mode uses
+the native SDL2 backend for fast scaled display. `--view preprocessed` instead
+shows the Gym observation tensor with grayscale, frame stacking, area resize to
+84x84, and the default 32-pixel HUD crop; stacked frames are tiled in the SDL
+window so you can see exactly what the agent would receive.
 Controls: arrows or A/D move, X/J/Space jump, Z/K/Shift run, Enter start,
 Esc quit.

@@ -43,16 +43,47 @@ class SdlExternalGymPlayer:
     """Keyboard player that feeds actions through the Python Gym wrapper."""
 
     def __init__(self, args: argparse.Namespace) -> None:
+        self.view = args.view
+        if self.view == "preprocessed":
+            if args.frame_skip <= 0:
+                raise ValueError("--frame-skip must be positive")
+            if args.frame_stack <= 0:
+                raise ValueError("--frame-stack must be positive")
+            if args.crop_top < 0 or args.crop_bottom < 0:
+                raise ValueError("--crop-top and --crop-bottom must be non-negative")
+            frame_skip = args.frame_skip
+            grayscale = True
+            frame_stack = args.frame_stack
+            crop_top = args.crop_top
+            crop_bottom = args.crop_bottom
+            resize_width = args.resize_width
+            resize_height = args.resize_height
+        else:
+            frame_skip = 1
+            grayscale = False
+            frame_stack = 1
+            crop_top = 0
+            crop_bottom = 0
+            resize_width = NES_WIDTH
+            resize_height = NES_HEIGHT
+
         self.env = SuperMarioBrosEnv(
             rom_path=args.rom_path.expanduser(),
-            frame_skip=1,
-            grayscale=False,
-            frame_stack=1,
+            frame_skip=frame_skip,
+            grayscale=grayscale,
+            frame_stack=frame_stack,
             terminate_on_flag=False,
+            crop_top=crop_top,
+            crop_bottom=crop_bottom,
+            resize_width=resize_width,
+            resize_height=resize_height,
         )
+        self.display_grayscale = grayscale
         self.scale = args.scale
         self.frame_delay_s = 1.0 / max(1, args.fps)
         self.obs, _ = self.env.reset()
+        initial_frame = display_frame_from_obs(self.obs, self.display_grayscale)
+        self.display_height, self.display_width = initial_frame.shape[:2]
         self.reward = 0.0
         self.terminated = False
         self.truncated = False
@@ -69,8 +100,8 @@ class SdlExternalGymPlayer:
             b"supermarioemu external Gym player",
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
-            NES_WIDTH * self.scale,
-            NES_HEIGHT * self.scale,
+            self.display_width * self.scale,
+            self.display_height * self.scale,
             SDL_WINDOW_SHOWN,
         )
         if not self.window:
@@ -87,8 +118,8 @@ class SdlExternalGymPlayer:
             self.renderer,
             SDL_PIXELFORMAT_RGB24,
             SDL_TEXTUREACCESS_STREAMING,
-            NES_WIDTH,
-            NES_HEIGHT,
+            self.display_width,
+            self.display_height,
         )
         if not self.texture:
             error = self.sdl_error()
@@ -159,9 +190,10 @@ class SdlExternalGymPlayer:
                     self.pressed_keys.discard(keycode)
 
     def render(self) -> None:
-        frame = latest_frame(self.obs)
+        frame = display_frame_from_obs(self.obs, self.display_grayscale)
         if frame.ndim == 2:
-            rgb = np.empty((NES_HEIGHT, NES_WIDTH, 3), dtype=np.uint8)
+            height, width = frame.shape
+            rgb = np.empty((height, width, 3), dtype=np.uint8)
             rgb[:, :, 0] = frame
             rgb[:, :, 1] = frame
             rgb[:, :, 2] = frame
@@ -185,6 +217,7 @@ class SdlExternalGymPlayer:
             self.next_status_update = now + 0.1
             title = (
                 "supermarioemu external Gym player  "
+                f"view={self.view} obs={tuple(self.obs.shape)} "
                 f"action={ACTION_MEANINGS[self.current_action()]} "
                 f"x={self.info.get('x_pos', 0)} lives={self.info.get('lives', 0)} "
                 f"reward={self.reward:.1f} fps={self.display_fps:.0f}"
@@ -327,6 +360,57 @@ def latest_frame(obs: np.ndarray) -> np.ndarray:
     raise ValueError(f"play mode expects unstacked grayscale or RGB observation, got shape {obs.shape}")
 
 
+def display_frame_from_obs(obs: np.ndarray, grayscale: bool) -> np.ndarray:
+    if obs.ndim != 3:
+        raise ValueError(f"expected CHW observation, got shape {obs.shape}")
+    if grayscale:
+        return tile_grayscale_channels(obs)
+    if obs.shape[0] == 1:
+        return np.ascontiguousarray(obs[0])
+    if obs.shape[0] == 3:
+        return np.ascontiguousarray(np.moveaxis(obs, 0, -1))
+    if obs.shape[0] % 3 == 0:
+        return tile_rgb_frames(obs)
+    return tile_grayscale_channels(obs)
+
+
+def grid_size(n: int) -> tuple[int, int]:
+    cols = 1
+    while cols * cols < n:
+        cols += 1
+    rows = (n + cols - 1) // cols
+    return rows, cols
+
+
+def tile_grayscale_channels(obs: np.ndarray) -> np.ndarray:
+    channels, height, width = obs.shape
+    rows, cols = grid_size(channels)
+    grid = np.zeros((rows * height, cols * width), dtype=np.uint8)
+    for channel in range(channels):
+        row = channel // cols
+        col = channel % cols
+        y0 = row * height
+        x0 = col * width
+        grid[y0 : y0 + height, x0 : x0 + width] = obs[channel]
+    return np.ascontiguousarray(grid)
+
+
+def tile_rgb_frames(obs: np.ndarray) -> np.ndarray:
+    frame_count = obs.shape[0] // 3
+    height = obs.shape[1]
+    width = obs.shape[2]
+    rows, cols = grid_size(frame_count)
+    grid = np.zeros((rows * height, cols * width, 3), dtype=np.uint8)
+    for frame_idx in range(frame_count):
+        row = frame_idx // cols
+        col = frame_idx % cols
+        y0 = row * height
+        x0 = col * width
+        frame = np.moveaxis(obs[frame_idx * 3 : (frame_idx + 1) * 3], 0, -1)
+        grid[y0 : y0 + height, x0 : x0 + width] = frame
+    return np.ascontiguousarray(grid)
+
+
 def png_from_frame(frame: np.ndarray) -> bytes:
     if frame.ndim == 2:
         height, width = frame.shape
@@ -359,9 +443,16 @@ def png_from_frame(frame: np.ndarray) -> bytes:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("external",), default="external")
+    parser.add_argument("--view", choices=("raw", "preprocessed"), default="raw")
     parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--scale", type=int, default=3)
+    parser.add_argument("--frame-skip", type=int, default=1)
+    parser.add_argument("--frame-stack", type=int, default=4)
+    parser.add_argument("--crop-top", type=int, default=32)
+    parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--resize-width", type=int, default=84)
+    parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--auto-close-frames", type=int, default=None)
     return parser.parse_args()
 

@@ -15,7 +15,7 @@ pub struct FastMarioVecEnv {
 #[pymethods]
 impl FastMarioVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -23,6 +23,10 @@ impl FastMarioVecEnv {
         grayscale: bool,
         frame_stack: usize,
         terminate_on_flag: bool,
+        crop_top: usize,
+        crop_bottom: usize,
+        resize_width: usize,
+        resize_height: usize,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -33,6 +37,17 @@ impl FastMarioVecEnv {
         if frame_stack == 0 {
             return Err(PyValueError::new_err("frame_stack must be > 0"));
         }
+        if crop_top + crop_bottom >= NES_HEIGHT {
+            return Err(PyValueError::new_err(format!(
+                "crop_top + crop_bottom must be less than {NES_HEIGHT}, got {}",
+                crop_top + crop_bottom
+            )));
+        }
+        if resize_width == 0 || resize_height == 0 {
+            return Err(PyValueError::new_err(
+                "resize_width and resize_height must be > 0",
+            ));
+        }
 
         let cart = Cartridge::load_ines(rom_path)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -42,6 +57,10 @@ impl FastMarioVecEnv {
             grayscale,
             frame_stack,
             terminate_on_flag,
+            crop_top,
+            crop_bottom,
+            resize_width,
+            resize_height,
         };
         Ok(Self {
             inner: MarioVecEnv::new(cart, config),
@@ -68,12 +87,32 @@ impl FastMarioVecEnv {
         self.inner.config().frame_stack
     }
 
+    #[getter]
+    pub fn crop_top(&self) -> usize {
+        self.inner.config().crop_top
+    }
+
+    #[getter]
+    pub fn crop_bottom(&self) -> usize {
+        self.inner.config().crop_bottom
+    }
+
+    #[getter]
+    pub fn resize_width(&self) -> usize {
+        self.inner.config().resize_width
+    }
+
+    #[getter]
+    pub fn resize_height(&self) -> usize {
+        self.inner.config().resize_height
+    }
+
     pub fn obs_shape(&self) -> (usize, usize, usize, usize) {
         (
             self.inner.config().num_envs,
             self.inner.config().channels(),
-            NES_HEIGHT,
-            NES_WIDTH,
+            self.inner.config().obs_height(),
+            self.inner.config().obs_width(),
         )
     }
 

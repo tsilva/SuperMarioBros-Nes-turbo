@@ -19,6 +19,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
+    parser.add_argument("--resize-width", type=int, default=84)
+    parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--rgb", action="store_true")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=50)
@@ -34,6 +36,8 @@ def main() -> None:
         frame_skip=args.frame_skip,
         grayscale=not args.rgb,
         frame_stack=args.frame_stack,
+        resize_width=args.resize_width,
+        resize_height=args.resize_height,
     )
     obs = env.reset()
     actions = np.full((args.num_envs,), args.action, dtype=np.uint8)
@@ -61,4 +65,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

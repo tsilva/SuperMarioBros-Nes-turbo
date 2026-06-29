@@ -34,6 +34,10 @@ class SuperMarioBrosVecEnv:
         grayscale: bool = True,
         frame_stack: int = 4,
         terminate_on_flag: bool = True,
+        crop_top: int = 0,
+        crop_bottom: int = 0,
+        resize_width: int = 84,
+        resize_height: int = 84,
     ) -> None:
         self._core = FastMarioVecEnv(
             _expand_rom_path(rom_path),
@@ -42,12 +46,20 @@ class SuperMarioBrosVecEnv:
             grayscale,
             frame_stack,
             terminate_on_flag,
+            crop_top,
+            crop_bottom,
+            resize_width,
+            resize_height,
         )
         self.num_envs = self._core.num_envs
         self.frame_skip = self._core.frame_skip
         self.grayscale = self._core.grayscale
         self.frame_stack = self._core.frame_stack
         self.terminate_on_flag = terminate_on_flag
+        self.crop_top = self._core.crop_top
+        self.crop_bottom = self._core.crop_bottom
+        self.resize_width = self._core.resize_width
+        self.resize_height = self._core.resize_height
         self.single_action_space = spaces.Discrete(len(ACTION_MEANINGS))
         self.action_space = spaces.MultiDiscrete([len(ACTION_MEANINGS)] * self.num_envs)
         self.observation_space = spaces.Box(
@@ -132,6 +144,10 @@ class SuperMarioBrosEnv(gym.Env[np.ndarray, int]):
         grayscale: bool = True,
         frame_stack: int = 4,
         terminate_on_flag: bool = True,
+        crop_top: int = 0,
+        crop_bottom: int = 0,
+        resize_width: int = 84,
+        resize_height: int = 84,
     ) -> None:
         self._vec = SuperMarioBrosVecEnv(
             rom_path=rom_path,
@@ -140,6 +156,10 @@ class SuperMarioBrosEnv(gym.Env[np.ndarray, int]):
             grayscale=grayscale,
             frame_stack=frame_stack,
             terminate_on_flag=terminate_on_flag,
+            crop_top=crop_top,
+            crop_bottom=crop_bottom,
+            resize_width=resize_width,
+            resize_height=resize_height,
         )
         self.action_space = self._vec.single_action_space
         self.observation_space = self._vec.observation_space

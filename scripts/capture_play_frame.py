@@ -30,6 +30,8 @@ def main() -> None:
         frame_skip=1,
         grayscale=False,
         frame_stack=1,
+        resize_width=256,
+        resize_height=240,
     )
     obs, _ = env.reset()
 

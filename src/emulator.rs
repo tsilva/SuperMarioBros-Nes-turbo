@@ -382,6 +382,18 @@ impl Ppu {
         self.draw_sprites_gray(dst);
     }
 
+    fn write_gray_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        debug_assert_eq!(dst.len(), NES_WIDTH * height);
+        for out_y in 0..height {
+            let y = crop_top + out_y;
+            for x in 0..NES_WIDTH {
+                let color = self.bg_color_index(x, y);
+                dst[out_y * NES_WIDTH + x] = nes_gray(color);
+            }
+        }
+        self.draw_sprites_gray_cropped(dst, crop_top, height);
+    }
+
     fn write_rgb_frame(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), FRAME_PIXELS_RGB);
         let plane = NES_WIDTH * NES_HEIGHT;
@@ -395,6 +407,22 @@ impl Ppu {
             }
         }
         self.draw_sprites_rgb(dst);
+    }
+
+    fn write_rgb_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        debug_assert_eq!(dst.len(), NES_WIDTH * height * RGB_CHANNELS);
+        let plane = NES_WIDTH * height;
+        for out_y in 0..height {
+            let y = crop_top + out_y;
+            for x in 0..NES_WIDTH {
+                let color = nes_rgb(self.bg_color_index(x, y));
+                let idx = out_y * NES_WIDTH + x;
+                dst[idx] = color[0];
+                dst[plane + idx] = color[1];
+                dst[plane * 2 + idx] = color[2];
+            }
+        }
+        self.draw_sprites_rgb_cropped(dst, crop_top, height);
     }
 
     #[inline]
@@ -522,6 +550,61 @@ impl Ppu {
         }
     }
 
+    fn draw_sprites_gray_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        if self.mask & 0x10 == 0 {
+            return;
+        }
+
+        let crop_top = crop_top as i16;
+        let crop_bottom = crop_top + height as i16;
+        let pattern_base = if self.ctrl & 0x08 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        for sprite in (0..64).rev() {
+            let base = sprite * 4;
+            let sprite_y = self.oam[base] as i16 + 1;
+            let tile = self.oam[base + 1] as usize;
+            let attr = self.oam[base + 2];
+            let sprite_x = self.oam[base + 3] as i16;
+            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
+            let flip_h = attr & 0x40 != 0;
+            let flip_v = attr & 0x80 != 0;
+            let behind_background = attr & 0x20 != 0;
+
+            for row in 0..8usize {
+                let screen_y = sprite_y + row as i16;
+                if screen_y < crop_top || screen_y >= crop_bottom {
+                    continue;
+                }
+                let tile_row = if flip_v { 7 - row } else { row };
+                let pattern_addr = pattern_base + tile * 16 + tile_row;
+                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
+                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                for col in 0..8usize {
+                    let screen_x = sprite_x + col as i16;
+                    if !(0..NES_WIDTH as i16).contains(&screen_x) {
+                        continue;
+                    }
+                    let tile_col = if flip_h { col } else { 7 - col };
+                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
+                    if pixel == 0 {
+                        continue;
+                    }
+                    if behind_background
+                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
+                    {
+                        continue;
+                    }
+                    let color = self.palette[palette_base + pixel as usize];
+                    let out_y = (screen_y - crop_top) as usize;
+                    dst[out_y * NES_WIDTH + screen_x as usize] = nes_gray(color);
+                }
+            }
+        }
+    }
+
     fn draw_sprites_rgb(&self, dst: &mut [u8]) {
         if self.mask & 0x10 == 0 {
             return;
@@ -570,6 +653,65 @@ impl Ppu {
                     }
                     let color = nes_rgb(self.palette[palette_base + pixel as usize]);
                     let idx = screen_y as usize * NES_WIDTH + screen_x as usize;
+                    dst[idx] = color[0];
+                    dst[plane + idx] = color[1];
+                    dst[plane * 2 + idx] = color[2];
+                }
+            }
+        }
+    }
+
+    fn draw_sprites_rgb_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        if self.mask & 0x10 == 0 {
+            return;
+        }
+
+        let crop_top = crop_top as i16;
+        let crop_bottom = crop_top + height as i16;
+        let plane = NES_WIDTH * height;
+        let pattern_base = if self.ctrl & 0x08 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        for sprite in (0..64).rev() {
+            let base = sprite * 4;
+            let sprite_y = self.oam[base] as i16 + 1;
+            let tile = self.oam[base + 1] as usize;
+            let attr = self.oam[base + 2];
+            let sprite_x = self.oam[base + 3] as i16;
+            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
+            let flip_h = attr & 0x40 != 0;
+            let flip_v = attr & 0x80 != 0;
+            let behind_background = attr & 0x20 != 0;
+
+            for row in 0..8usize {
+                let screen_y = sprite_y + row as i16;
+                if screen_y < crop_top || screen_y >= crop_bottom {
+                    continue;
+                }
+                let tile_row = if flip_v { 7 - row } else { row };
+                let pattern_addr = pattern_base + tile * 16 + tile_row;
+                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
+                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                for col in 0..8usize {
+                    let screen_x = sprite_x + col as i16;
+                    if !(0..NES_WIDTH as i16).contains(&screen_x) {
+                        continue;
+                    }
+                    let tile_col = if flip_h { col } else { 7 - col };
+                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
+                    if pixel == 0 {
+                        continue;
+                    }
+                    if behind_background
+                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
+                    {
+                        continue;
+                    }
+                    let color = nes_rgb(self.palette[palette_base + pixel as usize]);
+                    let out_y = (screen_y - crop_top) as usize;
+                    let idx = out_y * NES_WIDTH + screen_x as usize;
                     dst[idx] = color[0];
                     dst[plane + idx] = color[1];
                     dst[plane * 2 + idx] = color[2];
@@ -770,8 +912,18 @@ impl NesEmulator {
     }
 
     #[inline]
+    pub fn write_rgb_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        self.ppu.write_rgb_frame_cropped(dst, crop_top, height);
+    }
+
+    #[inline]
     pub fn write_gray_frame(&self, dst: &mut [u8]) {
         self.ppu.write_gray_frame(dst);
+    }
+
+    #[inline]
+    pub fn write_gray_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        self.ppu.write_gray_frame_cropped(dst, crop_top, height);
     }
 
     #[inline]
