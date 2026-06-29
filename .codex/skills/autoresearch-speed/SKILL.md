@@ -176,7 +176,9 @@ Use short leases and expiry times for proposal and implementation workers. Do no
 
 12. Each implementation worker may run exactly one final `/modal-benchmark` for its own branch/worktree after local correctness checks pass and after the orchestrator grants a Modal run slot. The worker must not spend extra Modal runs trying to tune the result unless the orchestrator explicitly grants another run from the remaining budget. Worker benchmark prompts must include the explicit `--state-dir` chosen by the orchestrator when the worktree cannot discover the sibling `stable-retro-turbo` state directory; omit it only after verifying state discovery works from that worktree.
 
-13. Each implementation worker hands results back to the orchestrator with:
+13. Before handoff, each implementation worker must commit its final candidate patch on its assigned branch after local checks and any granted worker `/modal-benchmark` run. The handoff should name the commit SHA the orchestrator can cherry-pick or merge. A worker may hand back an uncommitted patch only when the candidate is intentionally abandoned, cannot be committed because local checks failed, or needs human/coordinator salvage; in that case the handoff must clearly say it is uncommitted and explain why.
+
+14. Each implementation worker hands results back to the orchestrator with:
    - `work_item_id`
    - `proposal_id`
    - `base_sha`
@@ -193,7 +195,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - whether the candidate should be reproduced, rejected, or reworked
    - risks, failed attempts, and intentionally unsupported cases
 
-14. The orchestrator triages candidate results immediately:
+15. The orchestrator triages candidate results immediately:
    - If the worker did not run local correctness checks, mark `rejected_needs_checks`.
    - If the worker has no Modal artifact, mark `needs_judge_benchmark` only when the code diff is plausibly high-value; otherwise reject.
    - If the worker's claimed Modal mean is less than or equal to 10% over the current baseline mean, immediately discard the candidate as `rejected_under_threshold`.
@@ -201,13 +203,13 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - If the claimed gain is more than 10%, inspect the diff for contract violations, shortcut dishonesty, excessive risk, and maintainability before spending a coordinator reproduction run.
    - Prioritize reproduction by `claimed_gain_pct / expected_review_minutes`, not by worker completion order.
 
-15. For promising candidates, the orchestrator applies the branch or patch onto the current orchestration branch integration worktree, not directly onto `main`. If it does not apply cleanly, resolve only obvious mechanical conflicts; otherwise mark `stale_rework_needed` or `conflict_needs_human_review`.
+16. For promising candidates, the orchestrator applies the worker commit, branch, or patch onto the current orchestration branch integration worktree, not directly onto `main`. Prefer a named worker commit over reconstructing an uncommitted worktree diff. If it does not apply cleanly, resolve only obvious mechanical conflicts; otherwise mark `stale_rework_needed` or `conflict_needs_human_review`.
 
-16. The orchestrator reruns correctness checks on the integrated candidate and then launches a fresh `/modal-benchmark` reproduction from that integration state. Compare reproduced mean vs current baseline mean, not best sample vs baseline. If multiple promising candidates are ready, reproduce one at a time in priority order so every accepted merge updates the baseline before later candidates are judged.
+17. The orchestrator reruns correctness checks on the integrated candidate and then launches a fresh `/modal-benchmark` reproduction from that integration state. Compare reproduced mean vs current baseline mean, not best sample vs baseline. If multiple promising candidates are ready, reproduce one at a time in priority order so every accepted merge updates the baseline before later candidates are judged.
 
-17. If the reproduced result is more than 10% over the current baseline mean and the diff is acceptable, merge the integration worktree into the orchestration branch, commit the accepted candidate there, promote the reproduced artifact to the current baseline, and continue to the next candidate. If reproduction fails, discard or mark for rework.
+18. If the reproduced result is more than 10% over the current baseline mean and the diff is acceptable, merge the integration worktree into the orchestration branch, commit the accepted candidate there, promote the reproduced artifact to the current baseline, and continue to the next candidate. If reproduction fails, discard or mark for rework.
 
-18. After every accepted merge:
+19. After every accepted merge:
    - rerun or preserve the reproduced `/modal-benchmark` as the new baseline artifact
    - update `current_baseline_artifact`, `current_baseline_mean_env_steps_per_sec`, `integration_sha`, and `modal_runs_used`
    - mark all unmerged candidates stale until rejudged against the new baseline
@@ -217,7 +219,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - run `git worktree list` and `git worktree prune`
    - confirm no stale campaign paths remain
 
-19. End the report with the orchestration branch name, baseline samples, accepted candidate samples, both means, both stdevs, both best values, gain percentage, speedup multiplier, checks run, changed files, and paste-ready manual playback commands for both regular and preprocessed views:
+20. End the report with the orchestration branch name, baseline samples, accepted candidate samples, both means, both stdevs, both best values, gain percentage, speedup multiplier, checks run, changed files, and paste-ready manual playback commands for both regular and preprocessed views:
 
 ```bash
 .venv/bin/python scripts/play.py --mode external --view raw --state Level1-1 --scale 3
@@ -226,7 +228,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
 
    - If state files require a non-default location, append `--state-dir <path>` to both commands.
 
-20. After the final report, if the user explicitly accepts the autoresearch results or asks to merge them, immediately merge the run into `main` and clean up the campaign branches/worktrees:
+21. After the final report, if the user explicitly accepts the autoresearch results or asks to merge them, immediately merge the run into `main` and clean up the campaign branches/worktrees:
    - Commit any approved final skill/protocol updates on the orchestration branch before merging.
    - Verify the worktree has no unrelated dirty changes. If unrelated dirty changes exist, stop and ask how to proceed.
    - Switch to local `main` and merge the orchestration branch with `git merge --ff-only <orchestration_branch>`. If fast-forward is not possible, stop and report the blocker instead of creating an implicit merge commit.
