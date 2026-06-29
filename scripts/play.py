@@ -1,0 +1,380 @@
+from __future__ import annotations
+
+import argparse
+import ctypes
+import ctypes.util
+import struct
+import time
+import zlib
+from pathlib import Path
+
+import numpy as np
+
+from supermarioemu import ACTION_MEANINGS, SuperMarioBrosEnv
+
+
+DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+NES_WIDTH = 256
+NES_HEIGHT = 240
+
+SDL_INIT_VIDEO = 0x00000020
+SDL_WINDOWPOS_CENTERED = 0x2FFF0000
+SDL_WINDOW_SHOWN = 0x00000004
+SDL_RENDERER_ACCELERATED = 0x00000002
+SDL_TEXTUREACCESS_STREAMING = 1
+SDL_PIXELFORMAT_RGB24 = 0x17101803
+SDL_QUIT = 0x100
+SDL_KEYDOWN = 0x300
+SDL_KEYUP = 0x301
+SDLK_RETURN = 13
+SDLK_ESCAPE = 27
+SDLK_SPACE = 32
+SDLK_RIGHT = 1073741903
+SDLK_LEFT = 1073741904
+SDL_SCANCODE_LSHIFT = 225
+SDL_SCANCODE_RSHIFT = 229
+
+
+class SdlUnavailableError(RuntimeError):
+    pass
+
+
+class SdlExternalGymPlayer:
+    """Keyboard player that feeds actions through the Python Gym wrapper."""
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.env = SuperMarioBrosEnv(
+            rom_path=args.rom_path.expanduser(),
+            frame_skip=1,
+            grayscale=False,
+            frame_stack=1,
+            terminate_on_flag=False,
+        )
+        self.scale = args.scale
+        self.frame_delay_s = 1.0 / max(1, args.fps)
+        self.obs, _ = self.env.reset()
+        self.reward = 0.0
+        self.terminated = False
+        self.truncated = False
+        self.info: dict[str, object] = {}
+        self.frames_rendered = 0
+        self.auto_close_frames = args.auto_close_frames
+
+        self.sdl = load_sdl2()
+        configure_sdl(self.sdl)
+        if self.sdl.SDL_Init(SDL_INIT_VIDEO) != 0:
+            raise SdlUnavailableError(self.sdl_error())
+        self.sdl.SDL_SetHint(b"SDL_RENDER_SCALE_QUALITY", b"nearest")
+        self.window = self.sdl.SDL_CreateWindow(
+            b"supermarioemu external Gym player",
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            NES_WIDTH * self.scale,
+            NES_HEIGHT * self.scale,
+            SDL_WINDOW_SHOWN,
+        )
+        if not self.window:
+            error = self.sdl_error()
+            self.sdl.SDL_Quit()
+            raise SdlUnavailableError(error)
+        self.renderer = self.sdl.SDL_CreateRenderer(self.window, -1, SDL_RENDERER_ACCELERATED)
+        if not self.renderer:
+            error = self.sdl_error()
+            self.sdl.SDL_DestroyWindow(self.window)
+            self.sdl.SDL_Quit()
+            raise SdlUnavailableError(error)
+        self.texture = self.sdl.SDL_CreateTexture(
+            self.renderer,
+            SDL_PIXELFORMAT_RGB24,
+            SDL_TEXTUREACCESS_STREAMING,
+            NES_WIDTH,
+            NES_HEIGHT,
+        )
+        if not self.texture:
+            error = self.sdl_error()
+            self.sdl.SDL_DestroyRenderer(self.renderer)
+            self.sdl.SDL_DestroyWindow(self.window)
+            self.sdl.SDL_Quit()
+            raise SdlUnavailableError(error)
+
+        self.pressed_keys: set[int] = set()
+        self.pressed_scancodes: set[int] = set()
+        self.running = True
+        self.next_tick = time.perf_counter() + self.frame_delay_s
+        self.fps_window_start = time.perf_counter()
+        self.fps_window_frames = 0
+        self.display_fps = 0.0
+        self.next_status_update = 0.0
+
+    def run(self) -> None:
+        try:
+            self.render()
+            while self.running:
+                self.poll_events()
+                action = self.current_action()
+                self.obs, reward, self.terminated, self.truncated, self.info = self.env.step(action)
+                self.reward += reward
+                if self.terminated or self.truncated:
+                    self.obs, _ = self.env.reset()
+                    self.reward = 0.0
+
+                self.render()
+                self.frames_rendered += 1
+                self.fps_window_frames += 1
+                now = time.perf_counter()
+                elapsed = now - self.fps_window_start
+                if elapsed >= 0.5:
+                    self.display_fps = self.fps_window_frames / elapsed
+                    self.fps_window_frames = 0
+                    self.fps_window_start = now
+                if self.auto_close_frames is not None and self.frames_rendered >= self.auto_close_frames:
+                    break
+
+                self.next_tick += self.frame_delay_s
+                delay_s = self.next_tick - time.perf_counter()
+                if delay_s < -self.frame_delay_s:
+                    self.next_tick = time.perf_counter() + self.frame_delay_s
+                    delay_s = self.frame_delay_s
+                if delay_s > 0:
+                    self.sdl.SDL_Delay(max(1, round(delay_s * 1000)))
+        finally:
+            self.close()
+
+    def poll_events(self) -> None:
+        event = ctypes.create_string_buffer(64)
+        while self.sdl.SDL_PollEvent(ctypes.byref(event)):
+            event_type = ctypes.c_uint32.from_buffer(event).value
+            if event_type == SDL_QUIT:
+                self.running = False
+            elif event_type in (SDL_KEYDOWN, SDL_KEYUP):
+                scancode = ctypes.c_int32.from_buffer(event, 16).value
+                keycode = ctypes.c_int32.from_buffer(event, 20).value
+                if event_type == SDL_KEYDOWN:
+                    self.pressed_scancodes.add(scancode)
+                    self.pressed_keys.add(keycode)
+                    if keycode == SDLK_ESCAPE:
+                        self.running = False
+                else:
+                    self.pressed_scancodes.discard(scancode)
+                    self.pressed_keys.discard(keycode)
+
+    def render(self) -> None:
+        frame = latest_frame(self.obs)
+        if frame.ndim == 2:
+            rgb = np.empty((NES_HEIGHT, NES_WIDTH, 3), dtype=np.uint8)
+            rgb[:, :, 0] = frame
+            rgb[:, :, 1] = frame
+            rgb[:, :, 2] = frame
+            frame = rgb
+        else:
+            frame = np.ascontiguousarray(frame)
+
+        if self.sdl.SDL_UpdateTexture(
+            self.texture,
+            None,
+            frame.ctypes.data_as(ctypes.c_void_p),
+            frame.strides[0],
+        ) != 0:
+            raise RuntimeError(self.sdl_error())
+        self.sdl.SDL_RenderClear(self.renderer)
+        self.sdl.SDL_RenderCopy(self.renderer, self.texture, None, None)
+        self.sdl.SDL_RenderPresent(self.renderer)
+
+        now = time.perf_counter()
+        if now >= self.next_status_update:
+            self.next_status_update = now + 0.1
+            title = (
+                "supermarioemu external Gym player  "
+                f"action={ACTION_MEANINGS[self.current_action()]} "
+                f"x={self.info.get('x_pos', 0)} lives={self.info.get('lives', 0)} "
+                f"reward={self.reward:.1f} fps={self.display_fps:.0f}"
+            )
+            self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
+
+    def current_action(self) -> int:
+        if SDLK_RETURN in self.pressed_keys:
+            return action_id("start")
+
+        right = SDLK_RIGHT in self.pressed_keys or ord("d") in self.pressed_keys
+        left = SDLK_LEFT in self.pressed_keys or ord("a") in self.pressed_keys
+        jump = any(key in self.pressed_keys for key in (ord("x"), ord("j"), SDLK_SPACE))
+        run = (
+            ord("z") in self.pressed_keys
+            or ord("k") in self.pressed_keys
+            or SDL_SCANCODE_LSHIFT in self.pressed_scancodes
+            or SDL_SCANCODE_RSHIFT in self.pressed_scancodes
+        )
+
+        if left and not right:
+            return action_id("left")
+        if right and jump and run:
+            return action_id("right_a_b")
+        if right and jump:
+            return action_id("right_a")
+        if right and run:
+            return action_id("right_b")
+        if right:
+            return action_id("right")
+        if jump:
+            return action_id("a")
+        return action_id("noop")
+
+    def close(self) -> None:
+        self.env.close()
+        if getattr(self, "texture", None):
+            self.sdl.SDL_DestroyTexture(self.texture)
+            self.texture = None
+        if getattr(self, "renderer", None):
+            self.sdl.SDL_DestroyRenderer(self.renderer)
+            self.renderer = None
+        if getattr(self, "window", None):
+            self.sdl.SDL_DestroyWindow(self.window)
+            self.window = None
+        if getattr(self, "sdl", None):
+            self.sdl.SDL_Quit()
+
+    def sdl_error(self) -> str:
+        raw = self.sdl.SDL_GetError()
+        return raw.decode("utf-8", errors="replace") if raw else "unknown SDL error"
+
+
+def load_sdl2() -> ctypes.CDLL:
+    candidates = [
+        ctypes.util.find_library("SDL2"),
+        "/opt/homebrew/lib/libSDL2-2.0.0.dylib",
+        "/opt/homebrew/lib/libSDL2.dylib",
+        "/usr/local/lib/libSDL2-2.0.0.dylib",
+        "/usr/local/lib/libSDL2.dylib",
+    ]
+    errors: list[str] = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return ctypes.CDLL(candidate)
+        except OSError as exc:
+            errors.append(f"{candidate}: {exc}")
+    details = "; ".join(errors) if errors else "no SDL2 library candidates found"
+    raise SdlUnavailableError(details)
+
+
+def configure_sdl(sdl: ctypes.CDLL) -> None:
+    if hasattr(sdl, "SDL_SetMainReady"):
+        sdl.SDL_SetMainReady.argtypes = []
+        sdl.SDL_SetMainReady.restype = None
+        sdl.SDL_SetMainReady()
+
+    sdl.SDL_Init.argtypes = [ctypes.c_uint32]
+    sdl.SDL_Init.restype = ctypes.c_int
+    sdl.SDL_Quit.argtypes = []
+    sdl.SDL_Quit.restype = None
+    sdl.SDL_GetError.argtypes = []
+    sdl.SDL_GetError.restype = ctypes.c_char_p
+    sdl.SDL_SetHint.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    sdl.SDL_SetHint.restype = ctypes.c_int
+    sdl.SDL_CreateWindow.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint32,
+    ]
+    sdl.SDL_CreateWindow.restype = ctypes.c_void_p
+    sdl.SDL_DestroyWindow.argtypes = [ctypes.c_void_p]
+    sdl.SDL_DestroyWindow.restype = None
+    sdl.SDL_SetWindowTitle.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    sdl.SDL_SetWindowTitle.restype = None
+    sdl.SDL_CreateRenderer.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32]
+    sdl.SDL_CreateRenderer.restype = ctypes.c_void_p
+    sdl.SDL_DestroyRenderer.argtypes = [ctypes.c_void_p]
+    sdl.SDL_DestroyRenderer.restype = None
+    sdl.SDL_CreateTexture.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    sdl.SDL_CreateTexture.restype = ctypes.c_void_p
+    sdl.SDL_DestroyTexture.argtypes = [ctypes.c_void_p]
+    sdl.SDL_DestroyTexture.restype = None
+    sdl.SDL_UpdateTexture.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+    sdl.SDL_UpdateTexture.restype = ctypes.c_int
+    sdl.SDL_RenderClear.argtypes = [ctypes.c_void_p]
+    sdl.SDL_RenderClear.restype = ctypes.c_int
+    sdl.SDL_RenderCopy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    sdl.SDL_RenderCopy.restype = ctypes.c_int
+    sdl.SDL_RenderPresent.argtypes = [ctypes.c_void_p]
+    sdl.SDL_RenderPresent.restype = None
+    sdl.SDL_PollEvent.argtypes = [ctypes.c_void_p]
+    sdl.SDL_PollEvent.restype = ctypes.c_int
+    sdl.SDL_Delay.argtypes = [ctypes.c_uint32]
+    sdl.SDL_Delay.restype = None
+
+
+def action_id(name: str) -> int:
+    return ACTION_MEANINGS.index(name)
+
+
+def latest_frame(obs: np.ndarray) -> np.ndarray:
+    if obs.ndim != 3:
+        raise ValueError(f"expected CHW observation, got shape {obs.shape}")
+    if obs.shape[0] == 1:
+        return np.ascontiguousarray(obs[0])
+    if obs.shape[0] == 3:
+        return np.ascontiguousarray(np.moveaxis(obs, 0, -1))
+    raise ValueError(f"play mode expects unstacked grayscale or RGB observation, got shape {obs.shape}")
+
+
+def png_from_frame(frame: np.ndarray) -> bytes:
+    if frame.ndim == 2:
+        height, width = frame.shape
+        color_type = 0
+        row_iter = frame
+    elif frame.ndim == 3 and frame.shape[2] == 3:
+        height, width, _ = frame.shape
+        color_type = 2
+        row_iter = frame
+    else:
+        raise ValueError(f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}")
+
+    rows = bytearray()
+    for row in row_iter:
+        rows.append(0)
+        rows.extend(row.tobytes())
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        checksum = zlib.crc32(kind)
+        checksum = zlib.crc32(data, checksum)
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum & 0xFFFFFFFF)
+
+    png = bytearray(b"\x89PNG\r\n\x1a\n")
+    png.extend(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)))
+    png.extend(chunk(b"IDAT", zlib.compress(bytes(rows), level=1)))
+    png.extend(chunk(b"IEND", b""))
+    return bytes(png)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("external",), default="external")
+    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument("--fps", type=int, default=60)
+    parser.add_argument("--scale", type=int, default=3)
+    parser.add_argument("--auto-close-frames", type=int, default=None)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if args.mode != "external":
+        raise ValueError(f"unsupported play mode: {args.mode}")
+    try:
+        SdlExternalGymPlayer(args).run()
+    except SdlUnavailableError as exc:
+        raise SystemExit(f"SDL backend unavailable: {exc}") from exc
+
+
+if __name__ == "__main__":
+    main()

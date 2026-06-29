@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import numpy as np
+
+from play import action_id, latest_frame, png_from_frame
+from supermarioemu import SuperMarioBrosEnv
+
+
+DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument("--output", type=Path, default=Path("artifacts/play-frame.png"))
+    parser.add_argument("--scale", type=int, default=3)
+    parser.add_argument("--pre-start-frames", type=int, default=120)
+    parser.add_argument("--start-frames", type=int, default=30)
+    parser.add_argument("--right-frames", type=int, default=90)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    env = SuperMarioBrosEnv(
+        rom_path=args.rom_path.expanduser(),
+        frame_skip=1,
+        grayscale=False,
+        frame_stack=1,
+    )
+    obs, _ = env.reset()
+
+    for _ in range(args.pre_start_frames):
+        obs, *_ = env.step(action_id("noop"))
+    for _ in range(args.start_frames):
+        obs, *_ = env.step(action_id("start"))
+    for _ in range(60):
+        obs, *_ = env.step(action_id("noop"))
+    for _ in range(args.right_frames):
+        obs, *_ = env.step(action_id("right_b"))
+
+    frame = latest_frame(obs)
+    if args.scale > 1:
+        frame = np.repeat(np.repeat(frame, args.scale, axis=0), args.scale, axis=1)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_bytes(png_from_frame(np.ascontiguousarray(frame)))
+    print(args.output)
+
+
+if __name__ == "__main__":
+    main()

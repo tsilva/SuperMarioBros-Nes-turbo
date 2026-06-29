@@ -1,0 +1,23 @@
+[package]
+name = "supermarioemu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "_supermarioemu"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+numpy = "0.22"
+pyo3 = { version = "0.22", features = ["abi3-py39", "extension-module"] }
+rayon = "1"
+thiserror = "1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = "symbols"
