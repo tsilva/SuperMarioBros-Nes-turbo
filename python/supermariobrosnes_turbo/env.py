@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 from gymnasium import spaces
 
-from ._supermariobrosnes_fastenv import FastMarioVecEnv
+from ._supermariobrosnes_turbo import FastMarioVecEnv
 
 CORE_ACTION_MEANINGS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left", "start")
 ACTION_SETS = {

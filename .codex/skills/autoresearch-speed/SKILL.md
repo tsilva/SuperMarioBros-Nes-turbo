@@ -78,7 +78,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
 3. Inspect the live hot path before launching workers:
    - `scripts/benchmark_sps.py`
    - `scripts/modal_benchmark_sps.py` when Modal is involved
-   - `python/supermariobrosnes_fastenv/env.py`
+   - `python/supermariobrosnes_turbo/env.py`
    - `src/py_api.rs`
    - `src/vec_env.rs`
    - `src/emulator.rs`

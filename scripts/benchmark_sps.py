@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from supermariobrosnes_fastenv import ACTION_SETS, CORE_ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import ACTION_SETS, CORE_ACTION_MEANINGS, SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")

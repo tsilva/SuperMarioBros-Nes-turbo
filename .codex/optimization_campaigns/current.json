@@ -103,7 +103,7 @@
       "priority_score": 0.0194,
       "files_likely_to_change": [
         "scripts/benchmark_sps.py",
-        "python/supermariobrosnes_fastenv/env.py",
+        "python/supermariobrosnes_turbo/env.py",
         "src/py_api.rs",
         "src/vec_env.rs"
       ],
@@ -253,7 +253,7 @@
       "base_sha": "671b6c7",
       "head_sha": "a93c77e8699df4d254f2c18befb052c36377adca",
       "changed_files": [
-        "python/supermariobrosnes_fastenv/env.py",
+        "python/supermariobrosnes_turbo/env.py",
         "scripts/benchmark_sps.py",
         "scripts/check_repeated_uniform_step.py",
         "src/py_api.rs",

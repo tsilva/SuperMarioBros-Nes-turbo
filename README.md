@@ -33,12 +33,12 @@ Expected SHA-256:
 f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de
 ```
 
-Import the package as `supermariobrosnes_fastenv`:
+Import the package as `supermariobrosnes_turbo`:
 
 ```python
 import numpy as np
 
-from supermariobrosnes_fastenv import SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import SuperMarioBrosVecEnv
 
 env = SuperMarioBrosVecEnv(
     rom_path="~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes",
