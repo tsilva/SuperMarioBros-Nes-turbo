@@ -213,6 +213,7 @@
       "worker_agent": "019f147b-9d5e-7173-bc40-6700d865eb64",
       "branch": "codex/autoresearch-2026-06-29T17-38-02Z-synced-copy",
       "worktree_path": "/private/tmp/smb-fastenv-autoresearch/synced-obs-broadcast-copy",
+      "preserved_patch": ".codex/optimization_campaigns/rejected-synced-obs-broadcast-copy.patch",
       "changed_files": ["src/vec_env.rs"],
       "local_checks": {
         ".venv/bin/python -m maturin develop --release": "passed",
