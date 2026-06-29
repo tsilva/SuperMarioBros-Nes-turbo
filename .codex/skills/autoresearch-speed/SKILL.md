@@ -26,10 +26,10 @@ An optimization succeeds only when the final arithmetic mean `env_steps_per_sec`
 
 Benchmarks for this skill are Modal-only and must go through `/modal-benchmark`. Use `/modal-benchmark` for the baseline, every worker final benchmark, every coordinator reproduction benchmark, and final timing. Do not run local throughput benchmarks, raw `modal run` commands, ad hoc Modal scripts, or modified benchmark commands as a fallback. Local commands may be used only for correctness, formatting, compilation, and non-throughput inspection.
 
-Before any optimization work that will benchmark throughput, ask the user for explicit Modal pre-authorization by giving them this exact phrase to copy, fill in, and send back:
+Before any optimization work that will benchmark throughput, ask the user for explicit Modal pre-authorization by giving them this prepopulated phrase to copy or edit and send back. The default values are sized for the standard 3-subagent run: 3 parallel Modal runs, 6 total Modal runs (baseline, 3 worker runs, 1 coordinator reproduction, and 1 optional final confirmation), and a $10 estimated spend cap.
 
 ```text
-I approve /autoresearch-speed with num_agents=<N>; Modal network/auth/upload access is allowed; local repo snapshot upload is allowed; local ROM byte upload at benchmark runtime is allowed; local state byte upload at benchmark runtime is allowed; max_parallel_modal_runs=<N>; max_total_modal_runs=<N>; max_estimated_spend_usd=<USD>.
+I approve /autoresearch-speed with num_agents=3; Modal network/auth/upload access is allowed; local repo snapshot upload is allowed; local ROM byte upload at benchmark runtime is allowed; local state byte upload at benchmark runtime is allowed; max_parallel_modal_runs=3; max_total_modal_runs=6; max_estimated_spend_usd=10.
 ```
 
 Approval is cleared only when the user's reply preserves the permission grants and fills in concrete values for `max_parallel_modal_runs`, `max_total_modal_runs`, and `max_estimated_spend_usd`. If `num_agents` is missing, default to 3 and record `num_agents: 3` in the manifest. If any required limit is missing, vague, or replaced with an open-ended limit, stop and ask for the exact phrase again. Do not treat informal approval, partial approval, or approval for a different skill name as sufficient.
@@ -48,7 +48,7 @@ The main agent is always the orchestrator, deduper, reviewer, and merge judge. D
 
 If subagent/fork tooling is unavailable, stop and report that blocker. Do not silently degrade to an inline coordinator-only optimization loop.
 
-Before proposal or implementation workers start, the orchestrator must create a unique autoresearch branch from the local `turbo` branch and continue the whole run from that branch. Use a Git-ref-safe UTC ISO timestamp, for example `codex/autoresearch-2026-06-29T17-42-10Z`. The branch isolation is required so accepted candidates, rejected candidates, benchmark artifacts, and manifest edits can be managed safely without destabilizing `turbo` or colliding with other autoresearch runs. If the local `turbo` branch is missing, or if the worktree has unrelated dirty changes that would be carried into the branch, stop and ask the user how to proceed instead of branching from the current branch by accident.
+Before proposal or implementation workers start, the orchestrator must create a unique autoresearch branch from the local `main` branch and continue the whole run from that branch. Use a Git-ref-safe UTC ISO timestamp, for example `codex/autoresearch-2026-06-29T17-42-10Z`. The branch isolation is required so accepted candidates, rejected candidates, benchmark artifacts, and manifest edits can be managed safely without destabilizing `main` or colliding with other autoresearch runs. If the local `main` branch is missing, or if the worktree has unrelated dirty changes that would be carried into the branch, stop and ask the user how to proceed instead of branching from the current branch by accident.
 
 The orchestration is optimized for two goals:
 
@@ -69,11 +69,11 @@ Use short leases and expiry times for proposal and implementation workers. Do no
 
 1. Ask for the required Modal permission envelope before forking workers or running any throughput benchmark. If Modal or subagent approval is unavailable, stop.
 
-2. Create the isolated orchestration branch from `turbo` before launching workers:
+2. Create the isolated orchestration branch from `main` before launching workers:
    - Compute a Git-ref-safe UTC ISO timestamp such as `2026-06-29T17-42-10Z`.
-   - Create and switch to `codex/autoresearch-<timestamp>` from local `turbo`.
+   - Create and switch to `codex/autoresearch-<timestamp>` from local `main`.
    - Record `root_branch`, `orchestration_branch`, `created_from_sha`, and `created_at` in the manifest.
-   - Do not create proposal or implementation worktrees from `turbo` directly after this point; use the orchestration branch as the integration root for the run.
+   - Do not create proposal or implementation worktrees from `main` directly after this point; use the orchestration branch as the integration root for the run.
 
 3. Inspect the live hot path before launching workers:
    - `scripts/benchmark_sps.py`
@@ -99,9 +99,9 @@ Use short leases and expiry times for proposal and implementation workers. Do no
   "authorized_by_user": true,
   "authorized_at": "ISO-8601",
   "num_agents": 3,
-  "root_branch": "turbo",
+  "root_branch": "main",
   "orchestration_branch": "codex/autoresearch-YYYY-MM-DDTHH-MM-SSZ",
-  "created_from_sha": "turbo sha",
+  "created_from_sha": "main sha",
   "created_at": "ISO-8601",
   "allowed_benchmark_skill": "/modal-benchmark",
   "allowed_output_root": "artifacts/benchmarks/",
@@ -153,6 +153,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - `python-boundary-and-info-path`
 
    Each implementation work item must include `id`, `proposal_id`, `hypothesis`, `scope`, `status`, `owner`, `lease_expires_at`, `base_sha`, `worktree_path`, `expected_gain_pct`, and `risk_notes`.
+   If worker worktrees live outside the repo family, especially under `/private/tmp`, include an explicit `state_dir` in the work item and worker prompt so `/modal-benchmark` uploads the same state bytes as the baseline instead of relying on sibling-checkout discovery. The default state dir on this machine is `/Users/tsilva/repos/tsilva/stable-retro-turbo/stable_retro/data/stable/SuperMarioBros-Nes-v0`. Passing this as `--state-dir` does not change the benchmark workload; it only fixes local state-file resolution.
 
 9. Implementation workers optimize aggressively but honestly:
    - Use local profiling and instrumentation only for diagnosis, never as throughput evidence.
@@ -173,7 +174,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - Add or update targeted checks when changing observations, rewards, termination flags, reset behavior, noop stepping, uniform-action lanes, or divergent-action lanes.
    - Run `cargo fmt` and `cargo check --release`.
 
-12. Each implementation worker may run exactly one final `/modal-benchmark` for its own branch/worktree after local correctness checks pass and after the orchestrator grants a Modal run slot. The worker must not spend extra Modal runs trying to tune the result unless the orchestrator explicitly grants another run from the remaining budget.
+12. Each implementation worker may run exactly one final `/modal-benchmark` for its own branch/worktree after local correctness checks pass and after the orchestrator grants a Modal run slot. The worker must not spend extra Modal runs trying to tune the result unless the orchestrator explicitly grants another run from the remaining budget. Worker benchmark prompts must include the explicit `--state-dir` chosen by the orchestrator when the worktree cannot discover the sibling `stable-retro-turbo` state directory; omit it only after verifying state discovery works from that worktree.
 
 13. Each implementation worker hands results back to the orchestrator with:
    - `work_item_id`
@@ -200,7 +201,7 @@ Use short leases and expiry times for proposal and implementation workers. Do no
    - If the claimed gain is more than 10%, inspect the diff for contract violations, shortcut dishonesty, excessive risk, and maintainability before spending a coordinator reproduction run.
    - Prioritize reproduction by `claimed_gain_pct / expected_review_minutes`, not by worker completion order.
 
-15. For promising candidates, the orchestrator applies the branch or patch onto the current orchestration branch integration worktree, not directly onto `turbo`. If it does not apply cleanly, resolve only obvious mechanical conflicts; otherwise mark `stale_rework_needed` or `conflict_needs_human_review`.
+15. For promising candidates, the orchestrator applies the branch or patch onto the current orchestration branch integration worktree, not directly onto `main`. If it does not apply cleanly, resolve only obvious mechanical conflicts; otherwise mark `stale_rework_needed` or `conflict_needs_human_review`.
 
 16. The orchestrator reruns correctness checks on the integrated candidate and then launches a fresh `/modal-benchmark` reproduction from that integration state. Compare reproduced mean vs current baseline mean, not best sample vs baseline. If multiple promising candidates are ready, reproduce one at a time in priority order so every accepted merge updates the baseline before later candidates are judged.
 
