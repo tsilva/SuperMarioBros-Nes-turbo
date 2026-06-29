@@ -79,8 +79,8 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 
 - Python `>=3.9` and a Rust toolchain are required to build the Maturin extension.
 - The current emulator scope is SuperMarioBros-Nes mapper 0 NROM.
-- The Python package exposes `SuperMarioBrosVecEnv` and `ACTION_MEANINGS`.
-- The default action set is `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, `left`, and `start`.
+- The Python package exposes `SuperMarioBrosVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`.
+- The default `simple` action set matches the Stable Retro Mario training mapper: `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, and `left`. Use `action_set="full"` when a tool needs the `start` button.
 - Use `--state Level1-1` or another stable-retro state to start from a saved level state. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
 - The Modal benchmark path expects `modal` to be installed and authenticated outside this package. It sends the local ROM and state bytes to the remote container at run time and defaults to `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4`.

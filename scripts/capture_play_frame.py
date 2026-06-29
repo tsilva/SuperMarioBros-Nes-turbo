@@ -33,6 +33,7 @@ def main() -> None:
         frame_stack=1,
         resize_width=256,
         resize_height=240,
+        action_set="full",
     )
     obs = env.reset()[0]
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_fastenv import SuperMarioBrosVecEnv
+from supermariobrosnes_fastenv import ACTION_SETS, SuperMarioBrosVecEnv
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=50)
+    parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
     parser.add_argument("--action", type=int, default=0)
     return parser.parse_args()
 
@@ -42,6 +43,7 @@ def main() -> None:
         resize_height=args.resize_height,
         state=args.state,
         state_dir=args.state_dir,
+        action_set=args.action_set,
     )
     obs = env.reset()
     actions = np.full((args.num_envs,), args.action, dtype=np.uint8)

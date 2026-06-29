@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import gzip
 import os
 from pathlib import Path
@@ -10,9 +11,27 @@ from gymnasium import spaces
 
 from ._supermariobrosnes_fastenv import FastMarioVecEnv
 
-ACTION_MEANINGS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left", "start")
+CORE_ACTION_MEANINGS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left", "start")
+ACTION_SETS = {
+    "simple": ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left"),
+    "right": ("right", "right_b", "right_a", "right_a_b"),
+    "full": CORE_ACTION_MEANINGS,
+}
+ACTION_MEANINGS = ACTION_SETS["simple"]
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
 GZIP_MAGIC = b"\x1f\x8b"
+INFO_KEYS = (
+    "x_pos",
+    "coins",
+    "levelHi",
+    "levelLo",
+    "lives",
+    "score",
+    "scrolling",
+    "time",
+    "xscrollHi",
+    "xscrollLo",
+)
 
 
 def _expand_rom_path(path: str | Path) -> str:
@@ -112,6 +131,31 @@ def _load_initial_state(
     return raw
 
 
+def _resolve_action_set(action_set: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(action_set, str):
+        try:
+            return ACTION_SETS[action_set]
+        except KeyError as exc:
+            valid = ", ".join(sorted(ACTION_SETS))
+            raise ValueError(f"unknown action_set {action_set!r}; valid values: {valid}") from exc
+
+    actions = tuple(str(action) for action in action_set)
+    if not actions:
+        raise ValueError("action_set must contain at least one action")
+    unknown = [action for action in actions if action not in CORE_ACTION_MEANINGS]
+    if unknown:
+        valid = ", ".join(CORE_ACTION_MEANINGS)
+        raise ValueError(f"unknown action(s) {unknown!r}; valid actions: {valid}")
+    return actions
+
+
+def _core_action_ids(action_meanings: tuple[str, ...]) -> np.ndarray:
+    return np.asarray(
+        [CORE_ACTION_MEANINGS.index(action) for action in action_meanings],
+        dtype=np.uint8,
+    )
+
+
 class SuperMarioBrosVecEnv:
     """Vectorized Mario environment with the hot loop in Rust.
 
@@ -136,7 +180,11 @@ class SuperMarioBrosVecEnv:
         resize_height: int = 84,
         state: str | Path | bytes | bytearray | memoryview | None = None,
         state_dir: str | Path | None = None,
+        action_set: str | Sequence[str] = "simple",
     ) -> None:
+        self.action_meanings = _resolve_action_set(action_set)
+        self.action_set = action_set if isinstance(action_set, str) else "custom"
+        self._core_action_ids = _core_action_ids(self.action_meanings)
         initial_state = _load_initial_state(state, state_dir)
         self._has_initial_state = initial_state is not None
         self._core = FastMarioVecEnv(
@@ -161,8 +209,8 @@ class SuperMarioBrosVecEnv:
         self.crop_bottom = self._core.crop_bottom
         self.resize_width = self._core.resize_width
         self.resize_height = self._core.resize_height
-        self.single_action_space = spaces.Discrete(len(ACTION_MEANINGS))
-        self.action_space = spaces.MultiDiscrete([len(ACTION_MEANINGS)] * self.num_envs)
+        self.single_action_space = spaces.Discrete(len(self.action_meanings))
+        self.action_space = spaces.MultiDiscrete([len(self.action_meanings)] * self.num_envs)
         self.observation_space = spaces.Box(
             low=0,
             high=255,
@@ -176,29 +224,38 @@ class SuperMarioBrosVecEnv:
         self._terminated = np.empty((self.num_envs,), dtype=np.bool_)
         self._truncated = np.empty((self.num_envs,), dtype=np.bool_)
         self._x_pos = np.empty((self.num_envs,), dtype=np.uint16)
-        self._lives = np.empty((self.num_envs,), dtype=np.uint8)
+        self._coins = np.empty((self.num_envs,), dtype=np.uint8)
+        self._level_hi = np.empty((self.num_envs,), dtype=np.int16)
+        self._level_lo = np.empty((self.num_envs,), dtype=np.int16)
+        self._lives = np.empty((self.num_envs,), dtype=np.int16)
+        self._score = np.empty((self.num_envs,), dtype=np.uint32)
+        self._scrolling = np.empty((self.num_envs,), dtype=np.int16)
+        self._time = np.empty((self.num_envs,), dtype=np.uint16)
+        self._xscroll_hi = np.empty((self.num_envs,), dtype=np.uint8)
+        self._xscroll_lo = np.empty((self.num_envs,), dtype=np.uint8)
 
     def reset(self) -> np.ndarray:
         self._core.reset_into(self._obs)
         self._rewards.fill(0)
         self._terminated.fill(False)
         self._truncated.fill(False)
-        if self._has_initial_state:
-            self._core.info_into(self._x_pos, self._lives)
-        else:
-            self._x_pos.fill(0)
-            self._lives.fill(3)
+        self._write_info_arrays()
         return self._obs
 
     def step_async(self, actions: np.ndarray) -> None:
         actions_arr = np.asarray(actions, dtype=np.uint8)
         if actions_arr.shape != (self.num_envs,):
             raise ValueError(f"actions must have shape {(self.num_envs,)}, got {actions_arr.shape}")
-        np.copyto(self._actions, actions_arr)
+        if actions_arr.size and int(actions_arr.max()) >= len(self.action_meanings):
+            raise ValueError(
+                f"actions must be in [0, {len(self.action_meanings) - 1}] "
+                f"for action_set={self.action_set!r}"
+            )
+        np.copyto(self._actions, self._core_action_ids[actions_arr])
 
     def step_wait(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
         obs, rewards, terminated, truncated = self.step_wait_fast()
-        infos = [{"x_pos": int(x), "lives": int(l)} for x, l in zip(self._x_pos, self._lives)]
+        infos = [self._info_dict(index) for index in range(self.num_envs)]
         return obs, rewards, terminated, truncated, infos
 
     def step_wait_fast(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -210,7 +267,15 @@ class SuperMarioBrosVecEnv:
             self._terminated,
             self._truncated,
             self._x_pos,
+            self._coins,
+            self._level_hi,
+            self._level_lo,
             self._lives,
+            self._score,
+            self._scrolling,
+            self._time,
+            self._xscroll_hi,
+            self._xscroll_lo,
         )
         return self._obs, self._rewards, self._terminated, self._truncated
 
@@ -224,13 +289,73 @@ class SuperMarioBrosVecEnv:
         self.step_async(actions)
         return self.step_wait_fast()
 
+    def _write_info_arrays(self) -> None:
+        self._core.info_into(
+            self._x_pos,
+            self._coins,
+            self._level_hi,
+            self._level_lo,
+            self._lives,
+            self._score,
+            self._scrolling,
+            self._time,
+            self._xscroll_hi,
+            self._xscroll_lo,
+        )
+
+    def _info_dict(self, index: int) -> dict[str, Any]:
+        return {
+            "x_pos": int(self._x_pos[index]),
+            "coins": int(self._coins[index]),
+            "levelHi": int(self._level_hi[index]),
+            "levelLo": int(self._level_lo[index]),
+            "lives": int(self._lives[index]),
+            "score": int(self._score[index]),
+            "scrolling": int(self._scrolling[index]),
+            "time": int(self._time[index]),
+            "xscrollHi": int(self._xscroll_hi[index]),
+            "xscrollLo": int(self._xscroll_lo[index]),
+        }
+
     @property
     def x_pos(self) -> np.ndarray:
         return self._x_pos
 
     @property
+    def coins(self) -> np.ndarray:
+        return self._coins
+
+    @property
+    def level_hi(self) -> np.ndarray:
+        return self._level_hi
+
+    @property
+    def level_lo(self) -> np.ndarray:
+        return self._level_lo
+
+    @property
     def lives(self) -> np.ndarray:
         return self._lives
+
+    @property
+    def score(self) -> np.ndarray:
+        return self._score
+
+    @property
+    def scrolling(self) -> np.ndarray:
+        return self._scrolling
+
+    @property
+    def time(self) -> np.ndarray:
+        return self._time
+
+    @property
+    def xscroll_hi(self) -> np.ndarray:
+        return self._xscroll_hi
+
+    @property
+    def xscroll_lo(self) -> np.ndarray:
+        return self._xscroll_lo
 
     def close(self) -> None:
         pass

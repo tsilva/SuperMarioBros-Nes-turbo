@@ -1340,6 +1340,18 @@ fn read_u16_le(value: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes(value.get(..2)?.try_into().ok()?))
 }
 
+#[inline]
+fn sign_extend_u8(value: u8) -> i16 {
+    (value as i8) as i16
+}
+
+#[inline]
+fn decode_ln_bcd_be(bytes: &[u8]) -> u32 {
+    bytes
+        .iter()
+        .fold(0u32, |value, byte| value * 10 + u32::from(byte & 0x0f))
+}
+
 #[derive(Clone)]
 pub struct NesEmulator {
     cpu: Cpu,
@@ -1352,7 +1364,15 @@ pub struct NesEmulator {
     controller_strobe: bool,
     extra_cycles: u16,
     x_pos: u16,
-    lives: u8,
+    coins: u8,
+    level_hi: i16,
+    level_lo: i16,
+    lives: i16,
+    score: u32,
+    scrolling: i16,
+    time: u16,
+    xscroll_hi: u8,
+    xscroll_lo: u8,
     terminate_on_flag: bool,
     done: bool,
 }
@@ -1372,7 +1392,15 @@ impl NesEmulator {
             controller_strobe: false,
             extra_cycles: 0,
             x_pos: 0,
+            coins: 0,
+            level_hi: 0,
+            level_lo: 0,
             lives: 0,
+            score: 0,
+            scrolling: 0,
+            time: 0,
+            xscroll_hi: 0,
+            xscroll_lo: 0,
             terminate_on_flag,
             done: false,
         };
@@ -1480,8 +1508,48 @@ impl NesEmulator {
     }
 
     #[inline]
-    pub fn lives(&self) -> u8 {
+    pub fn coins(&self) -> u8 {
+        self.coins
+    }
+
+    #[inline]
+    pub fn level_hi(&self) -> i16 {
+        self.level_hi
+    }
+
+    #[inline]
+    pub fn level_lo(&self) -> i16 {
+        self.level_lo
+    }
+
+    #[inline]
+    pub fn lives(&self) -> i16 {
         self.lives
+    }
+
+    #[inline]
+    pub fn score(&self) -> u32 {
+        self.score
+    }
+
+    #[inline]
+    pub fn scrolling(&self) -> i16 {
+        self.scrolling
+    }
+
+    #[inline]
+    pub fn time(&self) -> u16 {
+        self.time
+    }
+
+    #[inline]
+    pub fn xscroll_hi(&self) -> u8 {
+        self.xscroll_hi
+    }
+
+    #[inline]
+    pub fn xscroll_lo(&self) -> u8 {
+        self.xscroll_lo
     }
 
     #[inline]
@@ -1507,9 +1575,17 @@ impl NesEmulator {
     #[inline]
     fn refresh_smb_state(&mut self) {
         self.x_pos = ((self.ram[0x006d] as u16) << 8) | self.ram[0x0086] as u16;
-        self.lives = self.ram[0x075a];
+        self.coins = self.ram[0x075e];
+        self.level_hi = sign_extend_u8(self.ram[0x075f]);
+        self.level_lo = sign_extend_u8(self.ram[0x075c]);
+        self.lives = sign_extend_u8(self.ram[0x075a]);
+        self.score = decode_ln_bcd_be(&self.ram[0x07dd..0x07e3]) as u32;
+        self.scrolling = sign_extend_u8(self.ram[0x0778]);
+        self.time = decode_ln_bcd_be(&self.ram[0x07f8..0x07fb]) as u16;
+        self.xscroll_hi = self.ram[0x071a];
+        self.xscroll_lo = self.ram[0x071c];
         let active_gameplay = self.ram[0x0770] == 1 && self.ram[0x0772] == 3;
-        let scroll_x = ((self.ram[0x071a] as u16) << 8) | self.ram[0x071c] as u16;
+        let scroll_x = ((self.xscroll_hi as u16) << 8) | self.xscroll_lo as u16;
         self.ppu
             .set_scroll_override_x(active_gameplay.then_some(scroll_x));
     }

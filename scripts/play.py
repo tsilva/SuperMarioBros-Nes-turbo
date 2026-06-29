@@ -10,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_fastenv import ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_fastenv import CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_fastenv import SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
@@ -80,6 +81,7 @@ class SdlExternalVecPlayer:
             resize_height=resize_height,
             state=args.state,
             state_dir=args.state_dir,
+            action_set="full",
         )
         self.display_grayscale = grayscale
         self.scale = args.scale

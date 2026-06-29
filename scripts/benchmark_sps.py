@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from supermariobrosnes_fastenv import ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_fastenv import ACTION_SETS, CORE_ACTION_MEANINGS, SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
@@ -31,7 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--crop-bottom", type=int, default=0)
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
-    parser.add_argument("--action", choices=ACTION_MEANINGS, default="noop")
+    parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
+    parser.add_argument("--action", choices=CORE_ACTION_MEANINGS, default="noop")
     parser.add_argument("--state", default=None)
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--include-info", action="store_true")
@@ -69,10 +70,15 @@ def validate_args(args: argparse.Namespace) -> None:
     for field in non_negative_fields:
         if getattr(args, field) < 0:
             raise ValueError(f"--{field.replace('_', '-')} must be non-negative")
+    action_meanings = ACTION_SETS[args.action_set]
+    if args.action not in action_meanings:
+        raise ValueError(
+            f"--action {args.action!r} is not in action_set={args.action_set!r}; "
+            f"valid actions: {', '.join(action_meanings)}"
+        )
 
-
-def fill_action(num_envs: int, action_name: str) -> np.ndarray:
-    return np.full((num_envs,), ACTION_MEANINGS.index(action_name), dtype=np.uint8)
+def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
+    return np.full((num_envs,), action_meanings.index(action_name), dtype=np.uint8)
 
 
 def step_env(env: SuperMarioBrosVecEnv, actions: np.ndarray, include_info: bool) -> None:
@@ -92,12 +98,16 @@ def step_repeated(
         step_env(env, actions, include_info)
 
 
-def prepare_game(env: SuperMarioBrosVecEnv, args: argparse.Namespace) -> None:
+def prepare_game(
+    env: SuperMarioBrosVecEnv,
+    args: argparse.Namespace,
+    action_meanings: tuple[str, ...],
+) -> None:
     env.reset()
-    if args.no_start_game or args.state is not None:
+    if args.no_start_game or args.state is not None or "start" not in action_meanings:
         return
-    noop = fill_action(args.num_envs, "noop")
-    start = fill_action(args.num_envs, "start")
+    noop = fill_action(args.num_envs, "noop", action_meanings)
+    start = fill_action(args.num_envs, "start", action_meanings)
     step_repeated(env, noop, args.pre_start_steps, args.include_info)
     step_repeated(env, start, args.start_steps, args.include_info)
     step_repeated(env, noop, args.post_start_steps, args.include_info)
@@ -147,12 +157,13 @@ def build_result(args: argparse.Namespace, obs: np.ndarray, runs: list[dict[str,
             "crop_bottom": args.crop_bottom,
             "resize_width": args.resize_width,
             "resize_height": args.resize_height,
+            "action_set": args.action_set,
             "action": args.action,
             "state": args.state,
             "state_dir": str(args.state_dir) if args.state_dir is not None else None,
             "include_info": args.include_info,
             "terminate_on_flag": args.terminate_on_flag,
-            "start_game": not args.no_start_game and args.state is None,
+            "start_game": not args.no_start_game and args.state is None and "start" in ACTION_SETS[args.action_set],
         },
         "observation": {
             "shape": list(obs.shape),
@@ -180,7 +191,8 @@ def print_human(result: dict[str, Any]) -> None:
         f"num_envs={config['num_envs']} steps={config['steps']} repeats={config['repeats']} "
         f"frame_skip={config['frame_skip']} frame_stack={config['frame_stack']} "
         f"grayscale={config['grayscale']} crop=({config['crop_top']},{config['crop_bottom']}) "
-        f"resize={config['resize_width']}x{config['resize_height']} action={config['action']} "
+        f"resize={config['resize_width']}x{config['resize_height']} "
+        f"action_set={config['action_set']} action={config['action']} "
         f"state={config['state']} "
         f"include_info={config['include_info']}"
     )
@@ -208,6 +220,8 @@ def print_human(result: dict[str, Any]) -> None:
 def main() -> None:
     args = parse_args()
     validate_args(args)
+    action_set = args.action_set
+    action_meanings = ACTION_SETS[action_set]
     env = SuperMarioBrosVecEnv(
         rom_path=args.rom_path.expanduser(),
         num_envs=args.num_envs,
@@ -221,10 +235,11 @@ def main() -> None:
         resize_height=args.resize_height,
         state=args.state,
         state_dir=args.state_dir,
+        action_set=action_set,
     )
     obs = env.reset()
-    actions = fill_action(args.num_envs, args.action)
-    prepare_game(env, args)
+    actions = fill_action(args.num_envs, args.action, action_meanings)
+    prepare_game(env, args, action_meanings)
     step_repeated(env, actions, args.warmup, args.include_info)
     runs = [run_once(env, actions, args) for _ in range(args.repeats)]
     result = build_result(args, obs, runs)

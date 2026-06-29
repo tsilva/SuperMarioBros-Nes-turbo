@@ -137,24 +137,84 @@ impl FastMarioVecEnv {
         &self,
         py: Python<'py>,
         mut x_pos: PyReadwriteArray1<'py, u16>,
-        mut lives: PyReadwriteArray1<'py, u8>,
+        mut coins: PyReadwriteArray1<'py, u8>,
+        mut level_hi: PyReadwriteArray1<'py, i16>,
+        mut level_lo: PyReadwriteArray1<'py, i16>,
+        mut lives: PyReadwriteArray1<'py, i16>,
+        mut score: PyReadwriteArray1<'py, u32>,
+        mut scrolling: PyReadwriteArray1<'py, i16>,
+        mut time: PyReadwriteArray1<'py, u16>,
+        mut xscroll_hi: PyReadwriteArray1<'py, u8>,
+        mut xscroll_lo: PyReadwriteArray1<'py, u8>,
     ) -> PyResult<()> {
         self.validate_vec_len(x_pos.len(), "x_pos")?;
+        self.validate_vec_len(coins.len(), "coins")?;
+        self.validate_vec_len(level_hi.len(), "level_hi")?;
+        self.validate_vec_len(level_lo.len(), "level_lo")?;
         self.validate_vec_len(lives.len(), "lives")?;
+        self.validate_vec_len(score.len(), "score")?;
+        self.validate_vec_len(scrolling.len(), "scrolling")?;
+        self.validate_vec_len(time.len(), "time")?;
+        self.validate_vec_len(xscroll_hi.len(), "xscroll_hi")?;
+        self.validate_vec_len(xscroll_lo.len(), "xscroll_lo")?;
         let mut x_pos_rw = x_pos.as_array_mut();
         let x_pos_slice = x_pos_rw
             .as_slice_mut()
             .ok_or_else(|| PyValueError::new_err("x_pos must be C-contiguous"))?;
+        let mut coins_rw = coins.as_array_mut();
+        let coins_slice = coins_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("coins must be C-contiguous"))?;
+        let mut level_hi_rw = level_hi.as_array_mut();
+        let level_hi_slice = level_hi_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("level_hi must be C-contiguous"))?;
+        let mut level_lo_rw = level_lo.as_array_mut();
+        let level_lo_slice = level_lo_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("level_lo must be C-contiguous"))?;
         let mut lives_rw = lives.as_array_mut();
         let lives_slice = lives_rw
             .as_slice_mut()
             .ok_or_else(|| PyValueError::new_err("lives must be C-contiguous"))?;
+        let mut score_rw = score.as_array_mut();
+        let score_slice = score_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("score must be C-contiguous"))?;
+        let mut scrolling_rw = scrolling.as_array_mut();
+        let scrolling_slice = scrolling_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("scrolling must be C-contiguous"))?;
+        let mut time_rw = time.as_array_mut();
+        let time_slice = time_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("time must be C-contiguous"))?;
+        let mut xscroll_hi_rw = xscroll_hi.as_array_mut();
+        let xscroll_hi_slice = xscroll_hi_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("xscroll_hi must be C-contiguous"))?;
+        let mut xscroll_lo_rw = xscroll_lo.as_array_mut();
+        let xscroll_lo_slice = xscroll_lo_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("xscroll_lo must be C-contiguous"))?;
         py.allow_threads(|| {
-            self.inner.info_into(x_pos_slice, lives_slice);
+            self.inner.info_into(
+                x_pos_slice,
+                coins_slice,
+                level_hi_slice,
+                level_lo_slice,
+                lives_slice,
+                score_slice,
+                scrolling_slice,
+                time_slice,
+                xscroll_hi_slice,
+                xscroll_lo_slice,
+            );
         });
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn step_into<'py>(
         &mut self,
         py: Python<'py>,
@@ -164,7 +224,15 @@ impl FastMarioVecEnv {
         mut terminated: PyReadwriteArray1<'py, bool>,
         mut truncated: PyReadwriteArray1<'py, bool>,
         mut x_pos: PyReadwriteArray1<'py, u16>,
-        mut lives: PyReadwriteArray1<'py, u8>,
+        mut coins: PyReadwriteArray1<'py, u8>,
+        mut level_hi: PyReadwriteArray1<'py, i16>,
+        mut level_lo: PyReadwriteArray1<'py, i16>,
+        mut lives: PyReadwriteArray1<'py, i16>,
+        mut score: PyReadwriteArray1<'py, u32>,
+        mut scrolling: PyReadwriteArray1<'py, i16>,
+        mut time: PyReadwriteArray1<'py, u16>,
+        mut xscroll_hi: PyReadwriteArray1<'py, u8>,
+        mut xscroll_lo: PyReadwriteArray1<'py, u8>,
     ) -> PyResult<()> {
         self.validate_obs_shape(&obs)?;
         self.validate_vec_len(actions.len(), "actions")?;
@@ -172,7 +240,15 @@ impl FastMarioVecEnv {
         self.validate_vec_len(terminated.len(), "terminated")?;
         self.validate_vec_len(truncated.len(), "truncated")?;
         self.validate_vec_len(x_pos.len(), "x_pos")?;
+        self.validate_vec_len(coins.len(), "coins")?;
+        self.validate_vec_len(level_hi.len(), "level_hi")?;
+        self.validate_vec_len(level_lo.len(), "level_lo")?;
         self.validate_vec_len(lives.len(), "lives")?;
+        self.validate_vec_len(score.len(), "score")?;
+        self.validate_vec_len(scrolling.len(), "scrolling")?;
+        self.validate_vec_len(time.len(), "time")?;
+        self.validate_vec_len(xscroll_hi.len(), "xscroll_hi")?;
+        self.validate_vec_len(xscroll_lo.len(), "xscroll_lo")?;
 
         let actions_ro = actions.as_array();
         let actions_slice = actions_ro
@@ -198,10 +274,42 @@ impl FastMarioVecEnv {
         let x_pos_slice = x_pos_rw
             .as_slice_mut()
             .ok_or_else(|| PyValueError::new_err("x_pos must be C-contiguous"))?;
+        let mut coins_rw = coins.as_array_mut();
+        let coins_slice = coins_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("coins must be C-contiguous"))?;
+        let mut level_hi_rw = level_hi.as_array_mut();
+        let level_hi_slice = level_hi_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("level_hi must be C-contiguous"))?;
+        let mut level_lo_rw = level_lo.as_array_mut();
+        let level_lo_slice = level_lo_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("level_lo must be C-contiguous"))?;
         let mut lives_rw = lives.as_array_mut();
         let lives_slice = lives_rw
             .as_slice_mut()
             .ok_or_else(|| PyValueError::new_err("lives must be C-contiguous"))?;
+        let mut score_rw = score.as_array_mut();
+        let score_slice = score_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("score must be C-contiguous"))?;
+        let mut scrolling_rw = scrolling.as_array_mut();
+        let scrolling_slice = scrolling_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("scrolling must be C-contiguous"))?;
+        let mut time_rw = time.as_array_mut();
+        let time_slice = time_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("time must be C-contiguous"))?;
+        let mut xscroll_hi_rw = xscroll_hi.as_array_mut();
+        let xscroll_hi_slice = xscroll_hi_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("xscroll_hi must be C-contiguous"))?;
+        let mut xscroll_lo_rw = xscroll_lo.as_array_mut();
+        let xscroll_lo_slice = xscroll_lo_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("xscroll_lo must be C-contiguous"))?;
 
         py.allow_threads(|| {
             self.inner.step_into(
@@ -211,7 +319,15 @@ impl FastMarioVecEnv {
                 terminated_slice,
                 truncated_slice,
                 x_pos_slice,
+                coins_slice,
+                level_hi_slice,
+                level_lo_slice,
                 lives_slice,
+                score_slice,
+                scrolling_slice,
+                time_slice,
+                xscroll_hi_slice,
+                xscroll_lo_slice,
             );
         });
         Ok(())

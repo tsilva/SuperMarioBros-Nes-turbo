@@ -177,21 +177,55 @@ impl MarioVecEnv {
         Ok(())
     }
 
-    pub fn info_into(&self, x_pos: &mut [u16], lives: &mut [u8]) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn info_into(
+        &self,
+        x_pos: &mut [u16],
+        coins: &mut [u8],
+        level_hi: &mut [i16],
+        level_lo: &mut [i16],
+        lives: &mut [i16],
+        score: &mut [u32],
+        scrolling: &mut [i16],
+        time: &mut [u16],
+        xscroll_hi: &mut [u8],
+        xscroll_lo: &mut [u8],
+    ) {
         if self.synced_lanes && self.config.num_envs > 1 {
-            x_pos.fill(self.envs[0].x_pos());
-            lives.fill(self.envs[0].lives());
+            fill_info_from_env(
+                &self.envs[0],
+                x_pos,
+                coins,
+                level_hi,
+                level_lo,
+                lives,
+                score,
+                scrolling,
+                time,
+                xscroll_hi,
+                xscroll_lo,
+            );
             return;
         }
 
-        for ((env, x_out), lives_out) in
-            self.envs.iter().zip(x_pos.iter_mut()).zip(lives.iter_mut())
-        {
-            *x_out = env.x_pos();
-            *lives_out = env.lives();
+        for env_idx in 0..self.config.num_envs {
+            write_info_from_env(
+                &self.envs[env_idx],
+                &mut x_pos[env_idx],
+                &mut coins[env_idx],
+                &mut level_hi[env_idx],
+                &mut level_lo[env_idx],
+                &mut lives[env_idx],
+                &mut score[env_idx],
+                &mut scrolling[env_idx],
+                &mut time[env_idx],
+                &mut xscroll_hi[env_idx],
+                &mut xscroll_lo[env_idx],
+            );
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn step_into(
         &mut self,
         actions: &[u8],
@@ -200,7 +234,15 @@ impl MarioVecEnv {
         terminated: &mut [bool],
         truncated: &mut [bool],
         x_pos: &mut [u16],
-        lives: &mut [u8],
+        coins: &mut [u8],
+        level_hi: &mut [i16],
+        level_lo: &mut [i16],
+        lives: &mut [i16],
+        score: &mut [u32],
+        scrolling: &mut [i16],
+        time: &mut [u16],
+        xscroll_hi: &mut [u8],
+        xscroll_lo: &mut [u8],
     ) {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
@@ -218,14 +260,24 @@ impl MarioVecEnv {
                     &mut terminated[0],
                     &mut truncated[0],
                     &mut x_pos[0],
+                    &mut coins[0],
+                    &mut level_hi[0],
+                    &mut level_lo[0],
                     &mut lives[0],
+                    &mut score[0],
+                    &mut scrolling[0],
+                    &mut time[0],
+                    &mut xscroll_hi[0],
+                    &mut xscroll_lo[0],
                 );
                 copy_first_obs_to_remaining(obs, obs_stride);
                 rewards.fill(rewards[0]);
                 terminated.fill(terminated[0]);
                 truncated.fill(truncated[0]);
-                x_pos.fill(x_pos[0]);
-                lives.fill(lives[0]);
+                fill_info_from_first(
+                    x_pos, coins, level_hi, level_lo, lives, score, scrolling, time, xscroll_hi,
+                    xscroll_lo,
+                );
                 return;
             }
 
@@ -243,20 +295,61 @@ impl MarioVecEnv {
                 .zip(terminated.par_iter_mut())
                 .zip(truncated.par_iter_mut())
                 .zip(x_pos.par_iter_mut())
+                .zip(coins.par_iter_mut())
+                .zip(level_hi.par_iter_mut())
+                .zip(level_lo.par_iter_mut())
                 .zip(lives.par_iter_mut())
+                .zip(score.par_iter_mut())
+                .zip(scrolling.par_iter_mut())
+                .zip(time.par_iter_mut())
+                .zip(xscroll_hi.par_iter_mut())
+                .zip(xscroll_lo.par_iter_mut())
                 .for_each(
                     |(
                         (
                             (
                                 (
-                                    ((((env, scratch), action), obs_chunk), reward_out),
-                                    terminated_out,
+                                    (
+                                        (
+                                            (
+                                                (
+                                                    (
+                                                        (
+                                                            (
+                                                                (
+                                                                    (
+                                                                        (
+                                                                            (
+                                                                                (env, scratch),
+                                                                                action,
+                                                                            ),
+                                                                            obs_chunk,
+                                                                        ),
+                                                                        reward_out,
+                                                                    ),
+                                                                    terminated_out,
+                                                                ),
+                                                                truncated_out,
+                                                            ),
+                                                            x_out,
+                                                        ),
+                                                        coins_out,
+                                                    ),
+                                                    level_hi_out,
+                                                ),
+                                                level_lo_out,
+                                            ),
+                                            lives_out,
+                                        ),
+                                        score_out,
+                                    ),
+                                    scrolling_out,
                                 ),
-                                truncated_out,
+                                time_out,
                             ),
-                            x_out,
+                            xscroll_hi_out,
                         ),
-                        lives_out,
+                        xscroll_lo_out,
                     )| {
                         step_one(
                             config,
@@ -269,7 +362,15 @@ impl MarioVecEnv {
                             terminated_out,
                             truncated_out,
                             x_out,
+                            coins_out,
+                            level_hi_out,
+                            level_lo_out,
                             lives_out,
+                            score_out,
+                            scrolling_out,
+                            time_out,
+                            xscroll_hi_out,
+                            xscroll_lo_out,
                         );
                     },
                 );
@@ -288,7 +389,15 @@ impl MarioVecEnv {
                     &mut terminated[env_idx],
                     &mut truncated[env_idx],
                     &mut x_pos[env_idx],
+                    &mut coins[env_idx],
+                    &mut level_hi[env_idx],
+                    &mut level_lo[env_idx],
                     &mut lives[env_idx],
+                    &mut score[env_idx],
+                    &mut scrolling[env_idx],
+                    &mut time[env_idx],
+                    &mut xscroll_hi[env_idx],
+                    &mut xscroll_lo[env_idx],
                 );
             }
         }
@@ -310,6 +419,84 @@ fn copy_first_obs_to_remaining(obs: &mut [u8], obs_stride: usize) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn fill_info_from_env(
+    env: &NesEmulator,
+    x_pos: &mut [u16],
+    coins: &mut [u8],
+    level_hi: &mut [i16],
+    level_lo: &mut [i16],
+    lives: &mut [i16],
+    score: &mut [u32],
+    scrolling: &mut [i16],
+    time: &mut [u16],
+    xscroll_hi: &mut [u8],
+    xscroll_lo: &mut [u8],
+) {
+    x_pos.fill(env.x_pos());
+    coins.fill(env.coins());
+    level_hi.fill(env.level_hi());
+    level_lo.fill(env.level_lo());
+    lives.fill(env.lives());
+    score.fill(env.score());
+    scrolling.fill(env.scrolling());
+    time.fill(env.time());
+    xscroll_hi.fill(env.xscroll_hi());
+    xscroll_lo.fill(env.xscroll_lo());
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_info_from_first(
+    x_pos: &mut [u16],
+    coins: &mut [u8],
+    level_hi: &mut [i16],
+    level_lo: &mut [i16],
+    lives: &mut [i16],
+    score: &mut [u32],
+    scrolling: &mut [i16],
+    time: &mut [u16],
+    xscroll_hi: &mut [u8],
+    xscroll_lo: &mut [u8],
+) {
+    x_pos.fill(x_pos[0]);
+    coins.fill(coins[0]);
+    level_hi.fill(level_hi[0]);
+    level_lo.fill(level_lo[0]);
+    lives.fill(lives[0]);
+    score.fill(score[0]);
+    scrolling.fill(scrolling[0]);
+    time.fill(time[0]);
+    xscroll_hi.fill(xscroll_hi[0]);
+    xscroll_lo.fill(xscroll_lo[0]);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_info_from_env(
+    env: &NesEmulator,
+    x_out: &mut u16,
+    coins_out: &mut u8,
+    level_hi_out: &mut i16,
+    level_lo_out: &mut i16,
+    lives_out: &mut i16,
+    score_out: &mut u32,
+    scrolling_out: &mut i16,
+    time_out: &mut u16,
+    xscroll_hi_out: &mut u8,
+    xscroll_lo_out: &mut u8,
+) {
+    *x_out = env.x_pos();
+    *coins_out = env.coins();
+    *level_hi_out = env.level_hi();
+    *level_lo_out = env.level_lo();
+    *lives_out = env.lives();
+    *score_out = env.score();
+    *scrolling_out = env.scrolling();
+    *time_out = env.time();
+    *xscroll_hi_out = env.xscroll_hi();
+    *xscroll_lo_out = env.xscroll_lo();
+}
+
+#[allow(clippy::too_many_arguments)]
 fn step_one(
     config: VecEnvConfig,
     resize_plan: &AreaResizePlan,
@@ -321,7 +508,15 @@ fn step_one(
     terminated_out: &mut bool,
     truncated_out: &mut bool,
     x_out: &mut u16,
-    lives_out: &mut u8,
+    coins_out: &mut u8,
+    level_hi_out: &mut i16,
+    level_lo_out: &mut i16,
+    lives_out: &mut i16,
+    score_out: &mut u32,
+    scrolling_out: &mut i16,
+    time_out: &mut u16,
+    xscroll_hi_out: &mut u8,
+    xscroll_lo_out: &mut u8,
 ) {
     let action = MarioAction::from_u8(action_id);
     let mut reward = 0.0;
@@ -337,8 +532,19 @@ fn step_one(
     *reward_out = reward;
     *terminated_out = env.is_done();
     *truncated_out = false;
-    *x_out = env.x_pos();
-    *lives_out = env.lives();
+    write_info_from_env(
+        env,
+        x_out,
+        coins_out,
+        level_hi_out,
+        level_lo_out,
+        lives_out,
+        score_out,
+        scrolling_out,
+        time_out,
+        xscroll_hi_out,
+        xscroll_lo_out,
+    );
 }
 
 fn write_reset_stack(

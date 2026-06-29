@@ -4,10 +4,23 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_fastenv import ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_fastenv import CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_fastenv import SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+INFO_ARRAYS = (
+    ("x_pos", np.uint16),
+    ("coins", np.uint8),
+    ("level_hi", np.int16),
+    ("level_lo", np.int16),
+    ("lives", np.int16),
+    ("score", np.uint32),
+    ("scrolling", np.int16),
+    ("time", np.uint16),
+    ("xscroll_hi", np.uint8),
+    ("xscroll_lo", np.uint8),
+)
 
 
 def make_env(rom_path: Path, num_envs: int) -> SuperMarioBrosVecEnv:
@@ -22,6 +35,7 @@ def make_env(rom_path: Path, num_envs: int) -> SuperMarioBrosVecEnv:
         crop_bottom=0,
         resize_width=84,
         resize_height=84,
+        action_set="full",
     )
 
 
@@ -34,6 +48,21 @@ def step_uniform(
         result = env.step_fast(actions)
     assert result is not None
     return result
+
+
+def assert_uniform_info(vec: SuperMarioBrosVecEnv, one: SuperMarioBrosVecEnv) -> None:
+    for attr, dtype in INFO_ARRAYS:
+        vec_values = getattr(vec, attr)
+        one_values = getattr(one, attr)
+        np.testing.assert_array_equal(
+            vec_values,
+            np.full((vec.num_envs,), one_values[0], dtype=dtype),
+        )
+
+
+def assert_lane_info(vec: SuperMarioBrosVecEnv, lane: int, ref: SuperMarioBrosVecEnv) -> None:
+    for attr, _dtype in INFO_ARRAYS:
+        assert getattr(vec, attr)[lane] == getattr(ref, attr)[0]
 
 
 def check_uniform_sync(rom_path: Path) -> None:
@@ -67,8 +96,7 @@ def check_uniform_sync(rom_path: Path) -> None:
         np.testing.assert_array_equal(
             vec_truncated, np.full((16,), one_truncated[0], dtype=np.bool_)
         )
-        np.testing.assert_array_equal(vec.x_pos, np.full((16,), one.x_pos[0], dtype=np.uint16))
-        np.testing.assert_array_equal(vec.lives, np.full((16,), one.lives[0], dtype=np.uint8))
+        assert_uniform_info(vec, one)
         for lane in range(1, 16):
             np.testing.assert_array_equal(vec_obs[0], vec_obs[lane])
 
@@ -100,8 +128,7 @@ def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
         assert rewards[lane] == ref_rewards[0]
         assert terminated[lane] == ref_terminated[0]
         assert truncated[lane] == ref_truncated[0]
-        assert vec.x_pos[lane] == ref.x_pos[0]
-        assert vec.lives[lane] == ref.lives[0]
+        assert_lane_info(vec, lane, ref)
 
 
 def main() -> None:
