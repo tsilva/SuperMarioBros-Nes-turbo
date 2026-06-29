@@ -32,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--action", choices=ACTION_MEANINGS, default="noop")
+    parser.add_argument("--state", default=None)
+    parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--include-info", action="store_true")
     parser.add_argument("--terminate-on-flag", action="store_true")
     parser.add_argument("--no-start-game", action="store_true")
@@ -92,7 +94,7 @@ def step_repeated(
 
 def prepare_game(env: SuperMarioBrosVecEnv, args: argparse.Namespace) -> None:
     env.reset()
-    if args.no_start_game:
+    if args.no_start_game or args.state is not None:
         return
     noop = fill_action(args.num_envs, "noop")
     start = fill_action(args.num_envs, "start")
@@ -146,9 +148,11 @@ def build_result(args: argparse.Namespace, obs: np.ndarray, runs: list[dict[str,
             "resize_width": args.resize_width,
             "resize_height": args.resize_height,
             "action": args.action,
+            "state": args.state,
+            "state_dir": str(args.state_dir) if args.state_dir is not None else None,
             "include_info": args.include_info,
             "terminate_on_flag": args.terminate_on_flag,
-            "start_game": not args.no_start_game,
+            "start_game": not args.no_start_game and args.state is None,
         },
         "observation": {
             "shape": list(obs.shape),
@@ -177,6 +181,7 @@ def print_human(result: dict[str, Any]) -> None:
         f"frame_skip={config['frame_skip']} frame_stack={config['frame_stack']} "
         f"grayscale={config['grayscale']} crop=({config['crop_top']},{config['crop_bottom']}) "
         f"resize={config['resize_width']}x{config['resize_height']} action={config['action']} "
+        f"state={config['state']} "
         f"include_info={config['include_info']}"
     )
     print(
@@ -214,6 +219,8 @@ def main() -> None:
         crop_bottom=args.crop_bottom,
         resize_width=args.resize_width,
         resize_height=args.resize_height,
+        state=args.state,
+        state_dir=args.state_dir,
     )
     obs = env.reset()
     actions = fill_action(args.num_envs, args.action)

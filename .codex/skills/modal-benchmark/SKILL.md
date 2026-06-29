@@ -1,6 +1,6 @@
 ---
 name: modal-benchmark
-description: Run the canonical clean-machine Modal CPU benchmark for this supermarioemu repo and report Super Mario Bros NES throughput. Use when the user invokes /modal-benchmark, asks to benchmark on Modal/modal.com, wants a clean CPU-only baseline, wants to compare an optimization on fresh compute, or asks for the current Modal benchmark result format.
+description: Run the canonical clean-machine Modal CPU benchmark for this supermarioemu repo across the first four Super Mario Bros NES Level1 states and report per-level plus average throughput. Use when the user invokes /modal-benchmark, asks to benchmark on Modal/modal.com, wants a clean CPU-only baseline, wants to compare an optimization on fresh compute, or asks for the current Modal benchmark result format.
 ---
 
 # Modal Benchmark
@@ -26,22 +26,39 @@ Use the launcher defaults unless the user asks otherwise:
 - `frame_stack=4`
 - grayscale, crop top 32, resize 84x84
 - action `noop`
+- states `Level1-1,Level1-2,Level1-3,Level1-4`
+
+The launcher runs those states one at a time in the same clean Modal function.
+It uploads the local ROM bytes plus the four stable-retro `.state` files at
+runtime. State files resolve from an explicit `--state-dir`, `SUPERMARIOEMU_STATE_DIR`,
+an installed `stable_retro` package, or the sibling `stable-retro-turbo`
+checkout.
 
 ## Reporting
 
 After the Modal run completes, read the saved JSON artifact and report the result in this shape:
 
-- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes at runtime, and ran the 16-env benchmark.
+- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes and state bytes at runtime, and ran the 16-env benchmark once per Level1 state.
 - Link the saved artifact with an absolute file link.
-- Include a `Benchmark result` code block:
+- Include a `Per-level results` code block:
 
 ```text
-runs env_steps_per_sec: RUN1, RUN2, RUN3
-mean: MEAN
-stdev: STDEV
-best: BEST
+Level1-1 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
+Level1-2 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
+Level1-3 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
+Level1-4 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
 obs_shape: (16, 4, 84, 84)
 obs_dtype: uint8
+```
+
+- Include an `Average` code block:
+
+```text
+mean_of_level_means: MEAN
+stdev_of_level_means: STDEV
+mean_of_all_runs: MEAN
+stdev_of_all_runs: STDEV
+best_run: BEST
 ```
 
 - Include a `Modal machine metadata` code block:
@@ -68,11 +85,23 @@ from pathlib import Path
 path = Path("artifacts/benchmarks/modal-baseline-YYYY-MM-DD.json")
 data = json.loads(path.read_text())
 print("path", path)
-print("mean", data["summary"]["env_steps_per_sec"]["mean"])
-print("stdev", data["summary"]["env_steps_per_sec"]["stdev"])
-print("best", data["summary"]["env_steps_per_sec"]["max"])
-print("runs", [round(r["env_steps_per_sec"], 1) for r in data["runs"]])
-print("obs", data["observation"]["shape"], data["observation"]["dtype"])
+for state, result in data["levels"].items():
+    summary = result["summary"]["env_steps_per_sec"]
+    print(
+        state,
+        "mean", summary["mean"],
+        "stdev", summary["stdev"],
+        "best", summary["max"],
+        "runs", [round(r["env_steps_per_sec"], 1) for r in result["runs"]],
+        "obs", result["observation"]["shape"], result["observation"]["dtype"],
+    )
+level_mean = data["summary"]["level_mean_env_steps_per_sec"]
+all_runs = data["summary"]["all_runs_env_steps_per_sec"]
+print("mean_of_level_means", level_mean["mean"])
+print("stdev_of_level_means", level_mean["stdev"])
+print("mean_of_all_runs", all_runs["mean"])
+print("stdev_of_all_runs", all_runs["stdev"])
+print("best_run", all_runs["max"])
 print(
     "modal",
     data["modal"]["cpu_request"],

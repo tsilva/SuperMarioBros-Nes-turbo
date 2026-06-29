@@ -15,7 +15,7 @@ pub struct FastMarioVecEnv {
 #[pymethods]
 impl FastMarioVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_state=None))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -27,6 +27,7 @@ impl FastMarioVecEnv {
         crop_bottom: usize,
         resize_width: usize,
         resize_height: usize,
+        initial_state: Option<Vec<u8>>,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -63,7 +64,8 @@ impl FastMarioVecEnv {
             resize_height,
         };
         Ok(Self {
-            inner: MarioVecEnv::new(cart, config),
+            inner: MarioVecEnv::new(cart, config, initial_state)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?,
         })
     }
 
@@ -126,8 +128,29 @@ impl FastMarioVecEnv {
         let obs_slice = obs_rw
             .as_slice_mut()
             .ok_or_else(|| PyValueError::new_err("obs must be C-contiguous"))?;
+        py.allow_threads(|| self.inner.reset_into(obs_slice))
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        Ok(())
+    }
+
+    pub fn info_into<'py>(
+        &self,
+        py: Python<'py>,
+        mut x_pos: PyReadwriteArray1<'py, u16>,
+        mut lives: PyReadwriteArray1<'py, u8>,
+    ) -> PyResult<()> {
+        self.validate_vec_len(x_pos.len(), "x_pos")?;
+        self.validate_vec_len(lives.len(), "lives")?;
+        let mut x_pos_rw = x_pos.as_array_mut();
+        let x_pos_slice = x_pos_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("x_pos must be C-contiguous"))?;
+        let mut lives_rw = lives.as_array_mut();
+        let lives_slice = lives_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("lives must be C-contiguous"))?;
         py.allow_threads(|| {
-            self.inner.reset_into(obs_slice);
+            self.inner.info_into(x_pos_slice, lives_slice);
         });
         Ok(())
     }

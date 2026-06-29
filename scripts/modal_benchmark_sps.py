@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,11 @@ try:
     UV_PROJECT_DIR = str(REPO_ROOT.relative_to(Path.cwd().resolve())) or "."
 except ValueError:
     UV_PROJECT_DIR = str(REPO_ROOT)
-REMOTE_REPO = "/root/supermarioemu"
+REMOTE_REPO = "/root/SuperMarioBros-Nes-turbo"
 REMOTE_ROM = "/tmp/SuperMarioBros-Nes-v0.nes"
+REMOTE_STATE_DIR = "/tmp/SuperMarioBros-Nes-turbo-states"
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 CPU_REQUEST = 16.0
 MEMORY_MB = 8192
 PYTHON_VERSION = "3.12"
@@ -34,7 +37,7 @@ IMAGE_IGNORE = [
     "*.so",
 ]
 
-app = modal.App("supermarioemu-cpu-benchmarks")
+app = modal.App("supermariobros-nes-turbo-cpu-benchmarks")
 
 image = (
     modal.Image.from_registry("rust:1.88-bookworm", add_python=PYTHON_VERSION)
@@ -42,8 +45,8 @@ image = (
     .add_local_dir(REPO_ROOT, REMOTE_REPO, copy=True, ignore=IMAGE_IGNORE)
     .workdir(REMOTE_REPO)
     .run_commands(
-        "python -m maturin build --release --out /tmp/supermarioemu-wheels",
-        "/.uv/uv pip install --python /.uv/.venv/bin/python /tmp/supermarioemu-wheels/*.whl",
+        "python -m maturin build --release --out /tmp/SuperMarioBros-Nes-turbo-wheels",
+        "/.uv/uv pip install --python /.uv/.venv/bin/python /tmp/SuperMarioBros-Nes-turbo-wheels/*.whl",
     )
 )
 
@@ -77,6 +80,82 @@ def benchmark_args(config: dict[str, Any]) -> list[str]:
     return result
 
 
+def parse_states(states: str) -> list[str]:
+    parsed = [state.strip() for state in states.split(",")]
+    if not parsed or not all(parsed):
+        raise ValueError("--states must be a comma-separated list without empty entries")
+    return parsed
+
+
+def stable_retro_state_dir() -> Path | None:
+    try:
+        import stable_retro.data  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+
+    try:
+        state_path = stable_retro.data.get_file_path(
+            "SuperMarioBros-Nes-v0",
+            "Level1-1.state",
+            stable_retro.data.Integrations.ALL,
+        )
+    except Exception:
+        return None
+    if not state_path:
+        return None
+    return Path(state_path).parent
+
+
+def sibling_stable_retro_state_dir() -> Path | None:
+    candidate = (
+        REPO_ROOT.parent
+        / "stable-retro-turbo"
+        / "stable_retro"
+        / "data"
+        / "stable"
+        / "SuperMarioBros-Nes-v0"
+    )
+    return candidate if candidate.exists() else None
+
+
+def candidate_state_dirs(state_dir: str) -> list[Path]:
+    candidates: list[Path | None] = []
+    if state_dir:
+        candidates.append(Path(state_dir).expanduser())
+    env_dir = os.environ.get("SUPERMARIOEMU_STATE_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.append(stable_retro_state_dir())
+    candidates.append(sibling_stable_retro_state_dir())
+
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        resolved = candidate.resolve()
+        if resolved.exists() and resolved not in seen:
+            dirs.append(resolved)
+            seen.add(resolved)
+    return dirs
+
+
+def load_state_files(states: list[str], state_dir: str) -> dict[str, bytes]:
+    dirs = candidate_state_dirs(state_dir)
+    files: dict[str, bytes] = {}
+    for state in states:
+        filename = state if state.endswith(".state") else f"{state}.state"
+        for directory in dirs:
+            path = directory / filename
+            if path.exists():
+                files[state.removesuffix(".state")] = path.read_bytes()
+                break
+        else:
+            checked = ", ".join(str(path) for path in dirs) or "<none>"
+            raise FileNotFoundError(f"could not find {filename}; checked state dirs: {checked}")
+    return files
+
+
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -96,7 +175,7 @@ def git_text(*args: str) -> str | None:
     return proc.stdout.strip()
 
 
-def local_metadata(rom_path: Path, rom_bytes: bytes) -> dict[str, Any]:
+def local_metadata(rom_path: Path, rom_bytes: bytes, state_files: dict[str, bytes]) -> dict[str, Any]:
     return {
         "repo_root": str(REPO_ROOT),
         "git": {
@@ -108,41 +187,34 @@ def local_metadata(rom_path: Path, rom_bytes: bytes) -> dict[str, Any]:
             "bytes": len(rom_bytes),
             "sha256": sha256(rom_bytes),
         },
+        "states": {
+            name: {
+                "bytes": len(state_bytes),
+                "sha256": sha256(state_bytes),
+            }
+            for name, state_bytes in state_files.items()
+        },
     }
 
 
 @app.function(image=image, cpu=CPU_REQUEST, memory=MEMORY_MB, timeout=1800)
-def run_benchmark(rom_bytes: bytes, forwarded_args: list[str]) -> dict[str, Any]:
+def run_benchmark(
+    rom_bytes: bytes,
+    state_files: dict[str, bytes],
+    forwarded_args: list[str],
+) -> dict[str, Any]:
     import os
     import platform
     import sys
 
     remote_rom = Path(REMOTE_ROM)
     remote_rom.write_bytes(rom_bytes)
-    command = [
-        "python",
-        "scripts/benchmark_sps.py",
-        "--rom-path",
-        str(remote_rom),
-        "--json",
-        *forwarded_args,
-    ]
-    proc = subprocess.run(
-        command,
-        cwd=REMOTE_REPO,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "remote benchmark failed\n"
-            f"command={command!r}\n"
-            f"stdout={proc.stdout}\n"
-            f"stderr={proc.stderr}"
-        )
-    result = json.loads(proc.stdout)
-    result["modal"] = {
+    remote_state_dir = Path(REMOTE_STATE_DIR)
+    remote_state_dir.mkdir(parents=True, exist_ok=True)
+    for state, state_bytes in state_files.items():
+        (remote_state_dir / f"{state}.state").write_bytes(state_bytes)
+
+    modal_info = {
         "cpu_request": CPU_REQUEST,
         "memory_mb": MEMORY_MB,
         "python_version": sys.version,
@@ -153,42 +225,120 @@ def run_benchmark(rom_bytes: bytes, forwarded_args: list[str]) -> dict[str, Any]
         "affinity_cpu_count": len(os.sched_getaffinity(0))
         if hasattr(os, "sched_getaffinity")
         else None,
-        "command": command,
+        "commands": {},
         "remote_repo": REMOTE_REPO,
         "remote_rom_path": str(remote_rom),
+        "remote_state_dir": str(remote_state_dir),
     }
-    return result
+
+    levels: dict[str, Any] = {}
+    for state in state_files:
+        command = [
+            "python",
+            "scripts/benchmark_sps.py",
+            "--rom-path",
+            str(remote_rom),
+            "--json",
+            "--state",
+            state,
+            "--state-dir",
+            str(remote_state_dir),
+            *forwarded_args,
+        ]
+        proc = subprocess.run(
+            command,
+            cwd=REMOTE_REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "remote benchmark failed\n"
+                f"state={state}\n"
+                f"command={command!r}\n"
+                f"stdout={proc.stdout}\n"
+                f"stderr={proc.stderr}"
+            )
+        levels[state] = json.loads(proc.stdout)
+        modal_info["commands"][state] = command
+
+    return {
+        "states": list(state_files),
+        "levels": levels,
+        "summary": aggregate_levels(levels),
+        "modal": modal_info,
+    }
+
+
+def stat_summary(values: list[float]) -> dict[str, float]:
+    import statistics
+
+    return {
+        "mean": statistics.fmean(values),
+        "min": min(values),
+        "max": max(values),
+        "stdev": statistics.stdev(values) if len(values) > 1 else 0.0,
+    }
+
+
+def aggregate_levels(levels: dict[str, Any]) -> dict[str, Any]:
+    per_level_means = [
+        result["summary"]["env_steps_per_sec"]["mean"] for result in levels.values()
+    ]
+    all_runs = [
+        run["env_steps_per_sec"]
+        for result in levels.values()
+        for run in result["runs"]
+    ]
+    return {
+        "level_mean_env_steps_per_sec": stat_summary(per_level_means),
+        "all_runs_env_steps_per_sec": stat_summary(all_runs),
+        "level_count": len(levels),
+        "run_count": len(all_runs),
+    }
 
 
 def print_summary(result: dict[str, Any]) -> None:
-    config = result["config"]
-    obs = result["observation"]
     modal_info = result["modal"]
-    summary = result["summary"]["env_steps_per_sec"]
     print(
         "modal="
         f"cpu_request={modal_info['cpu_request']} memory_mb={modal_info['memory_mb']} "
         f"os_cpu_count={modal_info['os_cpu_count']} "
         f"affinity_cpu_count={modal_info['affinity_cpu_count']}"
     )
-    print(
-        "config="
-        f"num_envs={config['num_envs']} steps={config['steps']} repeats={config['repeats']} "
-        f"frame_skip={config['frame_skip']} frame_stack={config['frame_stack']} "
-        f"resize={config['resize_width']}x{config['resize_height']} action={config['action']}"
-    )
-    print(f"obs_shape={tuple(obs['shape'])} obs_dtype={obs['dtype']} obs_mib={obs['mib']:.2f}")
-    for idx, run in enumerate(result["runs"], start=1):
+    for state, level in result["levels"].items():
+        config = level["config"]
+        obs = level["observation"]
+        summary = level["summary"]["env_steps_per_sec"]
         print(
-            f"run={idx} elapsed_s={run['elapsed_s']:.6f} "
-            f"env_steps_per_sec={run['env_steps_per_sec']:.1f} "
-            f"emulated_frames_per_sec={run['emulated_frames_per_sec']:.1f}"
+            "level="
+            f"{state} num_envs={config['num_envs']} steps={config['steps']} "
+            f"repeats={config['repeats']} frame_skip={config['frame_skip']} "
+            f"frame_stack={config['frame_stack']} resize={config['resize_width']}x{config['resize_height']} "
+            f"action={config['action']}"
         )
+        print(f"obs_shape={tuple(obs['shape'])} obs_dtype={obs['dtype']} obs_mib={obs['mib']:.2f}")
+        for idx, run in enumerate(level["runs"], start=1):
+            print(
+                f"  run={idx} elapsed_s={run['elapsed_s']:.6f} "
+                f"env_steps_per_sec={run['env_steps_per_sec']:.1f} "
+                f"emulated_frames_per_sec={run['emulated_frames_per_sec']:.1f}"
+            )
+        print(
+            "  summary="
+            f"mean={summary['mean']:.1f} stdev={summary['stdev']:.1f} "
+            f"best={summary['max']:.1f}"
+        )
+    level_mean = result["summary"]["level_mean_env_steps_per_sec"]
+    all_runs = result["summary"]["all_runs_env_steps_per_sec"]
     print(
-        "summary="
-        f"env_steps_per_sec_mean={summary['mean']:.1f} "
-        f"env_steps_per_sec_stdev={summary['stdev']:.1f} "
-        f"best_env_steps_per_sec={summary['max']:.1f}"
+        "average="
+        f"level_mean_env_steps_per_sec={level_mean['mean']:.1f} "
+        f"level_mean_stdev={level_mean['stdev']:.1f} "
+        f"all_runs_env_steps_per_sec={all_runs['mean']:.1f} "
+        f"all_runs_stdev={all_runs['stdev']:.1f} "
+        f"best_run={all_runs['max']:.1f}"
     )
 
 
@@ -215,7 +365,10 @@ def main(
     pre_start_steps: int = 30,
     start_steps: int = 8,
     post_start_steps: int = 30,
+    states: str = ",".join(DEFAULT_STATES),
+    state_dir: str = "",
 ) -> None:
+    state_names = parse_states(states)
     config = {
         "num_envs": num_envs,
         "steps": steps,
@@ -241,8 +394,9 @@ def main(
         raise FileNotFoundError(f"ROM not found: {local_rom_path}")
 
     rom_bytes = local_rom_path.read_bytes()
-    result = run_benchmark.remote(rom_bytes, benchmark_args(config))
-    result["local"] = local_metadata(local_rom_path, rom_bytes)
+    state_files = load_state_files(state_names, state_dir)
+    result = run_benchmark.remote(rom_bytes, state_files, benchmark_args(config))
+    result["local"] = local_metadata(local_rom_path, rom_bytes, state_files)
 
     output_path = Path(output_json).expanduser() if output_json else None
     if output_path is not None:

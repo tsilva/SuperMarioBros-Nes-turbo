@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autoresearch Speed Improvements"
+  short_description: "Coordinate Modal-judged speed research."
+  default_prompt: "Use $autoresearch-speed-improvements to run a safe Super Mario Bros emulator speed optimization track."

@@ -1,24 +1,49 @@
-# supermarioemu
+<div align="center">
+  <img src="./logo.png" alt="SuperMarioBros-Nes-turbo logo" width="320" />
 
-Fast Rust-first Super Mario Bros NES environment for RL.
+  **Blazing fast SuperMarioBros-Nes environment for RL research**
+</div>
 
-The main performance rule is simple: Python should call Rust once per vectorized
-batch step. Frame skip, grayscale conversion, frame stacking, reward extraction,
-termination checks, and observation-buffer writes happen on the Rust side.
+`SuperMarioBros-Nes-turbo` exposes a Python API backed by a Rust NES emulator and vectorized environment. Its speed comes from a NES emulator written in Rust and optimized specifically for SuperMarioBros-Nes, not from a general-purpose NES compatibility layer. The hot path crosses from Python to Rust once per batched step, while frame skip, reward extraction, termination checks, preprocessing, frame stacking, and observation-buffer writes stay on the Rust side.
 
-Current emulator scope:
+The objective is to push beyond the already juiced [stable-retro-turbo](https://github.com/tsilva/stable-retro-turbo) stack we were using for RL experimentation. These RL loops are mostly bottlenecked by CPU-based rollouts, so the goal is to make environment stepping as fast as possible: run the maximum number of experiments with the minimum hardware resources and wall-clock time.
 
-- Super Mario Bros / mapper 0 NROM fast path
-- 6502 CPU interpreter
-- no-audio PPU timing, VRAM, OAM DMA, controller input, vblank/NMI
-- grayscale and RGB frame output
-- Rust-side vector stepping with lane parallelism for larger batches
+Use it when you need a local, ROM-backed Super Mario Bros environment with a Gymnasium-style single-env wrapper, a vectorized batch API, stable-retro state loading, local throughput benchmarks, and a clean Modal CPU benchmark path.
 
-## Intended hot path
+## Install
+
+```bash
+git clone https://github.com/tsilva/SuperMarioBros-Nes-turbo.git
+cd SuperMarioBros-Nes-turbo
+uv sync --extra dev
+uv run maturin develop --release
+```
+
+Point the scripts at a local SuperMarioBros-Nes ROM. The ROM is not included in this repository. The default script path is `~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes`; pass `--rom-path` to use a different file.
+
+Verify the ROM before running benchmarks:
+
+```bash
+shasum -a 256 ~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes
+```
+
+The expected SHA-256 digest is:
+
+```text
+f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de
+```
+
+Import the Python package as `supermarioemu`, or run one of the scripts below from the repo root.
+
+## Usage
 
 ```python
+import numpy as np
+
+from supermarioemu import SuperMarioBrosVecEnv
+
 env = SuperMarioBrosVecEnv(
-    rom_path="~/Desktop/roms/SuperMarioBros.nes",
+    rom_path="~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes",
     num_envs=64,
     frame_skip=4,
     grayscale=True,
@@ -29,72 +54,44 @@ env = SuperMarioBrosVecEnv(
 )
 
 obs = env.reset()
+actions = np.zeros((env.num_envs,), dtype=np.uint8)
 env.step_async(actions)
 obs, rewards, terminated, truncated, infos = env.step_wait()
 ```
 
-Under the hood `step_wait()` calls a single Rust `step_into(...)` method that
-fills preallocated NumPy arrays in place.
+`step_wait()` calls the Rust `FastMarioVecEnv` once for the whole batch and fills reusable NumPy arrays in place.
 
-## Build
-
-```bash
-uv sync --extra dev
-uv run maturin develop --release
-```
-
-## Smoke And Benchmark
+## Commands
 
 ```bash
-uv run python scripts/smoke_smb.py
+uv sync --extra dev                 # install Python dev dependencies
+uv run maturin develop --release    # build and install the Rust extension
+
+uv run python scripts/smoke_smb.py  # quick ROM/emulator smoke check
 uv run python scripts/benchmark_vec_env.py --num-envs 8 --frame-skip 4 --frame-stack 4
-uv run python scripts/benchmark_sps.py --num-envs 16 --steps 500 --repeats 3
-```
+uv run python scripts/benchmark_sps.py --state Level1-1 --num-envs 16 --steps 500 --repeats 3
 
-The `start` action is included so the raw ROM can leave the title screen without
-special Python-side reset logic.
-
-### Clean CPU Benchmarks On Modal
-
-Use Modal for the canonical optimization baseline so timings come from a fresh
-CPU-only machine instead of a busy local workstation. The default profile is the
-standard 16-env benchmark. Run this from the repo root with an authenticated
-Modal CLI (`modal setup` if this is the first time):
-
-```bash
-modal run scripts/modal_benchmark_sps.py \
-  --output-json artifacts/benchmarks/modal-baseline.json
-```
-
-For each optimization attempt, run the same command again and save a new JSON
-artifact:
-
-```bash
-modal run scripts/modal_benchmark_sps.py \
-  --output-json artifacts/benchmarks/modal-optimization.json
-```
-
-The launcher sends the local ROM bytes to the remote container at run time, so
-the Modal image stays generic while the benchmark still uses the same ROM as the
-local scripts. Override it with `--rom-path` if needed. The JSON includes the
-benchmark config, per-repeat timings, summary statistics, Modal CPU/memory
-metadata, local Git commit/status, and the ROM SHA-256.
-
-## Play
-
-```bash
-uv run python scripts/play.py --mode external
+uv run python scripts/play.py --mode external      # raw SDL2 play view
 uv run python scripts/play.py --mode external --view preprocessed --scale 4
+
+modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/modal-baseline.json
 ```
 
-`external` mode reads keyboard input in Python, maps it to the discrete
-Gymnasium-style action IDs, and calls `SuperMarioBrosEnv.step(action)` each
-frame. The default raw view disables RL preprocessing for play: no frame stack,
-no grayscale, and no frame skip. Both views disable RL flagpole termination so
-the game can continue through SMB's own end-of-level sequence. Play mode uses
-the native SDL2 backend for fast scaled display. `--view preprocessed` instead
-shows the Gym observation tensor with grayscale, frame stacking, area resize to
-84x84, and the default 32-pixel HUD crop; stacked frames are tiled in the SDL
-window so you can see exactly what the agent would receive.
-Controls: arrows or A/D move, X/J/Space jump, Z/K/Shift run, Enter start,
-Esc quit.
+## Notes
+
+- The current emulator scope is SuperMarioBros-Nes mapper 0 NROM. It is intentionally optimized for this game, with a 6502 CPU interpreter, no-audio PPU timing, VRAM, OAM DMA, controller input, vblank/NMI, grayscale/RGB output, and Rust-side vector stepping.
+- The Python package exposes `SuperMarioBrosEnv`, `SuperMarioBrosVecEnv`, and `ACTION_MEANINGS`.
+- The default action set is `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, `left`, and `start`.
+- Use `--state Level1-1` or another stable-retro state to start from a saved level state. If needed, pass `--state-dir` or set `SUPERMARIOEMU_STATE_DIR`.
+- Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`; Modal benchmark artifacts include per-level run config, timings, summary stats, Git metadata, state SHA-256 values, Modal CPU metadata, and the ROM SHA-256.
+- The Modal benchmark path expects an authenticated Modal CLI, sends the local ROM and state bytes to the remote container at run time, and defaults to `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4`.
+- Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
+- ROM files are not included in the repository; use the SHA-256 digest above to confirm you are testing with the expected ROM.
+
+## Architecture
+
+![SuperMarioBros-Nes-turbo architecture diagram](./architecture.png)
+
+## License
+
+MIT, as declared in [pyproject.toml](./pyproject.toml) and [Cargo.toml](./Cargo.toml).

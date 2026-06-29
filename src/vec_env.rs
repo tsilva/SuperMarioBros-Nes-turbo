@@ -1,6 +1,6 @@
 use crate::cartridge::Cartridge;
 use crate::emulator::{
-    MarioAction, NesEmulator, FRAME_PIXELS_RGB, NES_HEIGHT, NES_WIDTH, RGB_CHANNELS,
+    MarioAction, NesEmulator, StateLoadError, FRAME_PIXELS_RGB, NES_HEIGHT, NES_WIDTH, RGB_CHANNELS,
 };
 use rayon::prelude::*;
 
@@ -53,12 +53,17 @@ pub struct MarioVecEnv {
     config: VecEnvConfig,
     resize_plan: AreaResizePlan,
     envs: Vec<NesEmulator>,
+    initial_state: Option<Vec<u8>>,
     scratch: Vec<Vec<u8>>,
     synced_lanes: bool,
 }
 
 impl MarioVecEnv {
-    pub fn new(cart: Cartridge, config: VecEnvConfig) -> Self {
+    pub fn new(
+        cart: Cartridge,
+        config: VecEnvConfig,
+        initial_state: Option<Vec<u8>>,
+    ) -> Result<Self, StateLoadError> {
         let resize_plan = AreaResizePlan::new(
             NES_WIDTH,
             config.source_height(),
@@ -76,12 +81,41 @@ impl MarioVecEnv {
         let scratch = (0..config.num_envs)
             .map(|_| vec![0; scratch_len])
             .collect::<Vec<_>>();
-        Self {
+        let mut env = Self {
             config,
             resize_plan,
             envs,
+            initial_state,
             scratch,
             synced_lanes: true,
+        };
+        env.reset_envs()?;
+        Ok(env)
+    }
+
+    fn reset_envs(&mut self) -> Result<(), StateLoadError> {
+        if let Some(initial_state) = self.initial_state.as_deref() {
+            for env in &mut self.envs {
+                env.load_fceu_state(initial_state)?;
+            }
+            return Ok(());
+        }
+
+        for env in &mut self.envs {
+            env.reset();
+        }
+        Ok(())
+    }
+
+    fn reset_env(
+        env: &mut NesEmulator,
+        initial_state: Option<&[u8]>,
+    ) -> Result<(), StateLoadError> {
+        if let Some(initial_state) = initial_state {
+            env.load_fceu_state(initial_state)
+        } else {
+            env.reset();
+            Ok(())
         }
     }
 
@@ -89,12 +123,12 @@ impl MarioVecEnv {
         self.config
     }
 
-    pub fn reset_into(&mut self, obs: &mut [u8]) {
+    pub fn reset_into(&mut self, obs: &mut [u8]) -> Result<(), StateLoadError> {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
         self.synced_lanes = true;
         if config.num_envs > 1 {
-            self.envs[0].reset();
+            Self::reset_env(&mut self.envs[0], self.initial_state.as_deref())?;
             write_reset_stack(
                 config,
                 &self.resize_plan,
@@ -103,22 +137,24 @@ impl MarioVecEnv {
                 &mut obs[..obs_stride],
             );
             copy_first_obs_to_remaining(obs, obs_stride);
-            return;
+            return Ok(());
         }
 
         if config.num_envs >= PARALLEL_ENV_THRESHOLD {
             let resize_plan = &self.resize_plan;
+            let initial_state = self.initial_state.as_deref();
             self.envs
                 .par_iter_mut()
                 .zip(self.scratch.par_iter_mut())
                 .zip(obs.par_chunks_mut(obs_stride))
-                .for_each(|((env, scratch), obs_chunk)| {
-                    env.reset();
+                .try_for_each(|((env, scratch), obs_chunk)| {
+                    Self::reset_env(env, initial_state)?;
                     write_reset_stack(config, resize_plan, env, scratch, obs_chunk);
-                });
+                    Ok::<(), StateLoadError>(())
+                })?;
         } else {
             for env_idx in 0..config.num_envs {
-                self.envs[env_idx].reset();
+                Self::reset_env(&mut self.envs[env_idx], self.initial_state.as_deref())?;
                 let start = env_idx * obs_stride;
                 let end = start + obs_stride;
                 write_reset_stack(
@@ -129,6 +165,22 @@ impl MarioVecEnv {
                     &mut obs[start..end],
                 );
             }
+        }
+        Ok(())
+    }
+
+    pub fn info_into(&self, x_pos: &mut [u16], lives: &mut [u8]) {
+        if self.synced_lanes && self.config.num_envs > 1 {
+            x_pos.fill(self.envs[0].x_pos());
+            lives.fill(self.envs[0].lives());
+            return;
+        }
+
+        for ((env, x_out), lives_out) in
+            self.envs.iter().zip(x_pos.iter_mut()).zip(lives.iter_mut())
+        {
+            *x_out = env.x_pos();
+            *lives_out = env.lives();
         }
     }
 

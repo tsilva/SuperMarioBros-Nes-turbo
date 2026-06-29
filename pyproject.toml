@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "supermarioemu"
 version = "0.1.0"
-description = "A fast Rust-first Super Mario Bros NES environment for Gymnasium-style RL."
+description = "Blazing fast SuperMarioBros-Nes environment for RL research."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -31,4 +31,3 @@ constraint-dependencies = [
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
 ]
-

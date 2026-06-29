@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +12,105 @@ from gymnasium import spaces
 from ._supermarioemu import FastMarioVecEnv
 
 ACTION_MEANINGS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left", "start")
+DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 def _expand_rom_path(path: str | Path) -> str:
     return str(Path(path).expanduser())
+
+
+def _stable_retro_state_dir() -> Path | None:
+    try:
+        import stable_retro.data  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+
+    try:
+        state_path = stable_retro.data.get_file_path(
+            DEFAULT_STABLE_RETRO_GAME,
+            "Level1-1.state",
+            stable_retro.data.Integrations.ALL,
+        )
+    except Exception:
+        return None
+    if not state_path:
+        return None
+    return Path(state_path).parent
+
+
+def _sibling_stable_retro_state_dir() -> Path | None:
+    game_path = Path("stable_retro/data/stable") / DEFAULT_STABLE_RETRO_GAME
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent.parent / "stable-retro-turbo" / game_path
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _candidate_state_dirs(state_dir: str | Path | None = None) -> list[Path]:
+    candidates: list[Path | None] = []
+    if state_dir is not None:
+        candidates.append(Path(state_dir).expanduser())
+    env_dir = os.environ.get("SUPERMARIOEMU_STATE_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.append(_stable_retro_state_dir())
+    candidates.append(_sibling_stable_retro_state_dir())
+
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        resolved = candidate.resolve()
+        if resolved not in seen and resolved.exists():
+            dirs.append(resolved)
+            seen.add(resolved)
+    return dirs
+
+
+def list_available_states(state_dir: str | Path | None = None) -> tuple[str, ...]:
+    """Return available stable-retro Super Mario Bros state names."""
+    states: set[str] = set()
+    for directory in _candidate_state_dirs(state_dir):
+        states.update(
+            path.stem for path in directory.glob("*.state") if not path.name.startswith("_")
+        )
+    return tuple(sorted(states))
+
+
+def _resolve_state_path(state: str | Path, state_dir: str | Path | None = None) -> Path:
+    raw_path = Path(state).expanduser()
+    if raw_path.exists():
+        return raw_path
+
+    state_name = str(state)
+    state_file = state_name if state_name.endswith(".state") else f"{state_name}.state"
+    for directory in _candidate_state_dirs(state_dir):
+        candidate = directory / state_file
+        if candidate.exists():
+            return candidate
+
+    dirs = ", ".join(str(path) for path in _candidate_state_dirs(state_dir)) or "<none>"
+    raise FileNotFoundError(
+        f"could not resolve state {state_name!r}; checked direct path and state dirs: {dirs}"
+    )
+
+
+def _load_initial_state(
+    state: str | Path | bytes | bytearray | memoryview | None,
+    state_dir: str | Path | None = None,
+) -> bytes | None:
+    if state is None:
+        return None
+    if isinstance(state, (bytes, bytearray, memoryview)):
+        raw = bytes(state)
+    else:
+        raw = _resolve_state_path(state, state_dir).read_bytes()
+    if raw.startswith(GZIP_MAGIC):
+        return gzip.decompress(raw)
+    return raw
 
 
 class SuperMarioBrosVecEnv:
@@ -38,7 +135,11 @@ class SuperMarioBrosVecEnv:
         crop_bottom: int = 0,
         resize_width: int = 84,
         resize_height: int = 84,
+        state: str | Path | bytes | bytearray | memoryview | None = None,
+        state_dir: str | Path | None = None,
     ) -> None:
+        initial_state = _load_initial_state(state, state_dir)
+        self._has_initial_state = initial_state is not None
         self._core = FastMarioVecEnv(
             _expand_rom_path(rom_path),
             num_envs,
@@ -50,6 +151,7 @@ class SuperMarioBrosVecEnv:
             crop_bottom,
             resize_width,
             resize_height,
+            initial_state,
         )
         self.num_envs = self._core.num_envs
         self.frame_skip = self._core.frame_skip
@@ -82,8 +184,11 @@ class SuperMarioBrosVecEnv:
         self._rewards.fill(0)
         self._terminated.fill(False)
         self._truncated.fill(False)
-        self._x_pos.fill(0)
-        self._lives.fill(3)
+        if self._has_initial_state:
+            self._core.info_into(self._x_pos, self._lives)
+        else:
+            self._x_pos.fill(0)
+            self._lives.fill(3)
         return self._obs
 
     def step_async(self, actions: np.ndarray) -> None:
@@ -148,6 +253,8 @@ class SuperMarioBrosEnv(gym.Env[np.ndarray, int]):
         crop_bottom: int = 0,
         resize_width: int = 84,
         resize_height: int = 84,
+        state: str | Path | bytes | bytearray | memoryview | None = None,
+        state_dir: str | Path | None = None,
     ) -> None:
         self._vec = SuperMarioBrosVecEnv(
             rom_path=rom_path,
@@ -160,6 +267,8 @@ class SuperMarioBrosEnv(gym.Env[np.ndarray, int]):
             crop_bottom=crop_bottom,
             resize_width=resize_width,
             resize_height=resize_height,
+            state=state,
+            state_dir=state_dir,
         )
         self.action_space = self._vec.single_action_space
         self.observation_space = self._vec.observation_space

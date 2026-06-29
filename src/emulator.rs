@@ -1,4 +1,5 @@
 use crate::cartridge::Cartridge;
+use thiserror::Error;
 
 pub const NES_WIDTH: usize = 256;
 pub const NES_HEIGHT: usize = 240;
@@ -28,6 +29,12 @@ const BUTTON_B: u8 = 1 << 1;
 const BUTTON_START: u8 = 1 << 3;
 const BUTTON_LEFT: u8 = 1 << 6;
 const BUTTON_RIGHT: u8 = 1 << 7;
+
+#[derive(Debug, Error)]
+pub enum StateLoadError {
+    #[error("state field {name} with size {size} was not found")]
+    MissingField { name: &'static str, size: usize },
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum MarioAction {
@@ -174,6 +181,34 @@ impl Ppu {
         self.frame_dot = 0;
         self.frame = 0;
         self.nmi_pending = false;
+    }
+
+    fn load_fceu_state(
+        &mut self,
+        ntar: &[u8],
+        pram: &[u8],
+        spra: &[u8],
+        ppur: &[u8],
+        radd: Option<&[u8]>,
+        tadd: Option<&[u8]>,
+        xoff: Option<&[u8]>,
+    ) {
+        self.vram.copy_from_slice(ntar);
+        self.palette.copy_from_slice(pram);
+        self.oam.copy_from_slice(spra);
+        self.ctrl = ppur[0];
+        self.mask = ppur[1];
+        self.status = ppur[2];
+        self.oam_addr = ppur[3];
+        self.addr = radd.and_then(read_u16_le).unwrap_or(0);
+        self.temp_addr = tadd.and_then(read_u16_le).unwrap_or(0);
+        self.scroll_addr = self.temp_addr;
+        self.render_addr = self.addr;
+        self.first_write = true;
+        self.fine_x = xoff.and_then(|value| value.first().copied()).unwrap_or(0);
+        self.frame_dot = 0;
+        self.nmi_pending = false;
+        self.update_scroll_x_px();
     }
 
     #[inline]
@@ -917,6 +952,41 @@ fn next_ppu_event_dot(current: usize) -> usize {
     }
 }
 
+fn required_field<'a>(
+    state: &'a [u8],
+    name: &'static [u8; 4],
+    display_name: &'static str,
+    size: usize,
+) -> Result<&'a [u8], StateLoadError> {
+    optional_field(state, name, size).ok_or(StateLoadError::MissingField {
+        name: display_name,
+        size,
+    })
+}
+
+fn optional_field<'a>(state: &'a [u8], name: &[u8; 4], size: usize) -> Option<&'a [u8]> {
+    let header_len = name.len() + 4;
+    state
+        .windows(header_len)
+        .enumerate()
+        .find_map(|(offset, window)| {
+            if &window[..4] != name {
+                return None;
+            }
+            let field_size = u32::from_le_bytes(window[4..8].try_into().ok()?) as usize;
+            if field_size != size {
+                return None;
+            }
+            let start = offset + header_len;
+            let end = start.checked_add(field_size)?;
+            state.get(start..end)
+        })
+}
+
+fn read_u16_le(value: &[u8]) -> Option<u16> {
+    Some(u16::from_le_bytes(value.get(..2)?.try_into().ok()?))
+}
+
 #[derive(Clone)]
 pub struct NesEmulator {
     cpu: Cpu,
@@ -968,6 +1038,46 @@ impl NesEmulator {
         self.done = false;
         self.cpu.pc = self.cpu_read_u16(0xfffc);
         self.refresh_smb_state();
+    }
+
+    pub fn load_fceu_state(&mut self, state: &[u8]) -> Result<(), StateLoadError> {
+        let pc = required_field(state, b"PC\0\0", "PC", 2)?;
+        let a = required_field(state, b"A\0\0\0", "A", 1)?[0];
+        let x = required_field(state, b"X\0\0\0", "X", 1)?[0];
+        let y = required_field(state, b"Y\0\0\0", "Y", 1)?[0];
+        let sp = required_field(state, b"S\0\0\0", "S", 1)?[0];
+        let p = required_field(state, b"P\0\0\0", "P", 1)?[0];
+        let ram = required_field(state, b"RAM\0", "RAM", 2048)?;
+        let ntar = required_field(state, b"NTAR", "NTAR", 2048)?;
+        let pram = required_field(state, b"PRAM", "PRAM", 32)?;
+        let spra = required_field(state, b"SPRA", "SPRA", 256)?;
+        let ppur = required_field(state, b"PPUR", "PPUR", 4)?;
+
+        self.cpu = Cpu {
+            a,
+            x,
+            y,
+            sp,
+            pc: read_u16_le(pc).unwrap_or(0),
+            p,
+        };
+        self.ppu.load_fceu_state(
+            ntar,
+            pram,
+            spra,
+            ppur,
+            optional_field(state, b"RADD", 2),
+            optional_field(state, b"TADD", 2),
+            optional_field(state, b"XOFF", 1),
+        );
+        self.ram.copy_from_slice(ram);
+        self.controller_state = 0;
+        self.controller_shift = 0;
+        self.controller_strobe = false;
+        self.extra_cycles = 0;
+        self.done = false;
+        self.refresh_smb_state();
+        Ok(())
     }
 
     #[inline]

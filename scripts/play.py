@@ -77,6 +77,8 @@ class SdlExternalGymPlayer:
             crop_bottom=crop_bottom,
             resize_width=resize_width,
             resize_height=resize_height,
+            state=args.state,
+            state_dir=args.state_dir,
         )
         self.display_grayscale = grayscale
         self.scale = args.scale
@@ -97,7 +99,7 @@ class SdlExternalGymPlayer:
             raise SdlUnavailableError(self.sdl_error())
         self.sdl.SDL_SetHint(b"SDL_RENDER_SCALE_QUALITY", b"nearest")
         self.window = self.sdl.SDL_CreateWindow(
-            b"supermarioemu external Gym player",
+            b"SuperMarioBros-Nes-turbo external Gym player",
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
             self.display_width * self.scale,
@@ -216,7 +218,7 @@ class SdlExternalGymPlayer:
         if now >= self.next_status_update:
             self.next_status_update = now + 0.1
             title = (
-                "supermarioemu external Gym player  "
+                "SuperMarioBros-Nes-turbo external Gym player  "
                 f"view={self.view} obs={tuple(self.obs.shape)} "
                 f"action={ACTION_MEANINGS[self.current_action()]} "
                 f"x={self.info.get('x_pos', 0)} lives={self.info.get('lives', 0)} "
@@ -453,6 +455,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--crop-bottom", type=int, default=0)
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
+    parser.add_argument("--state", default=None)
+    parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--auto-close-frames", type=int, default=None)
     return parser.parse_args()
 
