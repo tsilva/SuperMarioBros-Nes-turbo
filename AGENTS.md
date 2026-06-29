@@ -1,8 +1,8 @@
 # SuperMarioBros-Nes-turbo Codex Notes
 
-## Autoresearch Speed Improvements Skill
+## Autoresearch Speed Skill
 
-Use `/autoresearch-speed-improvements` for future throughput optimization rounds in this repo, especially work involving `scripts/benchmark_sps.py`, Super Mario Bros NES emulator hot paths, `env_steps_per_sec` targets, single-agent optimization tracks, or multi-agent Modal-judged research campaigns. The skill lives at `.codex/skills/autoresearch-speed-improvements/SKILL.md`.
+Use `/autoresearch-speed` for future throughput optimization rounds in this repo, especially work involving `scripts/benchmark_sps.py`, Super Mario Bros NES emulator hot paths, `env_steps_per_sec` targets, single-agent optimization tracks, or multi-agent Modal-judged research campaigns. The skill lives at `.codex/skills/autoresearch-speed/SKILL.md`.
 
 ## Modal Benchmark Skill
 

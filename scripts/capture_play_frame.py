@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from play import action_id, latest_frame, png_from_frame
-from supermarioemu import SuperMarioBrosEnv
+from supermarioemu import SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
@@ -25,24 +25,29 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    env = SuperMarioBrosEnv(
+    env = SuperMarioBrosVecEnv(
         rom_path=args.rom_path.expanduser(),
+        num_envs=1,
         frame_skip=1,
         grayscale=False,
         frame_stack=1,
         resize_width=256,
         resize_height=240,
     )
-    obs, _ = env.reset()
+    obs = env.reset()[0]
+
+    def step_one(action_name: str) -> np.ndarray:
+        actions = np.asarray([action_id(action_name)], dtype=np.uint8)
+        return env.step_fast(actions)[0][0]
 
     for _ in range(args.pre_start_frames):
-        obs, *_ = env.step(action_id("noop"))
+        obs = step_one("noop")
     for _ in range(args.start_frames):
-        obs, *_ = env.step(action_id("start"))
+        obs = step_one("start")
     for _ in range(60):
-        obs, *_ = env.step(action_id("noop"))
+        obs = step_one("noop")
     for _ in range(args.right_frames):
-        obs, *_ = env.step(action_id("right_b"))
+        obs = step_one("right_b")
 
     frame = latest_frame(obs)
     if args.scale > 1:

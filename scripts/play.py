@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from supermarioemu import ACTION_MEANINGS, SuperMarioBrosEnv
+from supermarioemu import ACTION_MEANINGS, SuperMarioBrosVecEnv
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
@@ -39,8 +39,8 @@ class SdlUnavailableError(RuntimeError):
     pass
 
 
-class SdlExternalGymPlayer:
-    """Keyboard player that feeds actions through the Python Gym wrapper."""
+class SdlExternalVecPlayer:
+    """Keyboard player that feeds actions through a one-lane vector env."""
 
     def __init__(self, args: argparse.Namespace) -> None:
         self.view = args.view
@@ -67,8 +67,9 @@ class SdlExternalGymPlayer:
             resize_width = NES_WIDTH
             resize_height = NES_HEIGHT
 
-        self.env = SuperMarioBrosEnv(
+        self.env = SuperMarioBrosVecEnv(
             rom_path=args.rom_path.expanduser(),
+            num_envs=1,
             frame_skip=frame_skip,
             grayscale=grayscale,
             frame_stack=frame_stack,
@@ -83,7 +84,7 @@ class SdlExternalGymPlayer:
         self.display_grayscale = grayscale
         self.scale = args.scale
         self.frame_delay_s = 1.0 / max(1, args.fps)
-        self.obs, _ = self.env.reset()
+        self.obs = self.env.reset()[0]
         initial_frame = display_frame_from_obs(self.obs, self.display_grayscale)
         self.display_height, self.display_width = initial_frame.shape[:2]
         self.reward = 0.0
@@ -99,7 +100,7 @@ class SdlExternalGymPlayer:
             raise SdlUnavailableError(self.sdl_error())
         self.sdl.SDL_SetHint(b"SDL_RENDER_SCALE_QUALITY", b"nearest")
         self.window = self.sdl.SDL_CreateWindow(
-            b"SuperMarioBros-Nes-turbo external Gym player",
+            b"SuperMarioBros-Nes-turbo external vector player",
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
             self.display_width * self.scale,
@@ -145,10 +146,10 @@ class SdlExternalGymPlayer:
             while self.running:
                 self.poll_events()
                 action = self.current_action()
-                self.obs, reward, self.terminated, self.truncated, self.info = self.env.step(action)
+                self.obs, reward, self.terminated, self.truncated, self.info = self.step_one(action)
                 self.reward += reward
                 if self.terminated or self.truncated:
-                    self.obs, _ = self.env.reset()
+                    self.obs = self.env.reset()[0]
                     self.reward = 0.0
 
                 self.render()
@@ -218,13 +219,25 @@ class SdlExternalGymPlayer:
         if now >= self.next_status_update:
             self.next_status_update = now + 0.1
             title = (
-                "SuperMarioBros-Nes-turbo external Gym player  "
+                "SuperMarioBros-Nes-turbo external vector player  "
                 f"view={self.view} obs={tuple(self.obs.shape)} "
                 f"action={ACTION_MEANINGS[self.current_action()]} "
                 f"x={self.info.get('x_pos', 0)} lives={self.info.get('lives', 0)} "
                 f"reward={self.reward:.1f} fps={self.display_fps:.0f}"
             )
             self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
+
+    def step_one(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
+        obs, rewards, terminated, truncated, infos = self.env.step(
+            np.asarray([action], dtype=np.uint8)
+        )
+        return (
+            obs[0],
+            float(rewards[0]),
+            bool(terminated[0]),
+            bool(truncated[0]),
+            infos[0],
+        )
 
     def current_action(self) -> int:
         if SDLK_RETURN in self.pressed_keys:
@@ -466,7 +479,7 @@ def main() -> None:
     if args.mode != "external":
         raise ValueError(f"unsupported play mode: {args.mode}")
     try:
-        SdlExternalGymPlayer(args).run()
+        SdlExternalVecPlayer(args).run()
     except SdlUnavailableError as exc:
         raise SystemExit(f"SDL backend unavailable: {exc}") from exc
 

@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
@@ -235,54 +234,3 @@ class SuperMarioBrosVecEnv:
 
     def close(self) -> None:
         pass
-
-
-class SuperMarioBrosEnv(gym.Env[np.ndarray, int]):
-    """Single-env Gymnasium wrapper over the Rust vectorized core."""
-
-    metadata = {"render_modes": []}
-
-    def __init__(
-        self,
-        rom_path: str | Path = "~/Desktop/roms/SuperMarioBros.nes",
-        frame_skip: int = 4,
-        grayscale: bool = True,
-        frame_stack: int = 4,
-        terminate_on_flag: bool = True,
-        crop_top: int = 0,
-        crop_bottom: int = 0,
-        resize_width: int = 84,
-        resize_height: int = 84,
-        state: str | Path | bytes | bytearray | memoryview | None = None,
-        state_dir: str | Path | None = None,
-    ) -> None:
-        self._vec = SuperMarioBrosVecEnv(
-            rom_path=rom_path,
-            num_envs=1,
-            frame_skip=frame_skip,
-            grayscale=grayscale,
-            frame_stack=frame_stack,
-            terminate_on_flag=terminate_on_flag,
-            crop_top=crop_top,
-            crop_bottom=crop_bottom,
-            resize_width=resize_width,
-            resize_height=resize_height,
-            state=state,
-            state_dir=state_dir,
-        )
-        self.action_space = self._vec.single_action_space
-        self.observation_space = self._vec.observation_space
-
-    def reset(
-        self, *, seed: int | None = None, options: dict[str, Any] | None = None
-    ) -> tuple[np.ndarray, dict[str, Any]]:
-        super().reset(seed=seed)
-        obs = self._vec.reset()
-        return obs[0], {}
-
-    def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        obs, rewards, terminated, truncated, infos = self._vec.step(np.asarray([action], dtype=np.uint8))
-        return obs[0], float(rewards[0]), bool(terminated[0]), bool(truncated[0]), infos[0]
-
-    def close(self) -> None:
-        self._vec.close()

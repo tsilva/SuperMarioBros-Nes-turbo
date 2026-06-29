@@ -4,9 +4,9 @@
   **🚀 Blazing fast SuperMarioBros-Nes environment for RL research 🍄**
 </div>
 
-`SuperMarioBros-Nes-turbo` is a local Python package for running fast Super Mario Bros NES reinforcement-learning environments. It is for RL researchers and experimenters who need many CPU rollout steps without going through a general-purpose emulator stack. You use it by building the Rust extension, pointing it at your own ROM, then importing `supermarioemu` or running the benchmark scripts.
+`SuperMarioBros-Nes-turbo` is a local Python package for running fast vectorized Super Mario Bros NES reinforcement-learning environments. It is for RL researchers and experimenters who need many CPU rollout steps without going through a general-purpose emulator stack. You use it by building the Rust extension, pointing it at your own ROM, then importing `supermarioemu` or running the benchmark scripts.
 
-The package exposes a Gymnasium-style single-env wrapper and a vectorized batch API. The hot path crosses from Python to Rust once per batched step, while frame skip, reward extraction, termination checks, preprocessing, frame stacking, and observation-buffer writes stay in Rust.
+The package exposes a vectorized batch API only. The hot path crosses from Python to Rust once per batched step, while frame skip, reward extraction, termination checks, preprocessing, frame stacking, and observation-buffer writes stay in Rust.
 
 ## Install
 
@@ -81,7 +81,7 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 
 - Python `>=3.9` and a Rust toolchain are required to build the Maturin extension.
 - The current emulator scope is SuperMarioBros-Nes mapper 0 NROM.
-- The Python package exposes `SuperMarioBrosEnv`, `SuperMarioBrosVecEnv`, and `ACTION_MEANINGS`.
+- The Python package exposes `SuperMarioBrosVecEnv` and `ACTION_MEANINGS`.
 - The default action set is `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, `left`, and `start`.
 - Use `--state Level1-1` or another stable-retro state to start from a saved level state. If needed, pass `--state-dir` or set `SUPERMARIOEMU_STATE_DIR`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.

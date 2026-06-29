@@ -1,9 +1,9 @@
 ---
-name: autoresearch-speed-improvements
+name: autoresearch-speed
 description: Unified Super Mario Bros emulator speed-improvement workflow for this repo. Use when Codex is asked to optimize, profile, benchmark, or coordinate self-improvement research for Super Mario Bros NES throughput, including single-agent optimization tracks, multi-agent branch/worktree campaigns, Modal benchmark tournaments, stale candidate replay, merge adjudication, or cleanup of speed-research worktrees.
 ---
 
-# Autoresearch Speed Improvements
+# Autoresearch Speed
 
 ## Operating Contract
 
@@ -26,14 +26,13 @@ An optimization succeeds only when the final arithmetic mean `env_steps_per_sec`
 
 Benchmarks for this skill are Modal-only. Use `/modal-benchmark` for baseline, profiling comparisons that produce throughput claims, candidate comparison, and final timing. Do not run local throughput benchmarks as a fallback, do not use local SPS numbers as evidence, and do not continue an optimization track when Modal benchmark execution is unavailable, blocked, or not explicitly authorized. Local commands may be used only for correctness, formatting, compilation, and non-throughput inspection.
 
-Before any single-agent or campaign optimization work that will benchmark throughput, ask the user for explicit Modal pre-authorization covering:
+Before any single-agent or campaign optimization work that will benchmark throughput, ask the user for explicit Modal pre-authorization by giving them this exact phrase to copy, fill in, and send back:
 
-- Modal network/auth/upload access
-- local repo snapshot upload
-- local ROM byte upload at benchmark runtime
-- local state byte upload at benchmark runtime
-- maximum parallel Modal runs
-- maximum total Modal runs or estimated spend
+```text
+I approve /autoresearch-speed with track_mode=<single_agent|campaign>; Modal network/auth/upload access is allowed; local repo snapshot upload is allowed; local ROM byte upload at benchmark runtime is allowed; local state byte upload at benchmark runtime is allowed; max_parallel_modal_runs=<N>; max_total_modal_runs=<N>; max_estimated_spend_usd=<USD>.
+```
+
+Approval is cleared only when the user's reply preserves the permission grants and fills in concrete values for `track_mode`, `max_parallel_modal_runs`, `max_total_modal_runs`, and `max_estimated_spend_usd`. If any field is missing, vague, or replaced with an open-ended limit, stop and ask for the exact phrase again. Do not treat informal approval, partial approval, or approval for a different skill name as sufficient.
 
 If the user does not grant that envelope, or if the execution environment rejects Modal upload/run approval, stop and report the blocker. Do not switch to local benchmarks.
 
@@ -103,11 +102,12 @@ If subagent/fork tooling is unavailable, stop and report that blocker. Do not si
 
 The main agent is the coordinator and judge. Worker agents provide evidence and patch proposals; they do not authorize merges.
 
-Before spawning agents or running worker Modal benchmarks, ask the user for explicit campaign pre-authorization covering:
+Before spawning agents or running worker Modal benchmarks, ask the user for the exact `/autoresearch-speed` approval phrase from the Operating Contract. It must authorize:
 
 - Modal network/auth/upload access
 - local repo snapshot upload
 - local ROM byte upload at benchmark runtime
+- local state byte upload at benchmark runtime
 - maximum parallel Modal runs
 - maximum total Modal runs or estimated spend
 
