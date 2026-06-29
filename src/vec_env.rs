@@ -47,6 +47,14 @@ impl VecEnvConfig {
     fn needs_resize(&self) -> bool {
         self.resize_width != NES_WIDTH || self.resize_height != self.source_height()
     }
+
+    fn uses_default_gray_area_resize(&self) -> bool {
+        self.grayscale
+            && self.crop_top == 32
+            && self.crop_bottom == 0
+            && self.resize_width == 84
+            && self.resize_height == 84
+    }
 }
 
 pub struct MarioVecEnv {
@@ -390,6 +398,11 @@ fn write_current_frame(
     scratch: &mut [u8],
     dst: &mut [u8],
 ) {
+    if config.uses_default_gray_area_resize() {
+        env.write_gray_frame_cropped_area_84x84(dst, scratch);
+        return;
+    }
+
     if config.needs_resize() {
         let native_len = native_frame_len(config);
         let native = &mut scratch[..native_len];
