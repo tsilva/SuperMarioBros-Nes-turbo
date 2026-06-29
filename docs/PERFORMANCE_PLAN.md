@@ -64,6 +64,9 @@ SMB/NROM-specialized:
 
 - No mapper trait-object dispatch in the hot path.
 - Fixed PRG/CHR mapping.
+- PRG and CHR reads use precomputed power-of-two address masks for mapper-0
+  SMB/NROM ROMs, and instruction fetches go directly to PRG ROM when the
+  program counter is in the cartridge range.
 - Precomputed mirroring behavior.
 - Direct CPU memory fast paths for RAM, PPU registers, controller, and PRG ROM.
 
@@ -137,6 +140,7 @@ Intentionally unsupported cases:
 - The emulator remains scoped to Super Mario Bros mapper 0 / NROM. Other NES
   mappers, save-state formats, audio, and general Gym Retro compatibility are
   outside this fast path.
+- The primary fast path assumes standard power-of-two NROM PRG/CHR sizes.
 - The shared-lane optimization assumes deterministic emulator state and no
   per-lane RNG, wrappers, or hidden side effects outside `NesEmulator`.
 - The tiled renderer is the optimized grayscale cropped path used by the RL

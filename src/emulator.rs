@@ -96,6 +96,7 @@ impl Cpu {
 #[derive(Clone)]
 struct Ppu {
     chr_rom: Vec<u8>,
+    chr_addr_mask: usize,
     vertical_mirroring: bool,
     ctrl: u8,
     mask: u8,
@@ -115,16 +116,17 @@ struct Ppu {
     scroll_y_px: u16,
     scroll_x_low: u8,
     scroll_override_x_px: Option<u16>,
-    scanline: u16,
-    cycle: u16,
+    frame_dot: usize,
     frame: u64,
     nmi_pending: bool,
 }
 
 impl Ppu {
     fn new(chr_rom: Vec<u8>, vertical_mirroring: bool) -> Self {
+        let chr_addr_mask = chr_rom.len() - 1;
         Self {
             chr_rom,
+            chr_addr_mask,
             vertical_mirroring,
             ctrl: 0,
             mask: 0,
@@ -144,8 +146,7 @@ impl Ppu {
             scroll_y_px: 0,
             scroll_x_low: 0,
             scroll_override_x_px: None,
-            scanline: 0,
-            cycle: 0,
+            frame_dot: 0,
             frame: 0,
             nmi_pending: false,
         }
@@ -170,8 +171,7 @@ impl Ppu {
         self.scroll_y_px = 0;
         self.scroll_x_low = 0;
         self.scroll_override_x_px = None;
-        self.scanline = 0;
-        self.cycle = 0;
+        self.frame_dot = 0;
         self.frame = 0;
         self.nmi_pending = false;
     }
@@ -199,8 +199,7 @@ impl Ppu {
                     self.status &= !0xc0;
                 }
                 PPU_DOTS_PER_FRAME => {
-                    self.scanline = 0;
-                    self.cycle = 0;
+                    self.frame_dot = 0;
                     self.frame = self.frame.wrapping_add(1);
                     completed_frame = true;
                 }
@@ -212,13 +211,12 @@ impl Ppu {
 
     #[inline]
     fn dot(&self) -> usize {
-        self.scanline as usize * PPU_DOTS_PER_SCANLINE + self.cycle as usize
+        self.frame_dot
     }
 
     #[inline]
     fn set_dot(&mut self, dot: usize) {
-        self.scanline = (dot / PPU_DOTS_PER_SCANLINE) as u16;
-        self.cycle = (dot % PPU_DOTS_PER_SCANLINE) as u16;
+        self.frame_dot = dot;
     }
 
     #[inline]
@@ -314,10 +312,15 @@ impl Ppu {
     }
 
     #[inline]
+    fn chr_read(&self, addr: usize) -> u8 {
+        self.chr_rom[addr & self.chr_addr_mask]
+    }
+
+    #[inline]
     fn ppu_read(&self, addr: u16) -> u8 {
         let addr = addr & 0x3fff;
         match addr {
-            0x0000..=0x1fff => self.chr_rom[addr as usize % self.chr_rom.len()],
+            0x0000..=0x1fff => self.chr_read(addr as usize),
             0x2000..=0x3eff => {
                 let idx = self.mirror_nametable_addr(addr);
                 self.vram[idx]
@@ -427,8 +430,8 @@ impl Ppu {
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 let run = (8 - fine_x).min(NES_WIDTH - x);
 
                 for col in 0..run {
@@ -508,8 +511,8 @@ impl Ppu {
             0x0000
         };
         let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-        let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-        let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+        let lo = self.chr_read(pattern_addr);
+        let hi = self.chr_read(pattern_addr + 8);
         let bit = 7 - fine_x;
         let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
         if pixel == 0 {
@@ -545,8 +548,8 @@ impl Ppu {
             0x0000
         };
         let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-        let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-        let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+        let lo = self.chr_read(pattern_addr);
+        let hi = self.chr_read(pattern_addr + 8);
         let bit = 7 - fine_x;
         (((lo >> bit) & 1) | (((hi >> bit) & 1) << 1)) != 0
     }
@@ -579,8 +582,8 @@ impl Ppu {
                 }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 for col in 0..8usize {
                     let screen_x = sprite_x + col as i16;
                     if !(0..NES_WIDTH as i16).contains(&screen_x) {
@@ -633,8 +636,8 @@ impl Ppu {
                 }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 for col in 0..8usize {
                     let screen_x = sprite_x + col as i16;
                     if !(0..NES_WIDTH as i16).contains(&screen_x) {
@@ -687,8 +690,8 @@ impl Ppu {
                 }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 for col in 0..8usize {
                     let screen_x = sprite_x + col as i16;
                     if !(0..NES_WIDTH as i16).contains(&screen_x) {
@@ -745,8 +748,8 @@ impl Ppu {
                 }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_rom[pattern_addr % self.chr_rom.len()];
-                let hi = self.chr_rom[(pattern_addr + 8) % self.chr_rom.len()];
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 for col in 0..8usize {
                     let screen_x = sprite_x + col as i16;
                     if !(0..NES_WIDTH as i16).contains(&screen_x) {
@@ -901,6 +904,7 @@ pub struct NesEmulator {
     ppu: Ppu,
     ram: [u8; 2048],
     prg_rom: Vec<u8>,
+    prg_addr_mask: usize,
     controller_state: u8,
     controller_shift: u8,
     controller_strobe: bool,
@@ -913,12 +917,14 @@ pub struct NesEmulator {
 
 impl NesEmulator {
     pub fn new_with_options(cart: Cartridge, terminate_on_flag: bool) -> Self {
+        let prg_addr_mask = cart.prg_rom.len() - 1;
         let ppu = Ppu::new(cart.chr_rom, cart.vertical_mirroring);
         let mut emu = Self {
             cpu: Cpu::new(),
             ppu,
             ram: [0; 2048],
             prg_rom: cart.prg_rom,
+            prg_addr_mask,
             controller_state: 0,
             controller_shift: 0,
             controller_strobe: false,
@@ -1043,13 +1049,7 @@ impl NesEmulator {
 
     #[inline]
     fn prg_read(&self, addr: u16) -> u8 {
-        let mut idx = (addr - 0x8000) as usize;
-        if self.prg_rom.len() == 0x4000 {
-            idx &= 0x3fff;
-        } else {
-            idx %= self.prg_rom.len();
-        }
-        self.prg_rom[idx]
+        self.prg_rom[((addr - 0x8000) as usize) & self.prg_addr_mask]
     }
 
     #[inline]
@@ -1089,7 +1089,11 @@ impl NesEmulator {
 
     #[inline]
     fn fetch_u8(&mut self) -> u8 {
-        let value = self.cpu_read(self.cpu.pc);
+        let value = if self.cpu.pc >= 0x8000 {
+            self.prg_read(self.cpu.pc)
+        } else {
+            self.cpu_read(self.cpu.pc)
+        };
         self.cpu.pc = self.cpu.pc.wrapping_add(1);
         value
     }
@@ -1170,8 +1174,14 @@ impl NesEmulator {
 
     #[inline]
     fn set_zn(&mut self, value: u8) {
-        self.set_flag(FLAG_Z, value == 0);
-        self.set_flag(FLAG_N, value & 0x80 != 0);
+        let mut p = self.cpu.p & !(FLAG_Z | FLAG_N);
+        if value == 0 {
+            p |= FLAG_Z;
+        }
+        if value & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
@@ -2025,15 +2035,24 @@ impl NesEmulator {
     #[inline]
     fn adc(&mut self, value: u8) {
         let carry = u8::from(self.flag(FLAG_C));
-        let sum = self.cpu.a as u16 + value as u16 + carry as u16;
+        let a = self.cpu.a;
+        let sum = a as u16 + value as u16 + carry as u16;
         let result = sum as u8;
-        self.set_flag(FLAG_C, sum > 0xff);
-        self.set_flag(
-            FLAG_V,
-            (!(self.cpu.a ^ value) & (self.cpu.a ^ result) & 0x80) != 0,
-        );
         self.cpu.a = result;
-        self.set_zn(self.cpu.a);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_V | FLAG_Z | FLAG_N);
+        if sum > 0xff {
+            p |= FLAG_C;
+        }
+        if (!(a ^ value) & (a ^ result) & 0x80) != 0 {
+            p |= FLAG_V;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
@@ -2044,8 +2063,17 @@ impl NesEmulator {
     #[inline]
     fn cmp(&mut self, reg: u8, value: u8) {
         let result = reg.wrapping_sub(value);
-        self.set_flag(FLAG_C, reg >= value);
-        self.set_zn(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
+        if reg >= value {
+            p |= FLAG_C;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
@@ -2068,42 +2096,78 @@ impl NesEmulator {
 
     #[inline]
     fn bit(&mut self, value: u8) {
-        self.set_flag(FLAG_Z, self.cpu.a & value == 0);
-        self.set_flag(FLAG_V, value & 0x40 != 0);
-        self.set_flag(FLAG_N, value & 0x80 != 0);
+        let mut p = self.cpu.p & !(FLAG_Z | FLAG_V | FLAG_N);
+        if self.cpu.a & value == 0 {
+            p |= FLAG_Z;
+        }
+        p |= value & (FLAG_V | FLAG_N);
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
     fn asl(&mut self, value: u8) -> u8 {
-        self.set_flag(FLAG_C, value & 0x80 != 0);
         let result = value << 1;
-        self.set_zn(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
+        if value & 0x80 != 0 {
+            p |= FLAG_C;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
         result
     }
 
     #[inline]
     fn lsr(&mut self, value: u8) -> u8 {
-        self.set_flag(FLAG_C, value & 1 != 0);
         let result = value >> 1;
-        self.set_zn(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
+        if value & 1 != 0 {
+            p |= FLAG_C;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        self.cpu.p = p | FLAG_U;
         result
     }
 
     #[inline]
     fn rol(&mut self, value: u8) -> u8 {
         let carry = u8::from(self.flag(FLAG_C));
-        self.set_flag(FLAG_C, value & 0x80 != 0);
         let result = (value << 1) | carry;
-        self.set_zn(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
+        if value & 0x80 != 0 {
+            p |= FLAG_C;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
         result
     }
 
     #[inline]
     fn ror(&mut self, value: u8) -> u8 {
         let carry = if self.flag(FLAG_C) { 0x80 } else { 0 };
-        self.set_flag(FLAG_C, value & 1 != 0);
         let result = (value >> 1) | carry;
-        self.set_zn(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
+        if value & 1 != 0 {
+            p |= FLAG_C;
+        }
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
         result
     }
 
