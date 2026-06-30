@@ -1,6 +1,6 @@
 ---
 name: modal-benchmark
-description: Run the canonical clean-machine Modal CPU benchmark for this SuperMarioBros-Nes-turbo repo across the first four Super Mario Bros NES Level1 states and report per-level plus average throughput. Use when the user invokes /modal-benchmark, asks to benchmark on Modal/modal.com, wants a clean CPU-only baseline, wants to compare an optimization on fresh compute, or asks for the current Modal benchmark result format.
+description: Run the canonical clean-machine Modal CPU benchmark for this SuperMarioBros-Nes-turbo repo with the first four Super Mario Bros NES Level1 states mixed across vector lanes, then report mixed-lane throughput. Use when the user invokes /modal-benchmark, asks to benchmark on Modal/modal.com, wants a clean CPU-only baseline, wants to compare an optimization on fresh compute, or asks for the current Modal benchmark result format.
 ---
 
 # Modal Benchmark
@@ -15,7 +15,7 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 
 Use the current date in the artifact name. If that path already exists, add a short time suffix, for example `modal-baseline-YYYY-MM-DD-HHMM.json`.
 
-The command uploads the local repo snapshot to Modal and sends the local ROM bytes at runtime. If the user explicitly invoked this skill or asked for a Modal benchmark, treat that as approval to request escalated execution for Modal network/auth/upload. If the escalation reviewer still blocks the command, report that the benchmark could not run and name the upload risk plainly.
+The command uploads the local repo snapshot to Modal and sends the local ROM bytes at runtime. If the user explicitly invoked this skill or asked for a Modal benchmark, treat the invocation as full-access approval for Modal network/auth/upload. If Modal access is still unavailable in the execution environment, report that the benchmark could not run and name the blocker plainly.
 
 Use the launcher defaults unless the user asks otherwise:
 
@@ -28,7 +28,8 @@ Use the launcher defaults unless the user asks otherwise:
 - action `noop`
 - states `Level1-1,Level1-2,Level1-3,Level1-4`
 
-The launcher runs those states one at a time in the same clean Modal function.
+The launcher runs one 16-env benchmark with those states repeated round-robin
+across lanes.
 It uploads the local ROM bytes plus the four stable-retro `.state` files at
 runtime. State files resolve from an explicit `--state-dir`, `SUPERMARIOBROSNES_FASTENV_STATE_DIR`,
 an installed `stable_retro` package, or the sibling `stable-retro-turbo`
@@ -38,15 +39,14 @@ checkout.
 
 After the Modal run completes, read the saved JSON artifact and report the result in this shape:
 
-- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes and state bytes at runtime, and ran the 16-env benchmark once per Level1 state.
+- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes and state bytes at runtime, and ran one 16-env mixed-lane benchmark across the first four Level1 states.
 - Link the saved artifact with an absolute file link.
-- Include a `Per-level results` code block:
+- Include a `Mixed-lane results` code block:
 
 ```text
-Level1-1 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
-Level1-2 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
-Level1-3 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
-Level1-4 runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
+states: Level1-1, Level1-2, Level1-3, Level1-4
+lane_states: LANE_STATE_LIST
+runs env_steps_per_sec: RUN1, RUN2, RUN3 | mean: MEAN | stdev: STDEV | best: BEST
 obs_shape: (16, 4, 84, 84)
 obs_dtype: uint8
 ```
@@ -54,8 +54,6 @@ obs_dtype: uint8
 - Include an `Average` code block:
 
 ```text
-mean_of_level_means: MEAN
-stdev_of_level_means: STDEV
 mean_of_all_runs: MEAN
 stdev_of_all_runs: STDEV
 best_run: BEST
@@ -85,20 +83,19 @@ from pathlib import Path
 path = Path("artifacts/benchmarks/modal-baseline-YYYY-MM-DD.json")
 data = json.loads(path.read_text())
 print("path", path)
-for state, result in data["levels"].items():
-    summary = result["summary"]["env_steps_per_sec"]
-    print(
-        state,
-        "mean", summary["mean"],
-        "stdev", summary["stdev"],
-        "best", summary["max"],
-        "runs", [round(r["env_steps_per_sec"], 1) for r in result["runs"]],
-        "obs", result["observation"]["shape"], result["observation"]["dtype"],
-    )
-level_mean = data["summary"]["level_mean_env_steps_per_sec"]
+result = data["mixed_levels"]
+summary = result["summary"]["env_steps_per_sec"]
+print("states", result["config"]["states"])
+print("lane_states", result["config"]["lane_states"])
+print(
+    "mixed_levels",
+    "mean", summary["mean"],
+    "stdev", summary["stdev"],
+    "best", summary["max"],
+    "runs", [round(r["env_steps_per_sec"], 1) for r in result["runs"]],
+    "obs", result["observation"]["shape"], result["observation"]["dtype"],
+)
 all_runs = data["summary"]["all_runs_env_steps_per_sec"]
-print("mean_of_level_means", level_mean["mean"])
-print("stdev_of_level_means", level_mean["stdev"])
 print("mean_of_all_runs", all_runs["mean"])
 print("stdev_of_all_runs", all_runs["stdev"])
 print("best_run", all_runs["max"])

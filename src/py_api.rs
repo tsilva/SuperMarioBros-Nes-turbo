@@ -5,7 +5,9 @@ use pyo3::types::PyModule;
 
 use crate::cartridge::Cartridge;
 use crate::emulator::{NES_HEIGHT, NES_WIDTH, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH};
-use crate::vec_env::{InitialState, MarioVecEnv, VecEnvConfig};
+use crate::vec_env::{
+    DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, VecEnvConfig,
+};
 
 #[pyclass]
 pub struct FastMarioVecEnv {
@@ -15,7 +17,7 @@ pub struct FastMarioVecEnv {
 #[pymethods]
 impl FastMarioVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -31,6 +33,9 @@ impl FastMarioVecEnv {
         initial_state_names: Option<Vec<String>>,
         initial_state_weights: Option<Vec<f64>>,
         seed: u64,
+        terminate_on_life_loss: bool,
+        terminate_on_level_change: bool,
+        done_on_info: Option<Vec<(String, Vec<String>, String)>>,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -61,6 +66,11 @@ impl FastMarioVecEnv {
             initial_state_weights,
             num_envs,
         )?;
+        let done_on_info_rules = build_done_on_info_rules(
+            done_on_info,
+            terminate_on_life_loss,
+            terminate_on_level_change,
+        )?;
         let config = VecEnvConfig {
             num_envs,
             frame_skip,
@@ -73,8 +83,15 @@ impl FastMarioVecEnv {
             resize_height,
         };
         Ok(Self {
-            inner: MarioVecEnv::new(cart, config, initial_states, weighted_initial_states, seed)
-                .map_err(|err| PyValueError::new_err(err.to_string()))?,
+            inner: MarioVecEnv::new(
+                cart,
+                config,
+                initial_states,
+                weighted_initial_states,
+                seed,
+                done_on_info_rules,
+            )
+            .map_err(|err| PyValueError::new_err(err.to_string()))?,
         })
     }
 
@@ -136,8 +153,51 @@ impl FastMarioVecEnv {
         self.inner.active_state_indices().to_vec()
     }
 
+    pub fn done_on_info(&self) -> Vec<Vec<(String, Vec<String>, String, Vec<i64>, Vec<i64>)>> {
+        self.inner
+            .done_on_info()
+            .iter()
+            .map(|lane| {
+                lane.iter()
+                    .map(|rule| {
+                        (
+                            rule.name.clone(),
+                            rule.keys
+                                .iter()
+                                .map(|key| key.name().to_string())
+                                .collect::<Vec<_>>(),
+                            rule.op.name().to_string(),
+                            rule.previous_values.clone(),
+                            rule.current_values.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     pub fn seed(&mut self, seed: u64) {
         self.inner.seed(seed);
+    }
+
+    pub fn _debug_ram(&self, env_idx: usize) -> PyResult<Vec<u8>> {
+        self.inner
+            .env_ram(env_idx)
+            .map(|ram| ram.to_vec())
+            .ok_or_else(|| PyValueError::new_err(format!("env_idx out of range: {env_idx}")))
+    }
+
+    pub fn _debug_oam(&self, env_idx: usize) -> PyResult<Vec<u8>> {
+        self.inner
+            .env_oam(env_idx)
+            .map(|oam| oam.to_vec())
+            .ok_or_else(|| PyValueError::new_err(format!("env_idx out of range: {env_idx}")))
+    }
+
+    pub fn _debug_bg_pixel(&self, env_idx: usize, x: usize, y: usize) -> PyResult<(u8, bool)> {
+        self.inner
+            .env_bg_pixel(env_idx, x, y)
+            .ok_or_else(|| PyValueError::new_err(format!("env_idx out of range: {env_idx}")))
     }
 
     pub fn reset_into<'py>(
@@ -463,6 +523,68 @@ fn build_initial_states(
             .collect(),
         false,
     ))
+}
+
+fn build_done_on_info_rules(
+    done_on_info: Option<Vec<(String, Vec<String>, String)>>,
+    terminate_on_life_loss: bool,
+    terminate_on_level_change: bool,
+) -> PyResult<Vec<DoneOnInfoRule>> {
+    let mut rules = Vec::new();
+    for (name, keys, op) in done_on_info.unwrap_or_default() {
+        rules.push(parse_done_on_info_rule(name, keys, op)?);
+    }
+
+    if terminate_on_life_loss && !rules.iter().any(|rule| rule.name == "life_loss") {
+        rules.push(parse_done_on_info_rule(
+            "life_loss".to_string(),
+            vec!["lives".to_string()],
+            "decrease".to_string(),
+        )?);
+    }
+    if terminate_on_level_change && !rules.iter().any(|rule| rule.name == "level_change") {
+        rules.push(parse_done_on_info_rule(
+            "level_change".to_string(),
+            vec!["levelHi".to_string(), "levelLo".to_string()],
+            "change".to_string(),
+        )?);
+    }
+    Ok(rules)
+}
+
+fn parse_done_on_info_rule(
+    name: String,
+    keys: Vec<String>,
+    op: String,
+) -> PyResult<DoneOnInfoRule> {
+    if name.is_empty() {
+        return Err(PyValueError::new_err(
+            "done_on_info rule names must not be empty",
+        ));
+    }
+    if keys.is_empty() {
+        return Err(PyValueError::new_err(
+            "done_on_info rules must reference at least one key",
+        ));
+    }
+    let parsed_keys = keys
+        .into_iter()
+        .map(|key| {
+            if key.is_empty() {
+                return Err(PyValueError::new_err("done_on_info keys must not be empty"));
+            }
+            InfoKey::from_name(&key)
+                .ok_or_else(|| PyValueError::new_err(format!("unknown done_on_info key: {key}")))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let op = DoneOnInfoOp::from_name(&op).ok_or_else(|| {
+        PyValueError::new_err("done_on_info op must be change, increase, or decrease")
+    })?;
+    Ok(DoneOnInfoRule {
+        name,
+        keys: parsed_keys,
+        op,
+    })
 }
 
 #[pymodule]

@@ -13,6 +13,7 @@ from supermariobrosnes_turbo import ACTION_SETS, CORE_ACTION_MEANINGS, SuperMari
 
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +35,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
     parser.add_argument("--action", choices=CORE_ACTION_MEANINGS, default="noop")
     parser.add_argument("--state", default=None)
+    parser.add_argument(
+        "--states",
+        default=None,
+        help=(
+            "Comma-separated stable-retro states assigned round-robin across lanes, "
+            f"default: {','.join(DEFAULT_STATES)} unless --state is provided."
+        ),
+    )
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--include-info", action="store_true")
     parser.add_argument("--terminate-on-flag", action="store_true")
@@ -76,6 +85,40 @@ def validate_args(args: argparse.Namespace) -> None:
             f"--action {args.action!r} is not in action_set={args.action_set!r}; "
             f"valid actions: {', '.join(action_meanings)}"
         )
+    if args.state is not None and args.states is not None:
+        raise ValueError("--state and --states are mutually exclusive")
+
+
+def parse_states(states: str | None) -> tuple[str, ...] | None:
+    if states is None:
+        return None
+    parsed = tuple(state.strip() for state in states.split(","))
+    if not parsed or not all(parsed):
+        raise ValueError("--states must be a comma-separated list without empty entries")
+    return parsed
+
+
+def initial_states_for_args(args: argparse.Namespace) -> tuple[str, ...] | None:
+    if args.state is not None:
+        return None
+    return parse_states(args.states) if args.states is not None else DEFAULT_STATES
+
+
+def lane_states(num_envs: int, states: tuple[str, ...] | None) -> list[str] | None:
+    if states is None:
+        return None
+    return [states[index % len(states)] for index in range(num_envs)]
+
+
+def benchmark_state(args: argparse.Namespace) -> str | list[str] | None:
+    if args.parsed_states is None:
+        return args.state
+    return lane_states(args.num_envs, args.parsed_states)
+
+
+def has_initial_state(args: argparse.Namespace) -> bool:
+    return args.state is not None or args.parsed_states is not None
+
 
 def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
     return np.full((num_envs,), action_meanings.index(action_name), dtype=np.uint8)
@@ -104,7 +147,7 @@ def prepare_game(
     action_meanings: tuple[str, ...],
 ) -> None:
     env.reset()
-    if args.no_start_game or args.state is not None or "start" not in action_meanings:
+    if args.no_start_game or has_initial_state(args) or "start" not in action_meanings:
         return
     noop = fill_action(args.num_envs, "noop", action_meanings)
     start = fill_action(args.num_envs, "start", action_meanings)
@@ -138,7 +181,12 @@ def summarize(values: list[float]) -> dict[str, float]:
     return result
 
 
-def build_result(args: argparse.Namespace, obs: np.ndarray, runs: list[dict[str, float]]) -> dict[str, Any]:
+def build_result(
+    args: argparse.Namespace,
+    obs: np.ndarray,
+    runs: list[dict[str, float]],
+    active_states: tuple[str | None, ...],
+) -> dict[str, Any]:
     batch_sps = [run["batch_steps_per_sec"] for run in runs]
     env_sps = [run["env_steps_per_sec"] for run in runs]
     frame_sps = [run["emulated_frames_per_sec"] for run in runs]
@@ -160,10 +208,16 @@ def build_result(args: argparse.Namespace, obs: np.ndarray, runs: list[dict[str,
             "action_set": args.action_set,
             "action": args.action,
             "state": args.state,
+            "states": list(args.parsed_states) if args.parsed_states is not None else None,
+            "lane_states": list(active_states) if has_initial_state(args) else None,
             "state_dir": str(args.state_dir) if args.state_dir is not None else None,
             "include_info": args.include_info,
             "terminate_on_flag": args.terminate_on_flag,
-            "start_game": not args.no_start_game and args.state is None and "start" in ACTION_SETS[args.action_set],
+            "start_game": (
+                not args.no_start_game
+                and not has_initial_state(args)
+                and "start" in ACTION_SETS[args.action_set]
+            ),
         },
         "observation": {
             "shape": list(obs.shape),
@@ -193,9 +247,11 @@ def print_human(result: dict[str, Any]) -> None:
         f"grayscale={config['grayscale']} crop=({config['crop_top']},{config['crop_bottom']}) "
         f"resize={config['resize_width']}x{config['resize_height']} "
         f"action_set={config['action_set']} action={config['action']} "
-        f"state={config['state']} "
+        f"state={config['state']} states={config['states']} "
         f"include_info={config['include_info']}"
     )
+    if config["lane_states"] is not None:
+        print(f"lane_states={config['lane_states']}")
     print(
         f"obs_shape={tuple(obs['shape'])} obs_dtype={obs['dtype']} "
         f"obs_mib={obs['mib']:.2f}"
@@ -220,6 +276,7 @@ def print_human(result: dict[str, Any]) -> None:
 def main() -> None:
     args = parse_args()
     validate_args(args)
+    args.parsed_states = initial_states_for_args(args)
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
     env = SuperMarioBrosVecEnv(
@@ -233,16 +290,17 @@ def main() -> None:
         crop_bottom=args.crop_bottom,
         resize_width=args.resize_width,
         resize_height=args.resize_height,
-        state=args.state,
+        state=benchmark_state(args),
         state_dir=args.state_dir,
         action_set=action_set,
     )
     obs = env.reset()
+    active_states = env.active_states()
     actions = fill_action(args.num_envs, args.action, action_meanings)
     prepare_game(env, args, action_meanings)
     step_repeated(env, actions, args.warmup, args.include_info)
     runs = [run_once(env, actions, args) for _ in range(args.repeats)]
-    result = build_result(args, obs, runs)
+    result = build_result(args, obs, runs, active_states)
 
     if args.output_json is not None:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)

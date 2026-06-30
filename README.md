@@ -66,6 +66,10 @@ env = SuperMarioBrosVecEnv(
     rom_path="~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes",
     num_envs=16,
     state={"Level1-1": 0.5, "Level1-4": 0.5},
+    done_on_info={
+        "life_loss": ("lives", "decrease"),
+        "level_change": (("levelHi", "levelLo"), "change"),
+    },
     seed=123,
 )
 
@@ -79,9 +83,12 @@ sampled_states = env.active_states()
 uv sync --extra dev                 # install Python dev dependencies
 uv run maturin develop --release    # build and install the Rust extension
 
+make test                           # Rust tests + Python oracle parity tests
+make test-full                      # rebuild extension + full slow oracle stress suite
+
 uv run python scripts/smoke_smb.py  # quick ROM/emulator smoke check
 uv run python scripts/benchmark_vec_env.py --num-envs 8 --frame-skip 4 --frame-stack 4
-uv run python scripts/benchmark_sps.py --state Level1-1 --num-envs 16 --steps 500 --repeats 3
+uv run python scripts/benchmark_sps.py --num-envs 16 --steps 500 --repeats 3
 
 uv run python scripts/play.py --mode external      # raw SDL2 play view
 uv run python scripts/play.py --mode external --view preprocessed --scale 4
@@ -95,9 +102,10 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 - The current emulator scope is SuperMarioBros-Nes mapper 0 NROM.
 - The Python package exposes `SuperMarioBrosVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`.
 - The default `simple` action set matches the Stable Retro Mario training mapper: `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, and `left`. Use `action_set="full"` when a tool needs the `start` button.
-- Use `--state Level1-1` or another stable-retro state to start from a saved level state. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
+- By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin. Use `--state Level1-1` or another stable-retro state to start every lane from one saved level state. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
+- `done_on_info` accepts named terminal rules like `{"life_loss": ("lives", "decrease")}`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired rules are reported in `info["done_on_info"]` with `op`, `keys`, `prev`, and `next`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
-- The Modal benchmark path expects `modal` to be installed and authenticated outside this package. It sends the local ROM and state bytes to the remote container at run time and defaults to `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4`.
+- The Modal benchmark path expects `modal` to be installed and authenticated outside this package. It sends the local ROM and state bytes to the remote container at run time and defaults to one 16-env mixed-lane benchmark with `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated across lanes.
 - Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
 - ROM files are not included in the repository; use the SHA-256 digest above to confirm you are testing with the expected ROM.
 

@@ -231,42 +231,40 @@ def run_benchmark(
         "remote_state_dir": str(remote_state_dir),
     }
 
-    levels: dict[str, Any] = {}
-    for state in state_files:
-        command = [
-            "python",
-            "scripts/benchmark_sps.py",
-            "--rom-path",
-            str(remote_rom),
-            "--json",
-            "--state",
-            state,
-            "--state-dir",
-            str(remote_state_dir),
-            *forwarded_args,
-        ]
-        proc = subprocess.run(
-            command,
-            cwd=REMOTE_REPO,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+    command = [
+        "python",
+        "scripts/benchmark_sps.py",
+        "--rom-path",
+        str(remote_rom),
+        "--json",
+        "--state-dir",
+        str(remote_state_dir),
+        *forwarded_args,
+    ]
+    if tuple(state_files) != DEFAULT_STATES:
+        command.extend(["--states", ",".join(state_files)])
+    proc = subprocess.run(
+        command,
+        cwd=REMOTE_REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "remote benchmark failed\n"
+            f"states={list(state_files)}\n"
+            f"command={command!r}\n"
+            f"stdout={proc.stdout}\n"
+            f"stderr={proc.stderr}"
         )
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "remote benchmark failed\n"
-                f"state={state}\n"
-                f"command={command!r}\n"
-                f"stdout={proc.stdout}\n"
-                f"stderr={proc.stderr}"
-            )
-        levels[state] = json.loads(proc.stdout)
-        modal_info["commands"][state] = command
+    mixed_levels = json.loads(proc.stdout)
+    modal_info["commands"]["mixed_levels"] = command
 
     return {
         "states": list(state_files),
-        "levels": levels,
-        "summary": aggregate_levels(levels),
+        "mixed_levels": mixed_levels,
+        "summary": aggregate_mixed_levels(mixed_levels),
         "modal": modal_info,
     }
 
@@ -282,19 +280,14 @@ def stat_summary(values: list[float]) -> dict[str, float]:
     }
 
 
-def aggregate_levels(levels: dict[str, Any]) -> dict[str, Any]:
-    per_level_means = [
-        result["summary"]["env_steps_per_sec"]["mean"] for result in levels.values()
-    ]
-    all_runs = [
-        run["env_steps_per_sec"]
-        for result in levels.values()
-        for run in result["runs"]
-    ]
+def aggregate_mixed_levels(result: dict[str, Any]) -> dict[str, Any]:
+    all_runs = [run["env_steps_per_sec"] for run in result["runs"]]
+    lane_states = result["config"]["lane_states"] or []
     return {
-        "level_mean_env_steps_per_sec": stat_summary(per_level_means),
+        "mixed_lane_env_steps_per_sec": result["summary"]["env_steps_per_sec"],
         "all_runs_env_steps_per_sec": stat_summary(all_runs),
-        "level_count": len(levels),
+        "lane_state_count": len(set(lane_states)),
+        "lane_count": len(lane_states),
         "run_count": len(all_runs),
     }
 
@@ -307,35 +300,39 @@ def print_summary(result: dict[str, Any]) -> None:
         f"os_cpu_count={modal_info['os_cpu_count']} "
         f"affinity_cpu_count={modal_info['affinity_cpu_count']}"
     )
-    for state, level in result["levels"].items():
-        config = level["config"]
-        obs = level["observation"]
-        summary = level["summary"]["env_steps_per_sec"]
+    mixed = result["mixed_levels"]
+    config = mixed["config"]
+    obs = mixed["observation"]
+    summary = mixed["summary"]["env_steps_per_sec"]
+    print(
+        "mixed_levels="
+        f"states={config['states']} num_envs={config['num_envs']} steps={config['steps']} "
+        f"repeats={config['repeats']} frame_skip={config['frame_skip']} "
+        f"frame_stack={config['frame_stack']} "
+        f"resize={config['resize_width']}x{config['resize_height']} "
+        f"action={config['action']}"
+    )
+    print(f"lane_states={config['lane_states']}")
+    print(
+        f"obs_shape={tuple(obs['shape'])} "
+        f"obs_dtype={obs['dtype']} obs_mib={obs['mib']:.2f}"
+    )
+    for idx, run in enumerate(mixed["runs"], start=1):
         print(
-            "level="
-            f"{state} num_envs={config['num_envs']} steps={config['steps']} "
-            f"repeats={config['repeats']} frame_skip={config['frame_skip']} "
-            f"frame_stack={config['frame_stack']} resize={config['resize_width']}x{config['resize_height']} "
-            f"action={config['action']}"
+            f"  run={idx} elapsed_s={run['elapsed_s']:.6f} "
+            f"env_steps_per_sec={run['env_steps_per_sec']:.1f} "
+            f"emulated_frames_per_sec={run['emulated_frames_per_sec']:.1f}"
         )
-        print(f"obs_shape={tuple(obs['shape'])} obs_dtype={obs['dtype']} obs_mib={obs['mib']:.2f}")
-        for idx, run in enumerate(level["runs"], start=1):
-            print(
-                f"  run={idx} elapsed_s={run['elapsed_s']:.6f} "
-                f"env_steps_per_sec={run['env_steps_per_sec']:.1f} "
-                f"emulated_frames_per_sec={run['emulated_frames_per_sec']:.1f}"
-            )
-        print(
-            "  summary="
-            f"mean={summary['mean']:.1f} stdev={summary['stdev']:.1f} "
-            f"best={summary['max']:.1f}"
-        )
-    level_mean = result["summary"]["level_mean_env_steps_per_sec"]
+    print(
+        "  summary="
+        f"mean={summary['mean']:.1f} stdev={summary['stdev']:.1f} "
+        f"best={summary['max']:.1f}"
+    )
     all_runs = result["summary"]["all_runs_env_steps_per_sec"]
     print(
         "average="
-        f"level_mean_env_steps_per_sec={level_mean['mean']:.1f} "
-        f"level_mean_stdev={level_mean['stdev']:.1f} "
+        f"mixed_lane_env_steps_per_sec={summary['mean']:.1f} "
+        f"mixed_lane_stdev={summary['stdev']:.1f} "
         f"all_runs_env_steps_per_sec={all_runs['mean']:.1f} "
         f"all_runs_stdev={all_runs['stdev']:.1f} "
         f"best_run={all_runs['max']:.1f}"

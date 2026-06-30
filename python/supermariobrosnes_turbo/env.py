@@ -33,6 +33,8 @@ INFO_KEYS = (
     "xscrollLo",
 )
 StateSpec = str | Path | bytes | bytearray | memoryview
+DoneOnInfoSpec = Mapping[str, Sequence[Any]]
+DoneOnInfoRule = tuple[str, tuple[str, ...], str]
 
 
 def _expand_rom_path(path: str | Path) -> str:
@@ -203,6 +205,51 @@ def _core_action_ids(action_meanings: tuple[str, ...]) -> np.ndarray:
     )
 
 
+def _normalize_done_on_info(
+    done_on_info: DoneOnInfoSpec | None,
+    terminate_on_life_loss: bool,
+    terminate_on_level_change: bool,
+) -> tuple[DoneOnInfoRule, ...]:
+    rules: dict[str, tuple[tuple[str, ...], str]] = {}
+    if done_on_info is not None:
+        if not isinstance(done_on_info, Mapping):
+            raise ValueError("done_on_info must be a mapping of rule names to (key_or_keys, op)")
+        for raw_name, spec in done_on_info.items():
+            name = str(raw_name)
+            if not name:
+                raise ValueError("done_on_info rule names must not be empty")
+            if (
+                not isinstance(spec, Sequence)
+                or isinstance(spec, (str, bytes, bytearray))
+                or len(spec) != 2
+            ):
+                raise ValueError("done_on_info values must be (key_or_keys, op) pairs")
+            raw_keys, raw_op = spec
+            op = str(raw_op)
+            if op not in {"change", "increase", "decrease"}:
+                raise ValueError("done_on_info ops must be 'change', 'increase', or 'decrease'")
+            if isinstance(raw_keys, str):
+                keys = (raw_keys,)
+            elif isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (bytes, bytearray)):
+                keys = tuple(str(key) for key in raw_keys)
+            else:
+                raise ValueError("done_on_info keys must be a string or sequence of strings")
+            if not keys or any(not key for key in keys):
+                raise ValueError("done_on_info rules must reference at least one key")
+            unknown = [key for key in keys if key not in INFO_KEYS]
+            if unknown:
+                valid = ", ".join(INFO_KEYS)
+                raise ValueError(f"unknown done_on_info key(s) {unknown!r}; valid keys: {valid}")
+            rules[name] = (keys, op)
+
+    if terminate_on_life_loss and "life_loss" not in rules:
+        rules["life_loss"] = (("lives",), "decrease")
+    if terminate_on_level_change and "level_change" not in rules:
+        rules["level_change"] = (("levelHi", "levelLo"), "change")
+
+    return tuple((name, keys, op) for name, (keys, op) in rules.items())
+
+
 class SuperMarioBrosVecEnv:
     """Vectorized Mario environment with the hot loop in Rust.
 
@@ -229,10 +276,18 @@ class SuperMarioBrosVecEnv:
         state_dir: str | Path | None = None,
         action_set: str | Sequence[str] = "simple",
         seed: int | None = None,
+        terminate_on_life_loss: bool = False,
+        terminate_on_level_change: bool = False,
+        done_on_info: DoneOnInfoSpec | None = None,
     ) -> None:
         self.action_meanings = _resolve_action_set(action_set)
         self.action_set = action_set if isinstance(action_set, str) else "custom"
         self._core_action_ids = _core_action_ids(self.action_meanings)
+        done_on_info_rules = _normalize_done_on_info(
+            done_on_info,
+            bool(terminate_on_life_loss),
+            bool(terminate_on_level_change),
+        )
         initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
             state,
             state_dir,
@@ -253,6 +308,9 @@ class SuperMarioBrosVecEnv:
             list(initial_state_names),
             initial_state_weights,
             0 if seed is None else int(seed),
+            bool(terminate_on_life_loss),
+            bool(terminate_on_level_change),
+            [(name, list(keys), op) for name, keys, op in done_on_info_rules],
         )
         self.initial_state_names = tuple(self._core.initial_state_names)
         self.num_envs = self._core.num_envs
@@ -260,6 +318,9 @@ class SuperMarioBrosVecEnv:
         self.grayscale = self._core.grayscale
         self.frame_stack = self._core.frame_stack
         self.terminate_on_flag = terminate_on_flag
+        self.terminate_on_life_loss = bool(terminate_on_life_loss)
+        self.terminate_on_level_change = bool(terminate_on_level_change)
+        self.done_on_info_rules = done_on_info_rules
         self.crop_top = self._core.crop_top
         self.crop_bottom = self._core.crop_bottom
         self.resize_width = self._core.resize_width
@@ -289,6 +350,9 @@ class SuperMarioBrosVecEnv:
         self._xscroll_hi = np.empty((self.num_envs,), dtype=np.uint8)
         self._xscroll_lo = np.empty((self.num_envs,), dtype=np.uint8)
         self._active_state_indices = np.empty((self.num_envs,), dtype=np.int32)
+        self._done_on_info: list[dict[str, dict[str, Any]]] = [
+            {} for _ in range(self.num_envs)
+        ]
         self._write_active_state_indices()
 
     def reset(self) -> np.ndarray:
@@ -296,6 +360,7 @@ class SuperMarioBrosVecEnv:
         self._rewards.fill(0)
         self._terminated.fill(False)
         self._truncated.fill(False)
+        self._done_on_info = [{} for _ in range(self.num_envs)]
         self._write_active_state_indices()
         self._write_info_arrays()
         return self._obs
@@ -340,7 +405,24 @@ class SuperMarioBrosVecEnv:
             self._xscroll_hi,
             self._xscroll_lo,
         )
+        if np.any(self._terminated) or np.any(self._truncated):
+            self._write_active_state_indices()
+        self._write_done_on_info()
         return self._obs, self._rewards, self._terminated, self._truncated
+
+    def _write_done_on_info(self) -> None:
+        reports = self._core.done_on_info()
+        self._done_on_info = []
+        for lane_reports in reports:
+            lane_done_on_info = {}
+            for name, keys, op, prev, next_values in lane_reports:
+                lane_done_on_info[str(name)] = {
+                    "op": str(op),
+                    "keys": list(keys),
+                    "prev": list(prev),
+                    "next": list(next_values),
+                }
+            self._done_on_info.append(lane_done_on_info)
 
     def step(
         self, actions: np.ndarray
@@ -373,7 +455,7 @@ class SuperMarioBrosVecEnv:
         )
 
     def _info_dict(self, index: int) -> dict[str, Any]:
-        return {
+        info = {
             "x_pos": int(self._x_pos[index]),
             "coins": int(self._coins[index]),
             "levelHi": int(self._level_hi[index]),
@@ -385,6 +467,9 @@ class SuperMarioBrosVecEnv:
             "xscrollHi": int(self._xscroll_hi[index]),
             "xscrollLo": int(self._xscroll_lo[index]),
         }
+        if self._done_on_info[index]:
+            info["done_on_info"] = self._done_on_info[index]
+        return info
 
     @property
     def x_pos(self) -> np.ndarray:

@@ -1,7 +1,7 @@
 use crate::cartridge::Cartridge;
 use crate::emulator::{
-    MarioAction, NesEmulator, StateLoadError, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH,
-    RGB_CHANNELS,
+    MarioAction, NesEmulator, StateLoadError, RGB_CHANNELS, VISIBLE_FRAME_HEIGHT,
+    VISIBLE_FRAME_WIDTH,
 };
 use rayon::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +19,141 @@ pub struct VecEnvConfig {
     pub crop_bottom: usize,
     pub resize_width: usize,
     pub resize_height: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InfoKey {
+    XPos,
+    Coins,
+    LevelHi,
+    LevelLo,
+    Lives,
+    Score,
+    Scrolling,
+    Time,
+    XScrollHi,
+    XScrollLo,
+}
+
+impl InfoKey {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "x_pos" => Some(Self::XPos),
+            "coins" => Some(Self::Coins),
+            "levelHi" => Some(Self::LevelHi),
+            "levelLo" => Some(Self::LevelLo),
+            "lives" => Some(Self::Lives),
+            "score" => Some(Self::Score),
+            "scrolling" => Some(Self::Scrolling),
+            "time" => Some(Self::Time),
+            "xscrollHi" => Some(Self::XScrollHi),
+            "xscrollLo" => Some(Self::XScrollLo),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::XPos => "x_pos",
+            Self::Coins => "coins",
+            Self::LevelHi => "levelHi",
+            Self::LevelLo => "levelLo",
+            Self::Lives => "lives",
+            Self::Score => "score",
+            Self::Scrolling => "scrolling",
+            Self::Time => "time",
+            Self::XScrollHi => "xscrollHi",
+            Self::XScrollLo => "xscrollLo",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DoneOnInfoOp {
+    Change,
+    Increase,
+    Decrease,
+}
+
+impl DoneOnInfoOp {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "change" => Some(Self::Change),
+            "increase" => Some(Self::Increase),
+            "decrease" => Some(Self::Decrease),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Change => "change",
+            Self::Increase => "increase",
+            Self::Decrease => "decrease",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DoneOnInfoRule {
+    pub name: String,
+    pub keys: Vec<InfoKey>,
+    pub op: DoneOnInfoOp,
+}
+
+#[derive(Clone, Debug)]
+pub struct FiredDoneOnInfoRule {
+    pub name: String,
+    pub keys: Vec<InfoKey>,
+    pub op: DoneOnInfoOp,
+    pub previous_values: Vec<i64>,
+    pub current_values: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct InfoSnapshot {
+    x_pos: i64,
+    coins: i64,
+    level_hi: i64,
+    level_lo: i64,
+    lives: i64,
+    score: i64,
+    scrolling: i64,
+    time: i64,
+    xscroll_hi: i64,
+    xscroll_lo: i64,
+}
+
+impl InfoSnapshot {
+    fn from_env(env: &NesEmulator) -> Self {
+        Self {
+            x_pos: i64::from(env.x_pos()),
+            coins: i64::from(env.coins()),
+            level_hi: i64::from(env.level_hi()),
+            level_lo: i64::from(env.level_lo()),
+            lives: i64::from(env.lives()),
+            score: i64::from(env.score()),
+            scrolling: i64::from(env.scrolling()),
+            time: i64::from(env.time()),
+            xscroll_hi: i64::from(env.xscroll_hi()),
+            xscroll_lo: i64::from(env.xscroll_lo()),
+        }
+    }
+
+    fn value(self, key: InfoKey) -> i64 {
+        match key {
+            InfoKey::XPos => self.x_pos,
+            InfoKey::Coins => self.coins,
+            InfoKey::LevelHi => self.level_hi,
+            InfoKey::LevelLo => self.level_lo,
+            InfoKey::Lives => self.lives,
+            InfoKey::Score => self.score,
+            InfoKey::Scrolling => self.scrolling,
+            InfoKey::Time => self.time,
+            InfoKey::XScrollHi => self.xscroll_hi,
+            InfoKey::XScrollLo => self.xscroll_lo,
+        }
+    }
 }
 
 impl VecEnvConfig {
@@ -66,6 +201,9 @@ pub struct MarioVecEnv {
     initial_states: Vec<InitialState>,
     weighted_initial_states: bool,
     active_state_indices: Vec<i32>,
+    done_on_info_rules: Vec<DoneOnInfoRule>,
+    done_on_info_baselines: Vec<InfoSnapshot>,
+    last_done_on_info: Vec<Vec<FiredDoneOnInfoRule>>,
     rng: XorShift64,
     scratch: Vec<Vec<u8>>,
     synced_lanes: bool,
@@ -78,6 +216,7 @@ impl MarioVecEnv {
         initial_states: Vec<InitialState>,
         weighted_initial_states: bool,
         seed: u64,
+        done_on_info_rules: Vec<DoneOnInfoRule>,
     ) -> Result<Self, StateLoadError> {
         let resize_plan = AreaResizePlan::new(
             config.source_width(),
@@ -103,6 +242,9 @@ impl MarioVecEnv {
             initial_states,
             weighted_initial_states,
             active_state_indices: vec![-1; config.num_envs],
+            done_on_info_rules,
+            done_on_info_baselines: vec![InfoSnapshot::default(); config.num_envs],
+            last_done_on_info: vec![Vec::new(); config.num_envs],
             rng: XorShift64::new(seed),
             scratch,
             synced_lanes: true,
@@ -113,8 +255,9 @@ impl MarioVecEnv {
 
     fn reset_envs(&mut self) -> Result<(), StateLoadError> {
         if self.initial_states.is_empty() {
-            for env in &mut self.envs {
-                env.reset();
+            for env_idx in 0..self.config.num_envs {
+                self.envs[env_idx].reset();
+                self.refresh_done_baseline(env_idx);
             }
             self.active_state_indices.fill(-1);
             self.synced_lanes = true;
@@ -132,6 +275,7 @@ impl MarioVecEnv {
             }
             self.active_state_indices[env_idx] = state_index as i32;
             self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
+            self.refresh_done_baseline(env_idx);
         }
         self.synced_lanes = all_same;
         Ok(())
@@ -161,6 +305,9 @@ impl MarioVecEnv {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
         self.reset_envs()?;
+        for lane in &mut self.last_done_on_info {
+            lane.clear();
+        }
         if self.synced_lanes && config.num_envs > 1 {
             write_reset_stack(
                 config,
@@ -207,6 +354,10 @@ impl MarioVecEnv {
 
     pub fn active_state_indices(&self) -> &[i32] {
         &self.active_state_indices
+    }
+
+    pub fn done_on_info(&self) -> &[Vec<FiredDoneOnInfoRule>] {
+        &self.last_done_on_info
     }
 
     pub fn seed(&mut self, seed: u64) {
@@ -282,6 +433,12 @@ impl MarioVecEnv {
     ) {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
+        for lane in &mut self.last_done_on_info {
+            lane.clear();
+        }
+        if self.synced_lanes && config.num_envs > 1 && !self.done_on_info_rules.is_empty() {
+            self.materialize_synced_lanes();
+        }
         if self.synced_lanes && config.num_envs > 1 {
             let first_action = actions[0];
             if actions.iter().all(|&action| action == first_action) {
@@ -290,6 +447,9 @@ impl MarioVecEnv {
                     &self.resize_plan,
                     &mut self.envs[0],
                     &mut self.scratch[0],
+                    self.done_on_info_baselines[0],
+                    &self.done_on_info_rules,
+                    &mut self.last_done_on_info[0],
                     first_action,
                     &mut obs[..obs_stride],
                     &mut rewards[0],
@@ -314,6 +474,12 @@ impl MarioVecEnv {
                     x_pos, coins, level_hi, level_lo, lives, score, scrolling, time, xscroll_hi,
                     xscroll_lo,
                 );
+                if terminated[0] || truncated[0] {
+                    self.autoreset_done_lanes(
+                        obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
+                        scrolling, time, xscroll_hi, xscroll_lo,
+                    );
+                }
                 return;
             }
 
@@ -326,6 +492,8 @@ impl MarioVecEnv {
                 .par_iter_mut()
                 .zip(self.scratch.par_iter_mut())
                 .zip(actions.par_iter())
+                .zip(self.done_on_info_baselines.par_iter())
+                .zip(self.last_done_on_info.par_iter_mut())
                 .zip(obs.par_chunks_mut(obs_stride))
                 .zip(rewards.par_iter_mut())
                 .zip(terminated.par_iter_mut())
@@ -340,76 +508,49 @@ impl MarioVecEnv {
                 .zip(time.par_iter_mut())
                 .zip(xscroll_hi.par_iter_mut())
                 .zip(xscroll_lo.par_iter_mut())
-                .for_each(
-                    |(
-                        (
-                            (
-                                (
-                                    (
-                                        (
-                                            (
-                                                (
-                                                    (
-                                                        (
-                                                            (
-                                                                (
-                                                                    (
-                                                                        (
-                                                                            (
-                                                                                (env, scratch),
-                                                                                action,
-                                                                            ),
-                                                                            obs_chunk,
-                                                                        ),
-                                                                        reward_out,
-                                                                    ),
-                                                                    terminated_out,
-                                                                ),
-                                                                truncated_out,
-                                                            ),
-                                                            x_out,
-                                                        ),
-                                                        coins_out,
-                                                    ),
-                                                    level_hi_out,
-                                                ),
-                                                level_lo_out,
-                                            ),
-                                            lives_out,
-                                        ),
-                                        score_out,
-                                    ),
-                                    scrolling_out,
-                                ),
-                                time_out,
-                            ),
-                            xscroll_hi_out,
-                        ),
+                .for_each(|zipped| {
+                    let (zipped, xscroll_lo_out) = zipped;
+                    let (zipped, xscroll_hi_out) = zipped;
+                    let (zipped, time_out) = zipped;
+                    let (zipped, scrolling_out) = zipped;
+                    let (zipped, score_out) = zipped;
+                    let (zipped, lives_out) = zipped;
+                    let (zipped, level_lo_out) = zipped;
+                    let (zipped, level_hi_out) = zipped;
+                    let (zipped, coins_out) = zipped;
+                    let (zipped, x_out) = zipped;
+                    let (zipped, truncated_out) = zipped;
+                    let (zipped, terminated_out) = zipped;
+                    let (zipped, reward_out) = zipped;
+                    let (zipped, obs_chunk) = zipped;
+                    let (zipped, fired_done_on_info) = zipped;
+                    let (zipped, done_on_info_baseline) = zipped;
+                    let ((env, scratch), action) = zipped;
+                    step_one(
+                        config,
+                        resize_plan,
+                        env,
+                        scratch,
+                        *done_on_info_baseline,
+                        &self.done_on_info_rules,
+                        fired_done_on_info,
+                        *action,
+                        obs_chunk,
+                        reward_out,
+                        terminated_out,
+                        truncated_out,
+                        x_out,
+                        coins_out,
+                        level_hi_out,
+                        level_lo_out,
+                        lives_out,
+                        score_out,
+                        scrolling_out,
+                        time_out,
+                        xscroll_hi_out,
                         xscroll_lo_out,
-                    )| {
-                        step_one(
-                            config,
-                            resize_plan,
-                            env,
-                            scratch,
-                            *action,
-                            obs_chunk,
-                            reward_out,
-                            terminated_out,
-                            truncated_out,
-                            x_out,
-                            coins_out,
-                            level_hi_out,
-                            level_lo_out,
-                            lives_out,
-                            score_out,
-                            scrolling_out,
-                            time_out,
-                            xscroll_hi_out,
-                            xscroll_lo_out,
-                        );
-                    },
-                );
+                    );
+                });
         } else {
             for env_idx in 0..config.num_envs {
                 let start = env_idx * obs_stride;
@@ -419,6 +560,9 @@ impl MarioVecEnv {
                     &self.resize_plan,
                     &mut self.envs[env_idx],
                     &mut self.scratch[env_idx],
+                    self.done_on_info_baselines[env_idx],
+                    &self.done_on_info_rules,
+                    &mut self.last_done_on_info[env_idx],
                     actions[env_idx],
                     &mut obs[start..end],
                     &mut rewards[env_idx],
@@ -437,6 +581,13 @@ impl MarioVecEnv {
                 );
             }
         }
+
+        if terminated.iter().any(|done| *done) || truncated.iter().any(|done| *done) {
+            self.autoreset_done_lanes(
+                obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
+                scrolling, time, xscroll_hi, xscroll_lo,
+            );
+        }
     }
 
     fn materialize_synced_lanes(&mut self) {
@@ -446,7 +597,92 @@ impl MarioVecEnv {
         }
         let active_state_index = self.active_state_indices[0];
         self.active_state_indices.fill(active_state_index);
+        let done_on_info_baseline = self.done_on_info_baselines[0];
+        self.done_on_info_baselines.fill(done_on_info_baseline);
         self.synced_lanes = false;
+    }
+
+    fn refresh_done_baseline(&mut self, env_idx: usize) {
+        self.done_on_info_baselines[env_idx] = InfoSnapshot::from_env(&self.envs[env_idx]);
+    }
+
+    fn reset_one_env(&mut self, env_idx: usize) {
+        if self.initial_states.is_empty() {
+            self.envs[env_idx].reset();
+            self.active_state_indices[env_idx] = -1;
+            self.refresh_done_baseline(env_idx);
+            return;
+        }
+
+        let state_index = self.initial_state_index_for_env(env_idx);
+        self.active_state_indices[env_idx] = state_index as i32;
+        self.envs[env_idx]
+            .load_fceu_state(&self.initial_states[state_index].data)
+            .expect("previously validated initial state failed to reload");
+        self.refresh_done_baseline(env_idx);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn autoreset_done_lanes(
+        &mut self,
+        obs: &mut [u8],
+        terminated: &mut [bool],
+        truncated: &mut [bool],
+        x_pos: &mut [u16],
+        coins: &mut [u8],
+        level_hi: &mut [i16],
+        level_lo: &mut [i16],
+        lives: &mut [i16],
+        score: &mut [u32],
+        scrolling: &mut [i16],
+        time: &mut [u16],
+        xscroll_hi: &mut [u8],
+        xscroll_lo: &mut [u8],
+    ) {
+        let config = self.config;
+        let obs_stride = config.obs_len_per_env();
+        for env_idx in 0..config.num_envs {
+            if !terminated[env_idx] && !truncated[env_idx] {
+                continue;
+            }
+
+            self.reset_one_env(env_idx);
+            let start = env_idx * obs_stride;
+            let end = start + obs_stride;
+            write_reset_stack(
+                config,
+                &self.resize_plan,
+                &self.envs[env_idx],
+                &mut self.scratch[env_idx],
+                &mut obs[start..end],
+            );
+            write_info_from_env(
+                &self.envs[env_idx],
+                &mut x_pos[env_idx],
+                &mut coins[env_idx],
+                &mut level_hi[env_idx],
+                &mut level_lo[env_idx],
+                &mut lives[env_idx],
+                &mut score[env_idx],
+                &mut scrolling[env_idx],
+                &mut time[env_idx],
+                &mut xscroll_hi[env_idx],
+                &mut xscroll_lo[env_idx],
+            );
+        }
+        self.synced_lanes = false;
+    }
+
+    pub fn env_ram(&self, env_idx: usize) -> Option<&[u8; 2048]> {
+        self.envs.get(env_idx).map(NesEmulator::ram)
+    }
+
+    pub fn env_oam(&self, env_idx: usize) -> Option<&[u8; 256]> {
+        self.envs.get(env_idx).map(NesEmulator::oam)
+    }
+
+    pub fn env_bg_pixel(&self, env_idx: usize, x: usize, y: usize) -> Option<(u8, bool)> {
+        self.envs.get(env_idx).map(|env| env.debug_bg_pixel(x, y))
     }
 }
 
@@ -592,6 +828,9 @@ fn step_one(
     resize_plan: &AreaResizePlan,
     env: &mut NesEmulator,
     scratch: &mut [u8],
+    done_on_info_baseline: InfoSnapshot,
+    done_on_info_rules: &[DoneOnInfoRule],
+    fired_done_on_info: &mut Vec<FiredDoneOnInfoRule>,
     action_id: u8,
     obs_chunk: &mut [u8],
     reward_out: &mut f32,
@@ -610,9 +849,17 @@ fn step_one(
 ) {
     let action = MarioAction::from_u8(action_id);
     let mut reward = 0.0;
+    let mut done = false;
     for _ in 0..config.frame_skip {
         reward += env.step_frame(action);
-        if env.is_done() {
+        let done_on_info = check_done_on_info(
+            env,
+            done_on_info_baseline,
+            done_on_info_rules,
+            fired_done_on_info,
+        );
+        done = env.is_done() || done_on_info;
+        if done {
             break;
         }
     }
@@ -620,7 +867,7 @@ fn step_one(
     write_current_frame_to_last_stack_slot(config, resize_plan, env, scratch, obs_chunk);
 
     *reward_out = reward;
-    *terminated_out = env.is_done();
+    *terminated_out = done;
     *truncated_out = false;
     write_info_from_env(
         env,
@@ -635,6 +882,53 @@ fn step_one(
         xscroll_hi_out,
         xscroll_lo_out,
     );
+}
+
+fn check_done_on_info(
+    env: &NesEmulator,
+    baseline: InfoSnapshot,
+    rules: &[DoneOnInfoRule],
+    fired_rules: &mut Vec<FiredDoneOnInfoRule>,
+) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let current = InfoSnapshot::from_env(env);
+    let mut fired_any = false;
+    for rule in rules {
+        let mut fired = false;
+        let mut previous_values = Vec::with_capacity(rule.keys.len());
+        let mut current_values = Vec::with_capacity(rule.keys.len());
+        for key in &rule.keys {
+            let previous = baseline.value(*key);
+            let next = current.value(*key);
+            previous_values.push(previous);
+            current_values.push(next);
+            if done_on_info_value_fired(rule.op, previous, next) {
+                fired = true;
+            }
+        }
+        if !fired {
+            continue;
+        }
+        fired_any = true;
+        fired_rules.push(FiredDoneOnInfoRule {
+            name: rule.name.clone(),
+            keys: rule.keys.clone(),
+            op: rule.op,
+            previous_values,
+            current_values,
+        });
+    }
+    fired_any
+}
+
+fn done_on_info_value_fired(op: DoneOnInfoOp, baseline: i64, current: i64) -> bool {
+    match op {
+        DoneOnInfoOp::Change => current != baseline,
+        DoneOnInfoOp::Increase => current > baseline,
+        DoneOnInfoOp::Decrease => current < baseline,
+    }
 }
 
 fn write_reset_stack(

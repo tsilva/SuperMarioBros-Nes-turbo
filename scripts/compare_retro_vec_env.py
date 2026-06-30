@@ -6,7 +6,7 @@ import importlib.util
 import json
 import sys
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,8 @@ from supermariobrosnes_turbo.env import DEFAULT_STABLE_RETRO_GAME
 
 DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
 EXPECTED_STABLE_RETRO_VERSION = "1.0.0.post22"
+STABLE_VISIBLE_WIDTH = 240
+STABLE_VISIBLE_HEIGHT = 224
 INFO_KEY_MAP = {
     "coins": "coins",
     "levelHi": "level_hi",
@@ -69,6 +71,8 @@ class ComparisonConfig:
     maxpool_last_two: bool
     copy_observations: bool
     terminate_on_flag: bool
+    terminate_on_life_loss: bool
+    terminate_on_level_change: bool
     include_obs: bool
     include_rewards: bool
     include_dones: bool
@@ -76,6 +80,7 @@ class ComparisonConfig:
     stop_on_done: bool
     output_json: Path | None
     allow_version_mismatch: bool
+    preprocessing_matrix: bool
 
 
 class ComparisonFailure(AssertionError):
@@ -139,20 +144,47 @@ def parse_args() -> ComparisonConfig:
         action="store_true",
         help="Enable fast-env flag termination. RetroVecEnv still uses its scenario done rules.",
     )
+    parser.add_argument(
+        "--no-terminate-on-life-loss",
+        dest="terminate_on_life_loss",
+        action="store_false",
+        default=True,
+        help="Disable the fast-env equivalent of sandbox-sb3's life_loss done_on_info rule.",
+    )
+    parser.add_argument(
+        "--no-terminate-on-level-change",
+        dest="terminate_on_level_change",
+        action="store_false",
+        default=True,
+        help="Disable the fast-env equivalent of sandbox-sb3's level_change done_on_info rule.",
+    )
     parser.add_argument("--skip-obs", action="store_true")
     parser.add_argument("--skip-rewards", action="store_true")
     parser.add_argument("--skip-dones", action="store_true")
     parser.add_argument("--skip-infos", action="store_true")
+    parser.set_defaults(stop_on_done=False)
+    parser.add_argument(
+        "--stop-on-done",
+        dest="stop_on_done",
+        action="store_true",
+        help="Stop after the first done lane instead of comparing all requested steps.",
+    )
     parser.add_argument(
         "--no-stop-on-done",
-        action="store_true",
-        help="Continue after a done lane. This will usually diverge because RetroVecEnv autoresets.",
+        dest="stop_on_done",
+        action="store_false",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument(
         "--allow-version-mismatch",
         action="store_true",
         help=f"Do not require stable-retro-turbo=={EXPECTED_STABLE_RETRO_VERSION}.",
+    )
+    parser.add_argument(
+        "--preprocessing-matrix",
+        action="store_true",
+        help="Run obs-only comparisons for raw RGB, grayscale, cropped, and resized obs.",
     )
     args = parser.parse_args()
 
@@ -193,13 +225,16 @@ def parse_args() -> ComparisonConfig:
         maxpool_last_two=args.maxpool_last_two,
         copy_observations=args.copy_observations,
         terminate_on_flag=args.terminate_on_flag,
+        terminate_on_life_loss=args.terminate_on_life_loss,
+        terminate_on_level_change=args.terminate_on_level_change,
         include_obs=not args.skip_obs,
         include_rewards=not args.skip_rewards,
         include_dones=not args.skip_dones,
         include_infos=not args.skip_infos,
-        stop_on_done=not args.no_stop_on_done,
+        stop_on_done=args.stop_on_done,
         output_json=args.output_json,
         allow_version_mismatch=args.allow_version_mismatch,
+        preprocessing_matrix=args.preprocessing_matrix,
     )
 
 
@@ -228,9 +263,11 @@ def check_stable_retro_version(path: Path | None, allow_mismatch: bool) -> str:
 
 
 def install_sb3_vecenv_shim_if_needed() -> None:
+    if "stable_baselines3.common.vec_env" in sys.modules:
+        return
     try:
         has_vec_env = importlib.util.find_spec("stable_baselines3.common.vec_env") is not None
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ValueError):
         has_vec_env = False
     if has_vec_env:
         return
@@ -289,18 +326,28 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosVecEnv:
         grayscale=config.grayscale,
         frame_stack=config.frame_stack,
         terminate_on_flag=config.terminate_on_flag,
+        terminate_on_life_loss=config.terminate_on_life_loss,
+        terminate_on_level_change=config.terminate_on_level_change,
         crop_top=config.crop_top,
         crop_bottom=config.crop_bottom,
         resize_width=config.resize_width,
         resize_height=config.resize_height,
         state=config.state,
         action_set=config.action_set,
+        seed=config.seed,
     )
 
 
 def make_retro_env(config: ComparisonConfig):
     import stable_retro as retro
 
+    source_height = STABLE_VISIBLE_HEIGHT - config.crop_top - config.crop_bottom
+    obs_crop = None
+    if config.crop_top != 0 or config.crop_bottom != 0:
+        obs_crop = (config.crop_top, config.crop_bottom, 0, 0)
+    obs_resize = None
+    if config.resize_width != STABLE_VISIBLE_WIDTH or config.resize_height != source_height:
+        obs_resize = (config.resize_height, config.resize_width)
     kwargs = {
         "state": config.state,
         "num_envs": config.num_envs,
@@ -308,8 +355,8 @@ def make_retro_env(config: ComparisonConfig):
         "rom_path": str(config.rom_path),
         "render_mode": "rgb_array",
         "use_restricted_actions": retro.Actions.ALL,
-        "obs_crop": (config.crop_top, config.crop_bottom, 0, 0),
-        "obs_resize": (config.resize_height, config.resize_width),
+        "obs_crop": obs_crop,
+        "obs_resize": obs_resize,
         "obs_grayscale": config.grayscale,
         "obs_resize_algorithm": "area",
         "frame_skip": config.frame_skip,
@@ -573,6 +620,93 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
         retro_env.close()
 
 
+def preprocessing_matrix_configs(config: ComparisonConfig) -> list[tuple[str, ComparisonConfig]]:
+    common = {
+        "include_obs": True,
+        "include_rewards": False,
+        "include_dones": False,
+        "include_infos": False,
+    }
+    return [
+        (
+            "rgb_visible_no_crop_no_resize",
+            replace(
+                config,
+                grayscale=False,
+                crop_top=0,
+                crop_bottom=0,
+                resize_width=STABLE_VISIBLE_WIDTH,
+                resize_height=STABLE_VISIBLE_HEIGHT,
+                **common,
+            ),
+        ),
+        (
+            "gray_visible_no_crop_no_resize",
+            replace(
+                config,
+                grayscale=True,
+                crop_top=0,
+                crop_bottom=0,
+                resize_width=STABLE_VISIBLE_WIDTH,
+                resize_height=STABLE_VISIBLE_HEIGHT,
+                **common,
+            ),
+        ),
+        (
+            "gray_crop_no_resize",
+            replace(
+                config,
+                grayscale=True,
+                resize_width=STABLE_VISIBLE_WIDTH,
+                resize_height=STABLE_VISIBLE_HEIGHT - config.crop_top - config.crop_bottom,
+                **common,
+            ),
+        ),
+        (
+            "gray_crop_resize",
+            replace(
+                config,
+                grayscale=True,
+                **common,
+            ),
+        ),
+    ]
+
+
+def run_preprocessing_matrix(config: ComparisonConfig) -> dict[str, Any]:
+    results = []
+    status = "ok"
+    for name, matrix_config in preprocessing_matrix_configs(config):
+        try:
+            result = run_comparison(matrix_config)
+            results.append(
+                {
+                    "name": name,
+                    "status": "ok",
+                    "compared_steps": result["compared_steps"],
+                    "config": result["config"],
+                    "final_fast_obs": result["final_fast_obs"],
+                    "final_retro_obs": result["final_retro_obs"],
+                },
+            )
+        except ComparisonFailure as exc:
+            status = "mismatch"
+            results.append(
+                {
+                    "name": name,
+                    "status": "mismatch",
+                    "config": config_json(matrix_config),
+                    "failure": exc.payload,
+                },
+            )
+    return {
+        "status": status,
+        "mode": "preprocessing_matrix",
+        "config": config_json(config),
+        "results": results,
+    }
+
+
 def config_json(config: ComparisonConfig) -> dict[str, Any]:
     return {
         "rom_path": str(config.rom_path),
@@ -596,6 +730,8 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "maxpool_last_two": config.maxpool_last_two,
         "copy_observations": config.copy_observations,
         "terminate_on_flag": config.terminate_on_flag,
+        "terminate_on_life_loss": config.terminate_on_life_loss,
+        "terminate_on_level_change": config.terminate_on_level_change,
         "sandbox_sb3_level1_1_native_retro_vec_env_profile": {
             "environment_hash": SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH,
             "game": DEFAULT_STABLE_RETRO_GAME,
@@ -624,6 +760,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "include_infos": config.include_infos,
         "stop_on_done": config.stop_on_done,
         "allow_version_mismatch": config.allow_version_mismatch,
+        "preprocessing_matrix": config.preprocessing_matrix,
     }
 
 
@@ -633,18 +770,34 @@ def emit_result(result: dict[str, Any], output_json: Path | None) -> None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(text + "\n", encoding="utf-8")
     if result["status"] == "ok":
-        print(
-            "comparison=ok "
-            f"steps={result['compared_steps']} "
-            f"seed={result['config']['seed']} "
-            f"stable_retro_turbo={result['stable_retro_version']}",
-        )
+        if result.get("mode") == "preprocessing_matrix":
+            steps = ",".join(
+                f"{item['name']}:{item['compared_steps']}" for item in result["results"]
+            )
+            print(
+                "comparison_matrix=ok "
+                f"steps={steps} "
+                f"seed={result['config']['seed']}",
+            )
+        else:
+            print(
+                "comparison=ok "
+                f"steps={result['compared_steps']} "
+                f"seed={result['config']['seed']} "
+                f"stable_retro_turbo={result['stable_retro_version']}",
+            )
     else:
         print(text)
 
 
 def main() -> None:
     config = parse_args()
+    if config.preprocessing_matrix:
+        result = run_preprocessing_matrix(config)
+        emit_result(result, config.output_json)
+        if result["status"] != "ok":
+            raise SystemExit(1)
+        return
     try:
         result = run_comparison(config)
     except ComparisonFailure as exc:

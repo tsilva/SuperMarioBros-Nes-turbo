@@ -1,5 +1,4 @@
 use crate::cartridge::Cartridge;
-use std::sync::OnceLock;
 use thiserror::Error;
 
 pub const NES_WIDTH: usize = 256;
@@ -16,16 +15,15 @@ const CPU_CYCLES_PER_FRAME_GUARD: usize = 40_000;
 const PPU_DOTS_PER_SCANLINE: usize = 341;
 const PPU_SCANLINES_PER_FRAME: usize = 262;
 const PPU_DOTS_PER_FRAME: usize = PPU_DOTS_PER_SCANLINE * PPU_SCANLINES_PER_FRAME;
-const PPU_SPRITE0_DOT: usize = 30 * PPU_DOTS_PER_SCANLINE + 1;
-const PPU_VBLANK_DOT: usize = 241 * PPU_DOTS_PER_SCANLINE + 1;
-const PPU_PRERENDER_DOT: usize = 261 * PPU_DOTS_PER_SCANLINE + 1;
+const PPU_VBLANK_DOT: usize = PPU_DOTS_PER_SCANLINE;
+const PPU_PRERENDER_DOT: usize = 21 * PPU_DOTS_PER_SCANLINE;
+const PPU_VISIBLE_START_SCANLINE: usize = 22;
+const PPU_SPRITE0_DOT: usize = (PPU_VISIBLE_START_SCANLINE + 30) * PPU_DOTS_PER_SCANLINE + 1;
 const DEFAULT_GRAY_CROP_TOP: usize = 32;
 const DEFAULT_GRAY_CROP_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - DEFAULT_GRAY_CROP_TOP;
 const DEFAULT_GRAY_RESIZE_WIDTH: usize = 84;
 const DEFAULT_GRAY_RESIZE_HEIGHT: usize = 84;
 const DEFAULT_GRAY_RESIZE_PIXELS: usize = DEFAULT_GRAY_RESIZE_WIDTH * DEFAULT_GRAY_RESIZE_HEIGHT;
-const DEFAULT_GRAY_AREA_DENOM: u32 = (VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT) as u32;
-const SPRITE_SHADOW_EMPTY: u8 = 255;
 
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
@@ -140,140 +138,6 @@ struct Ppu {
     nmi_pending: bool,
 }
 
-#[derive(Clone, Copy)]
-struct Area84AxisContribution {
-    dst: u16,
-    weight: u16,
-}
-
-#[derive(Clone, Copy)]
-struct Area84RowContribution {
-    row: u16,
-    weight: u16,
-}
-
-struct DefaultGrayArea84Plan {
-    x: [[Area84AxisContribution; 2]; NES_WIDTH],
-    y: [[Area84RowContribution; 2]; DEFAULT_GRAY_CROP_HEIGHT],
-}
-
-fn default_gray_area84_plan() -> &'static DefaultGrayArea84Plan {
-    static PLAN: OnceLock<DefaultGrayArea84Plan> = OnceLock::new();
-    PLAN.get_or_init(|| DefaultGrayArea84Plan {
-        x: build_area84_inverse_axis::<NES_WIDTH, DEFAULT_GRAY_RESIZE_WIDTH>(),
-        y: build_area84_inverse_axis::<DEFAULT_GRAY_CROP_HEIGHT, DEFAULT_GRAY_RESIZE_HEIGHT>().map(
-            |contributions| {
-                contributions.map(|contribution| Area84RowContribution {
-                    row: contribution.dst * DEFAULT_GRAY_RESIZE_WIDTH as u16,
-                    weight: contribution.weight,
-                })
-            },
-        ),
-    })
-}
-
-fn build_area84_inverse_axis<const SRC: usize, const DST: usize>(
-) -> [[Area84AxisContribution; 2]; SRC] {
-    let empty = Area84AxisContribution { dst: 0, weight: 0 };
-    let mut out = [[empty; 2]; SRC];
-    for src_i in 0..SRC {
-        let src_start = src_i * DST;
-        let src_end = (src_i + 1) * DST;
-        let first_dst = src_start / SRC;
-        let last_dst_exclusive = (src_end + SRC - 1) / SRC;
-        for (slot, dst_i) in (first_dst..last_dst_exclusive).enumerate() {
-            let dst_start = dst_i * SRC;
-            let dst_end = (dst_i + 1) * SRC;
-            let weight = src_end
-                .min(dst_end)
-                .saturating_sub(src_start.max(dst_start));
-            out[src_i][slot] = Area84AxisContribution {
-                dst: dst_i as u16,
-                weight: weight as u16,
-            };
-        }
-    }
-    out
-}
-
-#[inline(always)]
-fn accumulate_area_84x84_pixel(
-    sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-    x_contributions: &[Area84AxisContribution; 2],
-    y_contributions: &[Area84RowContribution; 2],
-    gray: u8,
-) {
-    let value = gray as u32;
-    let x0 = x_contributions[0];
-    let x1 = x_contributions[1];
-    let y0 = y_contributions[0];
-    let y1 = y_contributions[1];
-
-    let row0 = y0.row as usize;
-    let weighted_y0 = value * y0.weight as u32;
-    sums[row0 + x0.dst as usize] += weighted_y0 * x0.weight as u32;
-    if x1.weight != 0 {
-        sums[row0 + x1.dst as usize] += weighted_y0 * x1.weight as u32;
-    }
-
-    if y1.weight != 0 {
-        let row1 = y1.row as usize;
-        let weighted_y1 = value * y1.weight as u32;
-        sums[row1 + x0.dst as usize] += weighted_y1 * x0.weight as u32;
-        if x1.weight != 0 {
-            sums[row1 + x1.dst as usize] += weighted_y1 * x1.weight as u32;
-        }
-    }
-}
-
-#[inline(always)]
-fn add_area_84x84_delta(
-    sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-    x_contributions: &[Area84AxisContribution; 2],
-    y_contributions: &[Area84RowContribution; 2],
-    delta: i16,
-) {
-    let magnitude = delta.unsigned_abs() as u32;
-    let x0 = x_contributions[0];
-    let x1 = x_contributions[1];
-    let y0 = y_contributions[0];
-    let y1 = y_contributions[1];
-
-    if delta >= 0 {
-        let row0 = y0.row as usize;
-        let weighted_y0 = magnitude * y0.weight as u32;
-        sums[row0 + x0.dst as usize] += weighted_y0 * x0.weight as u32;
-        if x1.weight != 0 {
-            sums[row0 + x1.dst as usize] += weighted_y0 * x1.weight as u32;
-        }
-
-        if y1.weight != 0 {
-            let row1 = y1.row as usize;
-            let weighted_y1 = magnitude * y1.weight as u32;
-            sums[row1 + x0.dst as usize] += weighted_y1 * x0.weight as u32;
-            if x1.weight != 0 {
-                sums[row1 + x1.dst as usize] += weighted_y1 * x1.weight as u32;
-            }
-        }
-    } else {
-        let row0 = y0.row as usize;
-        let weighted_y0 = magnitude * y0.weight as u32;
-        sums[row0 + x0.dst as usize] -= weighted_y0 * x0.weight as u32;
-        if x1.weight != 0 {
-            sums[row0 + x1.dst as usize] -= weighted_y0 * x1.weight as u32;
-        }
-
-        if y1.weight != 0 {
-            let row1 = y1.row as usize;
-            let weighted_y1 = magnitude * y1.weight as u32;
-            sums[row1 + x0.dst as usize] -= weighted_y1 * x0.weight as u32;
-            if x1.weight != 0 {
-                sums[row1 + x1.dst as usize] -= weighted_y1 * x1.weight as u32;
-            }
-        }
-    }
-}
-
 impl Ppu {
     fn new(chr_rom: Vec<u8>, vertical_mirroring: bool) -> Self {
         let chr_addr_mask = chr_rom.len() - 1;
@@ -327,6 +191,14 @@ impl Ppu {
         self.frame_dot = 0;
         self.frame = 0;
         self.nmi_pending = false;
+    }
+
+    fn oam(&self) -> &[u8; 256] {
+        &self.oam
+    }
+
+    fn debug_bg_pixel(&self, x: usize, y: usize) -> (u8, bool) {
+        (self.bg_color_index(x, y), self.bg_pixel_opaque(x, y))
     }
 
     fn load_fceu_state(
@@ -606,21 +478,37 @@ impl Ppu {
 
     fn write_gray_frame_cropped_area_84x84(&self, dst: &mut [u8], sprite_shadow: &mut [u8]) {
         debug_assert_eq!(dst.len(), DEFAULT_GRAY_RESIZE_PIXELS);
-        debug_assert!(sprite_shadow.len() >= NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT);
+        let native_len = VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT;
+        debug_assert!(sprite_shadow.len() >= native_len);
+        let native = &mut sprite_shadow[..native_len];
+        self.write_gray_frame_region(
+            native,
+            VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            DEFAULT_GRAY_CROP_HEIGHT,
+        );
 
-        let plan = default_gray_area84_plan();
-        let mut sums = [0u32; DEFAULT_GRAY_RESIZE_PIXELS];
-
-        self.accumulate_bg_gray_area_84x84(&mut sums, plan);
-        if self.mask & 0x10 != 0 {
-            let sprite_shadow = &mut sprite_shadow[..NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
-            sprite_shadow.fill(SPRITE_SHADOW_EMPTY);
-            self.accumulate_sprite_gray_area_84x84_deltas(&mut sums, sprite_shadow, plan);
-        }
-
-        let rounding = DEFAULT_GRAY_AREA_DENOM / 2;
-        for (dst, &sum) in dst.iter_mut().zip(sums.iter()) {
-            *dst = ((sum + rounding) / DEFAULT_GRAY_AREA_DENOM) as u8;
+        for dy in 0..DEFAULT_GRAY_RESIZE_HEIGHT {
+            let y0 = (dy * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT;
+            let y1 = (((dy + 1) * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT)
+                .max(y0 + 1)
+                .min(DEFAULT_GRAY_CROP_HEIGHT);
+            for dx in 0..DEFAULT_GRAY_RESIZE_WIDTH {
+                let x0 = (dx * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH;
+                let x1 = (((dx + 1) * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH)
+                    .max(x0 + 1)
+                    .min(VISIBLE_FRAME_WIDTH);
+                let mut sum = 0u32;
+                for sy in y0..y1 {
+                    let src_row = sy * VISIBLE_FRAME_WIDTH;
+                    for sx in x0..x1 {
+                        sum += native[src_row + sx] as u32;
+                    }
+                }
+                dst[dy * DEFAULT_GRAY_RESIZE_WIDTH + dx] =
+                    (sum / ((x1 - x0) * (y1 - y0)) as u32) as u8;
+            }
         }
     }
 
@@ -717,7 +605,11 @@ impl Ppu {
 
             while out_x < width {
                 let screen_x = crop_left + out_x;
-                let world_x = if y < 32 { screen_x } else { screen_x + scroll_x };
+                let world_x = if y < 32 {
+                    screen_x
+                } else {
+                    screen_x + scroll_x
+                };
                 let table_x = (world_x / 256) & 1;
                 let table = table_y * 2 + table_x;
                 let local_x = world_x & 0xff;
@@ -746,68 +638,6 @@ impl Ppu {
                 }
 
                 out_x += run;
-            }
-        }
-    }
-
-    fn accumulate_bg_gray_area_84x84(
-        &self,
-        sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-        plan: &DefaultGrayArea84Plan,
-    ) {
-        let palette_gray = self.palette_gray();
-        if self.mask & 0x08 == 0 {
-            sums.fill(palette_gray[0] as u32 * DEFAULT_GRAY_AREA_DENOM);
-            return;
-        }
-
-        let pattern_base = if self.ctrl & 0x10 != 0 {
-            0x1000
-        } else {
-            0x0000
-        };
-        let scroll_x = self.render_scroll_x_px() as usize;
-        let scroll_y = self.scroll_y_px as usize;
-
-        for out_y in 0..DEFAULT_GRAY_CROP_HEIGHT {
-            let y = DEFAULT_GRAY_CROP_TOP + out_y;
-            let world_y = y + scroll_y;
-            let table_y = (world_y / 240) & 1;
-            let local_y = world_y % 240;
-            let tile_y = local_y / 8;
-            let fine_y = local_y & 7;
-            let y_contributions = &plan.y[out_y];
-            let mut x = 0usize;
-
-            while x < NES_WIDTH {
-                let world_x = x + scroll_x;
-                let table_x = (world_x / 256) & 1;
-                let table = table_y * 2 + table_x;
-                let local_x = world_x & 0xff;
-                let tile_x = local_x / 8;
-                let fine_x = local_x & 7;
-                let tile_id = self.nametable_read(table, tile_y * 32 + tile_x) as usize;
-                let attr = self.nametable_read(table, 0x3c0 + (tile_y / 4) * 8 + (tile_x / 4));
-                let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
-                let palette_id = (attr >> shift) & 0x03;
-                let bg_palette_base = (palette_id as usize) * 4;
-                let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-                let lo = self.chr_read(pattern_addr);
-                let hi = self.chr_read(pattern_addr + 8);
-                let run = (8 - fine_x).min(NES_WIDTH - x);
-
-                for col in 0..run {
-                    let bit = 7 - (fine_x + col);
-                    let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                    let gray = if pixel == 0 {
-                        palette_gray[0]
-                    } else {
-                        palette_gray[bg_palette_base + pixel as usize]
-                    };
-                    accumulate_area_84x84_pixel(sums, &plan.x[x + col], y_contributions, gray);
-                }
-
-                x += run;
             }
         }
     }
@@ -940,45 +770,26 @@ impl Ppu {
         (((lo >> bit) & 1) | (((hi >> bit) & 1) << 1)) != 0
     }
 
-    #[inline]
-    fn bg_gray_pixel(&self, x: usize, y: usize, palette_gray: &[u8; 32]) -> u8 {
-        if self.mask & 0x08 == 0 {
-            return palette_gray[0];
+    fn sprite_scanline_mask(&self) -> [u64; NES_HEIGHT] {
+        let mut mask = [0u64; NES_HEIGHT];
+        let mut counts = [0u8; NES_HEIGHT];
+        for sprite in 0..64usize {
+            let base = sprite * 4;
+            let sprite_y = self.oam[base] as i16 + 1;
+            for row in 0..8usize {
+                let screen_y = sprite_y + row as i16;
+                if !(0..NES_HEIGHT as i16).contains(&screen_y) {
+                    continue;
+                }
+                let screen_y = screen_y as usize;
+                if counts[screen_y] >= 8 {
+                    continue;
+                }
+                counts[screen_y] += 1;
+                mask[screen_y] |= 1u64 << sprite;
+            }
         }
-
-        let (world_x, world_y) = self.bg_world_pos(x, y);
-        let table_x = (world_x / 256) & 1;
-        let table_y = (world_y / 240) & 1;
-        let table = table_y * 2 + table_x;
-
-        let local_x = world_x & 0xff;
-        let local_y = world_y % 240;
-        let tile_x = local_x / 8;
-        let tile_y = local_y / 8;
-        let fine_x = local_x & 7;
-        let fine_y = local_y & 7;
-
-        let nt_base = 0x2000 + (table as u16) * 0x400;
-        let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
-        let attr = self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
-        let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
-        let palette_id = (attr >> shift) & 0x03;
-
-        let pattern_base = if self.ctrl & 0x10 != 0 {
-            0x1000
-        } else {
-            0x0000
-        };
-        let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-        let lo = self.chr_read(pattern_addr);
-        let hi = self.chr_read(pattern_addr + 8);
-        let bit = 7 - fine_x;
-        let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-        if pixel == 0 {
-            palette_gray[0]
-        } else {
-            palette_gray[(palette_id as usize) * 4 + pixel as usize]
-        }
+        mask
     }
 
     fn draw_sprites_gray(&self, dst: &mut [u8]) {
@@ -992,6 +803,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1008,6 +820,9 @@ impl Ppu {
                 if !(0..NES_HEIGHT as i16).contains(&screen_y) {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1022,13 +837,15 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
+                    let idx = screen_y as usize * NES_WIDTH + screen_x as usize;
                     if behind_background
                         && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
                     {
+                        dst[idx] = NES_GRAY_PALETTE
+                            [self.bg_color_index(screen_x as usize, screen_y as usize) as usize];
                         continue;
                     }
-                    dst[screen_y as usize * NES_WIDTH + screen_x as usize] =
-                        palette_gray[palette_base + pixel as usize];
+                    dst[idx] = palette_gray[palette_base + pixel as usize];
                 }
             }
         }
@@ -1047,6 +864,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1063,6 +881,9 @@ impl Ppu {
                 if screen_y < crop_top || screen_y >= crop_bottom {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1077,14 +898,16 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
+                    let out_y = (screen_y - crop_top) as usize;
+                    let idx = out_y * NES_WIDTH + screen_x as usize;
                     if behind_background
                         && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
                     {
+                        dst[idx] = NES_GRAY_PALETTE
+                            [self.bg_color_index(screen_x as usize, screen_y as usize) as usize];
                         continue;
                     }
-                    let out_y = (screen_y - crop_top) as usize;
-                    dst[out_y * NES_WIDTH + screen_x as usize] =
-                        palette_gray[palette_base + pixel as usize];
+                    dst[idx] = palette_gray[palette_base + pixel as usize];
                 }
             }
         }
@@ -1112,6 +935,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1128,6 +952,9 @@ impl Ppu {
                 if screen_y < crop_top_i || screen_y >= crop_bottom {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1142,86 +969,17 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
+                    let out_y = (screen_y - crop_top_i) as usize;
+                    let out_x = (screen_x - crop_left_i) as usize;
+                    let idx = out_y * width + out_x;
                     if behind_background
                         && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
                     {
+                        dst[idx] = NES_GRAY_PALETTE
+                            [self.bg_color_index(screen_x as usize, screen_y as usize) as usize];
                         continue;
                     }
-                    let out_y = (screen_y - crop_top_i) as usize;
-                    let out_x = (screen_x - crop_left_i) as usize;
-                    dst[out_y * width + out_x] = palette_gray[palette_base + pixel as usize];
-                }
-            }
-        }
-    }
-
-    fn accumulate_sprite_gray_area_84x84_deltas(
-        &self,
-        sums: &mut [u32; DEFAULT_GRAY_RESIZE_PIXELS],
-        sprite_shadow: &mut [u8],
-        plan: &DefaultGrayArea84Plan,
-    ) {
-        let palette_gray = self.palette_gray();
-        let crop_top = DEFAULT_GRAY_CROP_TOP as i16;
-        let crop_bottom = crop_top + DEFAULT_GRAY_CROP_HEIGHT as i16;
-        let pattern_base = if self.ctrl & 0x08 != 0 {
-            0x1000
-        } else {
-            0x0000
-        };
-        for sprite in (0..64).rev() {
-            let base = sprite * 4;
-            let sprite_y = self.oam[base] as i16 + 1;
-            let tile = self.oam[base + 1] as usize;
-            let attr = self.oam[base + 2];
-            let sprite_x = self.oam[base + 3] as i16;
-            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
-            let flip_h = attr & 0x40 != 0;
-            let flip_v = attr & 0x80 != 0;
-            let behind_background = attr & 0x20 != 0;
-
-            for row in 0..8usize {
-                let screen_y = sprite_y + row as i16;
-                if screen_y < crop_top || screen_y >= crop_bottom {
-                    continue;
-                }
-                let tile_row = if flip_v { 7 - row } else { row };
-                let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_read(pattern_addr);
-                let hi = self.chr_read(pattern_addr + 8);
-                for col in 0..8usize {
-                    let screen_x = sprite_x + col as i16;
-                    if !(0..NES_WIDTH as i16).contains(&screen_x) {
-                        continue;
-                    }
-                    let tile_col = if flip_h { col } else { 7 - col };
-                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
-                    if pixel == 0 {
-                        continue;
-                    }
-                    let x = screen_x as usize;
-                    let y = screen_y as usize;
-                    if behind_background && self.bg_pixel_opaque(x, y) {
-                        continue;
-                    }
-
-                    let out_y = y - DEFAULT_GRAY_CROP_TOP;
-                    let shadow_idx = out_y * NES_WIDTH + x;
-                    let old_gray = if sprite_shadow[shadow_idx] == SPRITE_SHADOW_EMPTY {
-                        self.bg_gray_pixel(x, y, &palette_gray)
-                    } else {
-                        sprite_shadow[shadow_idx]
-                    };
-                    let new_gray = palette_gray[palette_base + pixel as usize];
-                    if new_gray != old_gray {
-                        add_area_84x84_delta(
-                            sums,
-                            &plan.x[x],
-                            &plan.y[out_y],
-                            new_gray as i16 - old_gray as i16,
-                        );
-                        sprite_shadow[shadow_idx] = new_gray;
-                    }
+                    dst[idx] = palette_gray[palette_base + pixel as usize];
                 }
             }
         }
@@ -1238,6 +996,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1254,6 +1013,9 @@ impl Ppu {
                 if !(0..NES_HEIGHT as i16).contains(&screen_y) {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1268,13 +1030,18 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
+                    let idx = screen_y as usize * NES_WIDTH + screen_x as usize;
                     if behind_background
                         && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
                     {
+                        let color =
+                            nes_rgb(self.bg_color_index(screen_x as usize, screen_y as usize));
+                        dst[idx] = color[0];
+                        dst[plane + idx] = color[1];
+                        dst[plane * 2 + idx] = color[2];
                         continue;
                     }
                     let color = nes_rgb(self.palette[palette_base + pixel as usize]);
-                    let idx = screen_y as usize * NES_WIDTH + screen_x as usize;
                     dst[idx] = color[0];
                     dst[plane + idx] = color[1];
                     dst[plane * 2 + idx] = color[2];
@@ -1296,6 +1063,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1312,6 +1080,9 @@ impl Ppu {
                 if screen_y < crop_top || screen_y >= crop_bottom {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1326,14 +1097,19 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
+                    let out_y = (screen_y - crop_top) as usize;
+                    let idx = out_y * NES_WIDTH + screen_x as usize;
                     if behind_background
                         && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
                     {
+                        let color =
+                            nes_rgb(self.bg_color_index(screen_x as usize, screen_y as usize));
+                        dst[idx] = color[0];
+                        dst[plane + idx] = color[1];
+                        dst[plane * 2 + idx] = color[2];
                         continue;
                     }
                     let color = nes_rgb(self.palette[palette_base + pixel as usize]);
-                    let out_y = (screen_y - crop_top) as usize;
-                    let idx = out_y * NES_WIDTH + screen_x as usize;
                     dst[idx] = color[0];
                     dst[plane + idx] = color[1];
                     dst[plane * 2 + idx] = color[2];
@@ -1364,6 +1140,7 @@ impl Ppu {
         } else {
             0x0000
         };
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1380,6 +1157,9 @@ impl Ppu {
                 if screen_y < crop_top_i || screen_y >= crop_bottom {
                     continue;
                 }
+                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
+                    continue;
+                }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
@@ -1394,15 +1174,20 @@ impl Ppu {
                     if pixel == 0 {
                         continue;
                     }
-                    if behind_background
-                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
-                    {
-                        continue;
-                    }
-                    let color = nes_rgb(self.palette[palette_base + pixel as usize]);
                     let out_y = (screen_y - crop_top_i) as usize;
                     let out_x = (screen_x - crop_left_i) as usize;
                     let idx = out_y * width + out_x;
+                    if behind_background
+                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
+                    {
+                        let color =
+                            nes_rgb(self.bg_color_index(screen_x as usize, screen_y as usize));
+                        dst[idx] = color[0];
+                        dst[plane + idx] = color[1];
+                        dst[plane * 2 + idx] = color[2];
+                        continue;
+                    }
+                    let color = nes_rgb(self.palette[palette_base + pixel as usize]);
                     dst[idx] = color[0];
                     dst[plane + idx] = color[1];
                     dst[plane * 2 + idx] = color[2];
@@ -1455,10 +1240,7 @@ const fn build_nes_gray_palette() -> [u8; 64] {
     let mut color = 0;
     while color < 64 {
         let rgb = NES_RGB_PALETTE[color];
-        table[color] = (((rgb[0] as u32) * 77
-            + (rgb[1] as u32) * 150
-            + (rgb[2] as u32) * 29
-            + 128)
+        table[color] = (((rgb[0] as u32) * 77 + (rgb[1] as u32) * 150 + (rgb[2] as u32) * 29 + 128)
             >> 8) as u8;
         color += 1;
     }
@@ -1539,12 +1321,12 @@ const NES_RGB_PALETTE: [[u8; 3]; 64] = [
 
 #[inline]
 fn next_ppu_event_dot(current: usize) -> usize {
-    if current < PPU_SPRITE0_DOT {
-        PPU_SPRITE0_DOT
-    } else if current < PPU_VBLANK_DOT {
+    if current < PPU_VBLANK_DOT {
         PPU_VBLANK_DOT
     } else if current < PPU_PRERENDER_DOT {
         PPU_PRERENDER_DOT
+    } else if current < PPU_SPRITE0_DOT {
+        PPU_SPRITE0_DOT
     } else {
         PPU_DOTS_PER_FRAME
     }
@@ -1703,6 +1485,11 @@ impl NesEmulator {
         self.extra_cycles = 0;
         self.done = false;
         self.refresh_smb_state();
+        // FCEU state files resume close to, but not exactly at, this simplified
+        // PPU frame boundary. One no-op frame matches stable-retro's first
+        // visible gameplay frame without changing the reset observation.
+        self.run_frame(0);
+        self.refresh_smb_state();
         Ok(())
     }
 
@@ -1712,13 +1499,13 @@ impl NesEmulator {
             return 0.0;
         }
 
-        let before = self.x_pos;
+        let before = self.xscroll_lo;
         self.run_frame(action.buttons());
         self.refresh_smb_state();
         if self.terminate_on_flag && self.x_pos >= 3160 {
             self.done = true;
         }
-        self.x_pos.saturating_sub(before) as f32
+        (self.xscroll_lo as i16 - before as i16).max(0) as f32
     }
 
     #[inline]
@@ -1753,12 +1540,7 @@ impl NesEmulator {
     }
 
     #[inline]
-    pub fn write_gray_visible_frame_cropped(
-        &self,
-        dst: &mut [u8],
-        crop_top: usize,
-        height: usize,
-    ) {
+    pub fn write_gray_visible_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         self.ppu.write_gray_frame_region(
             dst,
             VISIBLE_FRAME_TOP + crop_top,
@@ -1825,6 +1607,21 @@ impl NesEmulator {
     }
 
     #[inline]
+    pub fn ram(&self) -> &[u8; 2048] {
+        &self.ram
+    }
+
+    #[inline]
+    pub fn oam(&self) -> &[u8; 256] {
+        self.ppu.oam()
+    }
+
+    #[inline]
+    pub fn debug_bg_pixel(&self, x: usize, y: usize) -> (u8, bool) {
+        self.ppu.debug_bg_pixel(x, y)
+    }
+
+    #[inline]
     pub fn is_done(&self) -> bool {
         self.done
     }
@@ -1856,10 +1653,7 @@ impl NesEmulator {
         self.time = decode_ln_bcd_be(&self.ram[0x07f8..0x07fb]) as u16;
         self.xscroll_hi = self.ram[0x071a];
         self.xscroll_lo = self.ram[0x071c];
-        let active_gameplay = self.ram[0x0770] == 1 && self.ram[0x0772] == 3;
-        let scroll_x = ((self.xscroll_hi as u16) << 8) | self.xscroll_lo as u16;
-        self.ppu
-            .set_scroll_override_x(active_gameplay.then_some(scroll_x));
+        self.ppu.set_scroll_override_x(None);
     }
 
     #[inline]
@@ -3062,49 +2856,26 @@ fn page_crossed(a: u16, b: u16) -> bool {
 mod tests {
     use super::*;
 
-    struct TestAreaAxisBin {
-        start: usize,
-        weights: Vec<u32>,
-    }
-
-    fn build_test_area_axis(src_len: usize, dst_len: usize) -> Vec<TestAreaAxisBin> {
-        (0..dst_len)
-            .map(|dst_i| {
-                let start_num = dst_i * src_len;
-                let end_num = (dst_i + 1) * src_len;
-                let start = start_num / dst_len;
-                let end = (end_num + dst_len - 1) / dst_len;
-                let weights = (start..end)
-                    .map(|src_i| {
-                        let pixel_start = src_i * dst_len;
-                        let pixel_end = (src_i + 1) * dst_len;
-                        pixel_end
-                            .min(end_num)
-                            .saturating_sub(pixel_start.max(start_num))
-                            as u32
-                    })
-                    .collect::<Vec<_>>();
-                TestAreaAxisBin { start, weights }
-            })
-            .collect()
-    }
-
     fn resize_default_area_reference(src: &[u8], dst: &mut [u8]) {
-        let x_bins = build_test_area_axis(NES_WIDTH, DEFAULT_GRAY_RESIZE_WIDTH);
-        let y_bins = build_test_area_axis(DEFAULT_GRAY_CROP_HEIGHT, DEFAULT_GRAY_RESIZE_HEIGHT);
-        let rounding = DEFAULT_GRAY_AREA_DENOM / 2;
-
-        for (dst_y, y_bin) in y_bins.iter().enumerate() {
-            for (dst_x, x_bin) in x_bins.iter().enumerate() {
+        for dst_y in 0..DEFAULT_GRAY_RESIZE_HEIGHT {
+            let y0 = (dst_y * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT;
+            let y1 = (((dst_y + 1) * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT)
+                .max(y0 + 1)
+                .min(DEFAULT_GRAY_CROP_HEIGHT);
+            for dst_x in 0..DEFAULT_GRAY_RESIZE_WIDTH {
+                let x0 = (dst_x * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH;
+                let x1 = (((dst_x + 1) * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH)
+                    .max(x0 + 1)
+                    .min(VISIBLE_FRAME_WIDTH);
                 let mut sum = 0u32;
-                for (dy, &wy) in y_bin.weights.iter().enumerate() {
-                    let row = (y_bin.start + dy) * NES_WIDTH;
-                    for (dx, &wx) in x_bin.weights.iter().enumerate() {
-                        sum += src[row + x_bin.start + dx] as u32 * wy * wx;
+                for sy in y0..y1 {
+                    let row = sy * VISIBLE_FRAME_WIDTH;
+                    for sx in x0..x1 {
+                        sum += src[row + sx] as u32;
                     }
                 }
                 dst[dst_y * DEFAULT_GRAY_RESIZE_WIDTH + dst_x] =
-                    ((sum + rounding) / DEFAULT_GRAY_AREA_DENOM) as u8;
+                    (sum / ((x1 - x0) * (y1 - y0)) as u32) as u8;
             }
         }
     }
@@ -3141,13 +2912,63 @@ mod tests {
         ppu
     }
 
+    #[test]
+    fn sprite_scanline_mask_limits_to_first_eight_oam_sprites() {
+        let mut ppu = Ppu::new(vec![0; 8192], true);
+        ppu.oam.fill(0xff);
+        for sprite in 0..9usize {
+            set_sprite(&mut ppu, sprite, 50, 1, 0x00, (sprite * 8) as u8);
+        }
+
+        let mask = ppu.sprite_scanline_mask();
+
+        assert_eq!(mask[50].count_ones(), 8);
+        for sprite in 0..8usize {
+            assert_ne!(mask[50] & (1u64 << sprite), 0);
+        }
+        assert_eq!(mask[50] & (1u64 << 8), 0);
+    }
+
+    #[test]
+    fn behind_background_sprite_blocks_lower_priority_sprites() {
+        let mut chr_rom = vec![0; 8192];
+        for tile in [1usize, 2usize] {
+            for row in 0..8usize {
+                chr_rom[tile * 16 + row] = 0xff;
+            }
+        }
+        let mut ppu = Ppu::new(chr_rom, true);
+        ppu.mask = 0x18;
+        ppu.vram[(40 / 8) * 32 + (40 / 8)] = 2;
+        ppu.palette[1] = 0x0f;
+        ppu.palette[0x11] = 0x30;
+        ppu.oam.fill(0xff);
+        set_sprite(&mut ppu, 1, 40, 1, 0x00, 40);
+        set_sprite(&mut ppu, 0, 40, 1, 0x20, 40);
+
+        let mut dst =
+            vec![NES_GRAY_PALETTE[ppu.bg_color_index(40, 40) as usize]; NES_WIDTH * NES_HEIGHT];
+        ppu.draw_sprites_gray(&mut dst);
+
+        assert_eq!(
+            dst[40 * NES_WIDTH + 40],
+            NES_GRAY_PALETTE[ppu.bg_color_index(40, 40) as usize],
+        );
+    }
+
     fn assert_default_area_writer_matches_scratch(ppu: &Ppu) {
-        let mut native = vec![0; NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
+        let mut native = vec![0; VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
         let mut expected = vec![0; DEFAULT_GRAY_RESIZE_PIXELS];
         let mut actual = vec![0; DEFAULT_GRAY_RESIZE_PIXELS];
-        let mut sprite_shadow = vec![0; NES_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
+        let mut sprite_shadow = vec![0; VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT];
 
-        ppu.write_gray_frame_cropped(&mut native, DEFAULT_GRAY_CROP_TOP, DEFAULT_GRAY_CROP_HEIGHT);
+        ppu.write_gray_frame_region(
+            &mut native,
+            VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            DEFAULT_GRAY_CROP_HEIGHT,
+        );
         resize_default_area_reference(&native, &mut expected);
         ppu.write_gray_frame_cropped_area_84x84(&mut actual, &mut sprite_shadow);
 

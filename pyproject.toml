@@ -33,3 +33,9 @@ constraint-dependencies = [
   "mistralai!=2.4.6",
   "guardrails-ai!=0.10.1",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "retro_oracle: tests that compare against stable-retro-turbo and require the local ROM",
+  "slow: long-running parity stress tests",
+]
