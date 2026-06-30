@@ -41,6 +41,7 @@ app = modal.App("supermariobros-nes-turbo-cpu-benchmarks")
 
 image = (
     modal.Image.from_registry("rust:1.88-bookworm", add_python=PYTHON_VERSION)
+    .apt_install("make")
     .uv_sync(UV_PROJECT_DIR, extras=["dev"], frozen=True)
     .add_local_dir(REPO_ROOT, REMOTE_REPO, copy=True, ignore=IMAGE_IGNORE)
     .workdir(REMOTE_REPO)
@@ -53,9 +54,6 @@ image = (
 
 def benchmark_args(config: dict[str, Any]) -> list[str]:
     pairs = [
-        ("--num-envs", config["num_envs"]),
-        ("--steps", config["steps"]),
-        ("--repeats", config["repeats"]),
         ("--warmup", config["warmup"]),
         ("--frame-skip", config["frame_skip"]),
         ("--frame-stack", config["frame_stack"]),
@@ -78,6 +76,31 @@ def benchmark_args(config: dict[str, Any]) -> list[str]:
     if config["no_start_game"]:
         result.append("--no-start-game")
     return result
+
+
+def benchmark_make_vars(
+    config: dict[str, Any],
+    remote_rom: Path,
+    remote_state_dir: Path,
+    states: list[str],
+) -> list[str]:
+    benchmark_args_list = [
+        "--rom-path",
+        str(remote_rom),
+        "--json",
+        "--state-dir",
+        str(remote_state_dir),
+        *benchmark_args(config),
+    ]
+    if tuple(states) != DEFAULT_STATES:
+        benchmark_args_list.extend(["--states", ",".join(states)])
+    return [
+        "PYTHON=/.uv/.venv/bin/python",
+        f"BENCHMARK_NUM_ENVS={config['num_envs']}",
+        f"BENCHMARK_STEPS={config['steps']}",
+        f"BENCHMARK_REPEATS={config['repeats']}",
+        f"BENCHMARK_ARGS={' '.join(benchmark_args_list)}",
+    ]
 
 
 def parse_states(states: str) -> list[str]:
@@ -231,18 +254,7 @@ def run_benchmark(
         "remote_state_dir": str(remote_state_dir),
     }
 
-    command = [
-        "python",
-        "scripts/benchmark_sps.py",
-        "--rom-path",
-        str(remote_rom),
-        "--json",
-        "--state-dir",
-        str(remote_state_dir),
-        *forwarded_args,
-    ]
-    if tuple(state_files) != DEFAULT_STATES:
-        command.extend(["--states", ",".join(state_files)])
+    command = ["make", "--silent", "benchmark", *forwarded_args]
     proc = subprocess.run(
         command,
         cwd=REMOTE_REPO,
@@ -392,7 +404,13 @@ def main(
 
     rom_bytes = local_rom_path.read_bytes()
     state_files = load_state_files(state_names, state_dir)
-    result = run_benchmark.remote(rom_bytes, state_files, benchmark_args(config))
+    make_vars = benchmark_make_vars(
+        config,
+        Path(REMOTE_ROM),
+        Path(REMOTE_STATE_DIR),
+        state_names,
+    )
+    result = run_benchmark.remote(rom_bytes, state_files, make_vars)
     result["local"] = local_metadata(local_rom_path, rom_bytes, state_files)
 
     output_path = Path(output_json).expanduser() if output_json else None

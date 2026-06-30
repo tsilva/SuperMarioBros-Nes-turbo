@@ -16,8 +16,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "huggingface-hub>=1.8.0",
   "maturin>=1.7,<2",
   "pytest>=8",
+  "stable-baselines3>=2.7.1",
   "stable-retro-turbo==1.0.0.post22; python_version == '3.14'",
 ]
 
@@ -38,4 +40,10 @@ constraint-dependencies = [
 markers = [
   "retro_oracle: tests that compare against stable-retro-turbo and require the local ROM",
   "slow: long-running parity stress tests",
+]
+
+[dependency-groups]
+dev = [
+    "huggingface-hub>=1.8.0",
+    "stable-baselines3>=2.7.1",
 ]

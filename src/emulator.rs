@@ -8,7 +8,9 @@ pub const VISIBLE_FRAME_TOP: usize = 8;
 pub const VISIBLE_FRAME_WIDTH: usize = 240;
 pub const VISIBLE_FRAME_HEIGHT: usize = 224;
 pub const RGB_CHANNELS: usize = 3;
+#[allow(dead_code)]
 pub const FRAME_PIXELS_RGB: usize = NES_WIDTH * NES_HEIGHT * RGB_CHANNELS;
+#[allow(dead_code)]
 pub const FRAME_PIXELS_GRAY: usize = NES_WIDTH * NES_HEIGHT;
 
 const CPU_CYCLES_PER_FRAME_GUARD: usize = 40_000;
@@ -446,6 +448,7 @@ impl Ppu {
         idx
     }
 
+    #[allow(dead_code)]
     fn write_gray_frame(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), FRAME_PIXELS_GRAY);
         for y in 0..NES_HEIGHT {
@@ -457,6 +460,7 @@ impl Ppu {
         self.draw_sprites_gray(dst);
     }
 
+    #[allow(dead_code)]
     fn write_gray_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         debug_assert_eq!(dst.len(), NES_WIDTH * height);
         self.write_bg_gray_cropped_tiled(dst, crop_top, height);
@@ -512,6 +516,7 @@ impl Ppu {
         }
     }
 
+    #[allow(dead_code)]
     fn write_bg_gray_cropped_tiled(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         let palette_gray = self.palette_gray();
         if self.mask & 0x08 == 0 {
@@ -642,6 +647,7 @@ impl Ppu {
         }
     }
 
+    #[allow(dead_code)]
     fn write_rgb_frame(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), FRAME_PIXELS_RGB);
         let plane = NES_WIDTH * NES_HEIGHT;
@@ -657,6 +663,7 @@ impl Ppu {
         self.draw_sprites_rgb(dst);
     }
 
+    #[allow(dead_code)]
     fn write_rgb_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         debug_assert_eq!(dst.len(), NES_WIDTH * height * RGB_CHANNELS);
         let plane = NES_WIDTH * height;
@@ -851,6 +858,7 @@ impl Ppu {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_sprites_gray_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         if self.mask & 0x10 == 0 {
             return;
@@ -985,6 +993,7 @@ impl Ppu {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_sprites_rgb(&self, dst: &mut [u8]) {
         if self.mask & 0x10 == 0 {
             return;
@@ -1050,6 +1059,7 @@ impl Ppu {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_sprites_rgb_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         if self.mask & 0x10 == 0 {
             return;
@@ -1509,11 +1519,13 @@ impl NesEmulator {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn write_rgb_frame(&self, dst: &mut [u8]) {
         self.ppu.write_rgb_frame(dst);
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn write_rgb_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         self.ppu.write_rgb_frame_cropped(dst, crop_top, height);
     }
@@ -1530,11 +1542,13 @@ impl NesEmulator {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn write_gray_frame(&self, dst: &mut [u8]) {
         self.ppu.write_gray_frame(dst);
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn write_gray_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         self.ppu.write_gray_frame_cropped(dst, crop_top, height);
     }

@@ -15,7 +15,9 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 
 Use the current date in the artifact name. If that path already exists, add a short time suffix, for example `modal-baseline-YYYY-MM-DD-HHMM.json`.
 
-The command uploads the local repo snapshot to Modal and sends the local ROM bytes at runtime. If the user explicitly invoked this skill or asked for a Modal benchmark, treat the invocation as full-access approval for Modal network/auth/upload. If Modal access is still unavailable in the execution environment, report that the benchmark could not run and name the blocker plainly.
+The command uploads the local repo snapshot to Modal and sends the local ROM bytes at runtime. On Modal, the launcher must run the benchmark through the repo Makefile with `make --silent benchmark`, not by calling `scripts/benchmark_sps.py` directly. Pass Modal-only details such as uploaded ROM/state paths and `--json` through `BENCHMARK_ARGS`, and pass the canonical count knobs through `BENCHMARK_NUM_ENVS`, `BENCHMARK_STEPS`, and `BENCHMARK_REPEATS`.
+
+If the user explicitly invoked this skill or asked for a Modal benchmark, treat the invocation as full-access approval for Modal network/auth/upload. If Modal access is still unavailable in the execution environment, report that the benchmark could not run and name the blocker plainly.
 
 Use the launcher defaults unless the user asks otherwise:
 
@@ -29,7 +31,7 @@ Use the launcher defaults unless the user asks otherwise:
 - states `Level1-1,Level1-2,Level1-3,Level1-4`
 
 The launcher runs one 16-env benchmark with those states repeated round-robin
-across lanes.
+across lanes by invoking `make --silent benchmark` inside the Modal container.
 It uploads the local ROM bytes plus the four stable-retro `.state` files at
 runtime. State files resolve from an explicit `--state-dir`, `SUPERMARIOBROSNES_FASTENV_STATE_DIR`,
 an installed `stable_retro` package, or the sibling `stable-retro-turbo`
@@ -39,7 +41,7 @@ checkout.
 
 After the Modal run completes, read the saved JSON artifact and report the result in this shape:
 
-- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes and state bytes at runtime, and ran one 16-env mixed-lane benchmark across the first four Level1 states.
+- Start with whether it worked and briefly say Modal built the image, uploaded the repo snapshot, built/installed the Rust extension, uploaded ROM bytes and state bytes at runtime, and ran `make --silent benchmark` for one 16-env mixed-lane benchmark across the first four Level1 states.
 - Link the saved artifact with an absolute file link.
 - Include a `Mixed-lane results` code block:
 
