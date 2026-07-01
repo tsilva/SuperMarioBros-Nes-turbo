@@ -1,308 +1,64 @@
 {
-  "campaign_id": "sps-2026-06-29T19-13-25Z",
-  "authorized_by_user": true,
-  "authorized_at": "2026-06-29T19:12:00Z",
-  "permission_envelope": {
-    "num_agents": 3,
-    "modal_network_auth_upload_access": true,
-    "local_repo_snapshot_upload": true,
-    "local_rom_byte_upload_at_benchmark_runtime": true,
-    "local_state_byte_upload_at_benchmark_runtime": true,
-    "max_parallel_modal_runs": 3,
-    "max_total_modal_runs": 6,
-    "max_estimated_spend_usd": 10
-  },
-  "num_agents": 3,
+  "campaign_id": "sps-2026-06-30-continuous",
+  "mode": "autoresearch-speed",
+  "branch": "codex/autoresearch-continuous",
   "root_branch": "main",
-  "orchestration_branch": "codex/autoresearch-2026-06-29T19-13-25Z",
-  "created_from_sha": "8d83db88333bbe2009f9fac6be5c53608f71e915",
-  "created_at": "2026-06-29T19:13:25Z",
+  "root_sha": "694b4d3bcf6c29b1c882e630fd68bbe9b5e42e00",
+  "created_at": "2026-06-30T21:27:00+01:00",
+  "updated_at": "2026-06-30T21:52:00+01:00",
   "allowed_benchmark_skill": "/modal-benchmark",
   "allowed_output_root": "artifacts/benchmarks/",
-  "max_parallel_modal_runs": 3,
-  "max_total_modal_runs": 6,
-  "max_estimated_spend_usd": 10,
+  "run_limits": {
+    "max_total_modal_runs": null,
+    "max_estimated_spend_usd": null
+  },
   "modal_runs_used": 4,
-  "modal_runs_reserved_for_reproduction": 1,
-  "integration_sha": "358af482646c23cf0b235501d424ba3eba8981ca",
-  "current_baseline_artifact": "artifacts/benchmarks/area84-inner-loop-hoist-repro-2026-06-29-2033.json",
-  "current_baseline_modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-MELwOAtFU7FuHHNjOAJ0H4",
-  "current_baseline_mean_env_steps_per_sec": 31197.558920622152,
-  "current_baseline_stdev_env_steps_per_sec": 346.9142042177417,
-  "current_baseline_best_env_steps_per_sec": 31680.381697910852,
-  "acceptance_threshold_mean_env_steps_per_sec": 34317.31481268437,
-  "baseline_modal_machine": {
-    "cpu_request": 16.0,
-    "memory_mb": 8192,
-    "os_cpu_count": 32,
-    "affinity_cpu_count": 32
-  },
-  "baseline_local_git": {
-    "commit": "8d83db88333bbe2009f9fac6be5c53608f71e915",
-    "status_short": ""
-  },
-  "proposals": [
+  "initial_baseline_artifact": "artifacts/benchmarks/autoresearch-baseline-2026-06-30-2127.json",
+  "initial_baseline_modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-dR23r7fqcl2XuGibBDfDYv",
+  "initial_baseline_mean_env_steps_per_sec": 13323.438848928437,
+  "current_baseline_artifact": "artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json",
+  "current_baseline_modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-cmCU2qywGUubzxCh56KE8N",
+  "current_baseline_mean_env_steps_per_sec": 15578.861179563328,
+  "current_baseline_stdev_env_steps_per_sec": 476.39830746456073,
+  "current_baseline_best_env_steps_per_sec": 16019.593596967652,
+  "accepted_commits": [
     {
-      "proposal_id": "area84-inner-loop-hoist",
-      "source_workers": [
-        "019f14cd-9d5e-72c1-aa01-5c7f9568dd77",
-        "019f14cd-bc79-7a83-aa90-761fbde8e796"
-      ],
-      "merged_from": [
-        "render-plan-hoist-001",
-        "p3-area84-inner-loop-hoist",
-        "render-direct-ntread-002"
-      ],
-      "hypothesis": "Hoist the default grayscale 84x84 resize plan out of per-pixel helpers and tighten default cropped grayscale background/sprite contribution loops without changing output bytes.",
-      "expected_bottleneck": "Default benchmark rendering spends many tiny operations in per-source-pixel area accumulation and render-time nametable/attribute reads after the fused renderer work already removed the large scratch resize.",
-      "expected_gain_pct": 12.0,
-      "expected_gain_range_pct": [
-        8.0,
-        18.0
-      ],
-      "confidence": 0.5,
-      "estimated_wall_clock_minutes": 150,
-      "review_risk_penalty": 35,
-      "modal_wait_penalty": 10,
-      "priority_score": 0.0308,
-      "files_likely_to_change": [
-        "src/emulator.rs",
-        "docs/PERFORMANCE_PLAN.md"
-      ],
-      "correctness_risks": [
-        "off-by-one area weights",
-        "rounding drift",
-        "sprite/background priority mistakes",
-        "vertical/horizontal nametable mirroring mistakes"
-      ],
-      "minimum_checks": [
-        "cargo test --release",
-        ".venv/bin/python -m maturin develop --release",
-        ".venv/bin/python scripts/check_vec_env_equivalence.py",
-        ".venv/bin/python scripts/smoke_smb.py",
-        "cargo fmt --check",
-        "cargo check --release"
-      ],
-      "suggested_modal_artifact": "artifacts/benchmarks/area84-inner-loop-hoist-2026-06-29.json",
-      "dedupe_status": "selected"
-    },
-    {
-      "proposal_id": "rust-repeated-uniform-step",
-      "source_worker": "019f14cd-bc79-7a83-aa90-761fbde8e796",
-      "hypothesis": "Add an honest repeated uniform-step API that executes every step/render/stack update in Rust while removing repeated Python loop, PyO3 validation, action copy, and uniform-action scan overhead for include_info=false benchmark runs.",
-      "expected_bottleneck": "The canonical benchmark calls env.step_fast(actions) 500 times per repeat even though actions are a fixed uniform noop vector and the env remains in synced-lane mode.",
-      "expected_gain_pct": 10.0,
-      "expected_gain_range_pct": [
-        4.0,
-        12.0
-      ],
-      "confidence": 0.35,
-      "estimated_wall_clock_minutes": 120,
-      "review_risk_penalty": 50,
-      "modal_wait_penalty": 10,
-      "priority_score": 0.0194,
-      "files_likely_to_change": [
-        "scripts/benchmark_sps.py",
-        "python/supermariobrosnes_turbo/env.py",
-        "src/py_api.rs",
-        "src/vec_env.rs"
-      ],
-      "correctness_risks": [
-        "accidentally skipping intermediate step work",
-        "stale scalar info arrays",
-        "benchmark-only API ambiguity",
-        "reward accumulation semantics confusion"
-      ],
-      "minimum_checks": [
-        "targeted repeated-step equivalence check",
-        "cargo test --release",
-        ".venv/bin/python -m maturin develop --release",
-        ".venv/bin/python scripts/check_vec_env_equivalence.py",
-        ".venv/bin/python scripts/smoke_smb.py",
-        "cargo fmt --check",
-        "cargo check --release"
-      ],
-      "suggested_modal_artifact": "artifacts/benchmarks/rust-repeated-uniform-step-2026-06-29.json",
-      "dedupe_status": "selected"
+      "commit": "68bea25aea9fe923c49a3871317f7b9d6365d815",
+      "description": "Share repeated state groups in parallel",
+      "artifact": "artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json",
+      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-cmCU2qywGUubzxCh56KE8N",
+      "mean_env_steps_per_sec": 15578.861179563328,
+      "stdev_env_steps_per_sec": 476.39830746456073,
+      "best_env_steps_per_sec": 16019.593596967652,
+      "gain_pct_vs_previous_baseline": 16.928229687610163,
+      "speedup_vs_previous_baseline": 1.1692822968761016,
+      "reason": "Parallel group leaders preserved Modal CPU parallelism while avoiding duplicate emulator work for repeated saved-state lanes."
     }
   ],
-  "rejected_proposals": [
+  "discarded_commits": [
     {
-      "proposal_id": "sprite-shadow-stamps-003",
-      "reason": "Potentially useful but lower expected canonical gain and overlaps renderer surface after area84-inner-loop-hoist."
+      "commit": "c75909ea8294d1aa48be7f36bc182bbb898a5c2a",
+      "description": "Share repeated state groups in vec env",
+      "artifact": "artifacts/benchmarks/grouped-synced-state-lanes-2026-06-30-2135.json",
+      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-nBBhJlU3gUz2kQPSaCfJjd",
+      "mean_env_steps_per_sec": 10110.454769306416,
+      "stdev_env_steps_per_sec": 18.15000183245132,
+      "best_env_steps_per_sec": 10130.11208397936,
+      "gain_pct": -24.115276213996594,
+      "reason": "Modal benchmark was substantially slower despite local diagnostic speedup."
     },
     {
-      "proposal_id": "chr-row-decode-004",
-      "reason": "Plausible but higher implementation surface than area84-inner-loop-hoist for similar expected upside."
-    },
-    {
-      "proposal_id": "p4-default-gray-render-scratch-layout",
-      "reason": "Composable renderer cleanup, but expected 3-8% is unlikely to clear the >10% acceptance threshold alone."
-    },
-    {
-      "proposal_id": "p5-shared-rom-clone-materialization",
-      "reason": "Good mixed-action cleanup, but canonical uniform-noop benchmark never materializes divergent lanes during measured steps."
-    },
-    {
-      "proposal_id": "p6-synced-output-broadcast-view",
-      "reason": "Rejected as contract-weakening because a zero-stride or aliasing observation view would change public materialized C-contiguous array semantics."
-    },
-    {
-      "proposal_id": "p3-step-into-fast-uniform-action",
-      "reason": "Subsumed by rust-repeated-uniform-step and likely too small alone."
+      "commit": "40089b0a771f44abfd9c0585451147293ff04be5",
+      "description": "Reuse synced group action mask",
+      "artifact": "artifacts/benchmarks/reuse-synced-group-action-mask-2026-06-30-2147.json",
+      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-WFKfAF0NwTU0TGoDlRh9lR",
+      "mean_env_steps_per_sec": 11788.82555283185,
+      "stdev_env_steps_per_sec": 679.4459538515811,
+      "best_env_steps_per_sec": 12572.927458363924,
+      "gain_pct": -24.328065980222767,
+      "reason": "Clean Modal run was substantially slower than the accepted parallel grouped-state baseline."
     }
   ],
-  "work_items": [
-    {
-      "id": "area84-inner-loop-hoist",
-      "proposal_id": "area84-inner-loop-hoist",
-      "hypothesis": "Optimize the exact default cropped grayscale 84x84 renderer inner loop while preserving byte-for-byte output.",
-      "scope": "src/emulator.rs renderer internals and docs only; no Python API, action, reward, done, reset, or benchmark contract changes.",
-      "status": "assigned",
-      "owner": "worker-area84",
-      "lease_expires_at": "2026-06-29T22:45:00Z",
-      "base_sha": "671b6c752b1f0f6c4c462cd5b653b7802297f91b",
-      "worktree_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo-worktrees/area84-inner-loop-hoist",
-      "state_dir": "/Users/tsilva/repos/tsilva/stable-retro-turbo/stable_retro/data/stable/SuperMarioBros-Nes-v0",
-      "expected_gain_pct": 12.0,
-      "risk_notes": "Byte-for-byte renderer parity required before any Modal slot."
-    },
-    {
-      "id": "rust-repeated-uniform-step",
-      "proposal_id": "rust-repeated-uniform-step",
-      "hypothesis": "Move repeated uniform benchmark stepping into Rust without skipping emulator progression or observation materialization.",
-      "scope": "Additive repeated-step API in src/py_api.rs/src/vec_env.rs/env.py and benchmark_sps.py usage only when include_info=false and actions are uniform.",
-      "status": "assigned",
-      "owner": "worker-repeated-step",
-      "lease_expires_at": "2026-06-29T22:45:00Z",
-      "base_sha": "671b6c752b1f0f6c4c462cd5b653b7802297f91b",
-      "worktree_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo-worktrees/rust-repeated-uniform-step",
-      "state_dir": "/Users/tsilva/repos/tsilva/stable-retro-turbo/stable_retro/data/stable/SuperMarioBros-Nes-v0",
-      "expected_gain_pct": 10.0,
-      "risk_notes": "Must prove final obs/reward/done/info parity against repeated step_fast calls."
-    }
-  ],
-  "candidates": [
-    {
-      "work_item_id": "area84-inner-loop-hoist",
-      "proposal_id": "area84-inner-loop-hoist",
-      "worker_agent": "019f14d3-5f80-7d82-ac85-abe54a5ff25c",
-      "branch": "codex/autoresearch-2026-06-29T19-13-25Z-area84",
-      "worktree_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo-worktrees/area84-inner-loop-hoist",
-      "base_sha": "671b6c7",
-      "head_sha": "d36a1c54386a6efc1c55f3d59d39edc9f5c7e360",
-      "integrated_commit_sha": "44f705e",
-      "changed_files": [
-        "src/emulator.rs"
-      ],
-      "local_checks": {
-        "worker cargo fmt --check": "passed",
-        "worker cargo check --release": "passed",
-        "worker cargo test --release": "passed with PYO3_PYTHON plus libpython RUSTFLAGS after initial PyO3 link failure",
-        "worker .venv/bin/python -m maturin develop --release": "passed with VIRTUAL_ENV pointing at main checkout .venv",
-        "worker .venv/bin/python scripts/check_vec_env_equivalence.py": "passed",
-        "worker .venv/bin/python scripts/smoke_smb.py": "passed",
-        "coordinator cargo fmt --check": "passed",
-        "coordinator cargo check --release": "passed",
-        "coordinator .venv/bin/python -m maturin develop --release": "passed",
-        "coordinator .venv/bin/python scripts/check_vec_env_equivalence.py": "passed",
-        "coordinator .venv/bin/python scripts/smoke_smb.py": "passed",
-        "coordinator cargo test --release with PYO3_PYTHON plus libpython RUSTFLAGS": "passed"
-      },
-      "worker_judge_modal": {
-        "artifact": "artifacts/benchmarks/area84-inner-loop-hoist-2026-06-29.json",
-        "run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-imEDzEacukAIACkp61aCs3",
-        "mean_env_steps_per_sec": 31553.345265806536,
-        "stdev_env_steps_per_sec": 304.92637285086744,
-        "best_env_steps_per_sec": 32008.039267174438,
-        "gain_pct_vs_current_baseline": 17.410236810785487,
-        "level_samples": {
-          "Level1-1": [31556.95, 31603.48, 31668.35],
-          "Level1-2": [31087.81, 31364.41, 30895.59],
-          "Level1-3": [31688.96, 31642.05, 31670.30],
-          "Level1-4": [31720.49, 31733.73, 32008.04]
-        }
-      },
-      "coordinator_reproduction_modal": {
-        "artifact": "artifacts/benchmarks/area84-inner-loop-hoist-repro-2026-06-29-2033.json",
-        "run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-MELwOAtFU7FuHHNjOAJ0H4",
-        "mean_env_steps_per_sec": 31197.558920622152,
-        "stdev_env_steps_per_sec": 346.9142042177417,
-        "best_env_steps_per_sec": 31680.381697910852,
-        "gain_pct_vs_original_baseline": 16.08450325341174,
-        "speedup_multiplier_vs_original_baseline": 1.1608450325341174,
-        "level_samples": {
-          "Level1-1": [31667.1, 31120.2, 31150.7],
-          "Level1-2": [30926.4, 31070.6, 30617.0],
-          "Level1-3": [31680.4, 31638.1, 31583.8],
-          "Level1-4": [30954.5, 30869.4, 31092.5]
-        },
-        "verdict": "accepted"
-      },
-      "verdict": "accepted",
-      "risk_notes": "Default-only renderer inner-loop optimization; direct nametable mirroring is covered by parity test against ppu_read and scratch-resize parity still passes."
-    }
-  ],
-  "candidate_screening": [
-    {
-      "work_item_id": "rust-repeated-uniform-step",
-      "proposal_id": "rust-repeated-uniform-step",
-      "worker_agent": "019f14d3-a194-77e3-9203-8611e11c6688",
-      "branch": "codex/autoresearch-2026-06-29T19-13-25Z-repeated-step",
-      "worktree_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo-worktrees/rust-repeated-uniform-step",
-      "base_sha": "671b6c7",
-      "head_sha": "a93c77e8699df4d254f2c18befb052c36377adca",
-      "changed_files": [
-        "python/supermariobrosnes_turbo/env.py",
-        "scripts/benchmark_sps.py",
-        "scripts/check_repeated_uniform_step.py",
-        "src/py_api.rs",
-        "src/vec_env.rs"
-      ],
-      "local_checks": {
-        "cargo fmt --check": "passed",
-        "cargo check --release": "passed",
-        "cargo test --release": "passed with PYO3_PYTHON plus libpython RUSTFLAGS after initial PyO3 link failure",
-        ".venv/bin/python -m maturin develop --release": "passed with VIRTUAL_ENV set after initial discovery failure",
-        ".venv/bin/python scripts/check_vec_env_equivalence.py": "passed",
-        ".venv/bin/python scripts/smoke_smb.py": "passed",
-        "scripts/check_repeated_uniform_step.py --state-dir": "passed"
-      },
-      "worker_judge_modal": {
-        "artifact": "artifacts/benchmarks/rust-repeated-uniform-step-2026-06-29.json",
-        "run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-3bhOcqnjxyWHDSCv4VPqRs",
-        "mean_env_steps_per_sec": 19605.193282965898,
-        "stdev_env_steps_per_sec": 3980.164564846532,
-        "best_env_steps_per_sec": 22132.788909516206,
-        "gain_pct_vs_current_baseline": -27.050084793202245,
-        "level_samples": {
-          "Level1-1": [22132.8, 22115.6, 22090.8],
-          "Level1-2": [21441.0, 21654.3, 21416.4],
-          "Level1-3": [21140.1, 21132.5, 21142.5],
-          "Level1-4": [13662.0, 13667.1, 13667.4]
-        }
-      },
-      "verdict": "rejected_under_threshold",
-      "risk_notes": "Locally correct additive API, but the one worker Modal run was substantially below baseline, so coordinator reproduction was not warranted."
-    }
-  ],
-  "efficiency_metrics": {
-    "baseline_wait_minutes": 62,
-    "proposal_wave_elapsed_minutes": 6,
-    "proposals_received": 13,
-    "proposals_deduped_selected": 2,
-    "coordinator_review_reproduction_elapsed_minutes": 7,
-    "modal_runs_used": 4,
-    "modal_runs_remaining": 2,
-    "modal_runs_discarded": 1,
-    "modal_runs_saved_by_early_rejection": 1,
-    "proposals_implemented": 2,
-    "candidates_benchmarked": 2,
-    "candidates_reproduced": 1,
-    "candidates_accepted": 1,
-    "accepted_reproduced_gain_pct": 16.08450325341174,
-    "accepted_reproduced_gain_pct_per_wall_clock_minute": 0.2036,
-    "top_avoidable_wait_source": "Modal image rebuild and remote dependency compilation dominated elapsed time.",
-    "top_avoidable_race_conflict_source": "Worker area84 produced an uncommitted patch; coordinator had to commit it before cherry-pick."
-  }
+  "current_experiment": null,
+  "stop_reason": "Paused after one accepted commit and two discarded grouped-lane follow-ups; next step is profiling the accepted path before another Modal candidate."
 }

@@ -31,6 +31,12 @@ Throughput evidence is Modal-only and must go through `/modal-benchmark`.
 Local commands are for correctness, compilation, formatting, profiling, and
 diagnosis only, never acceptance.
 
+`/modal-benchmark` reports pooled absolute SPS for context, but optimization
+acceptance must use its robust paired decision metric: the median of per-replica
+median candidate/baseline ratios after warmup-pair discard, with its bootstrap
+confidence interval and faster-replica count. Treat pooled absolute SPS stdev as
+diagnostic host-variance information, not as the decision statistic.
+
 ## Full Access
 
 Assume `/autoresearch-speed` is invoked with full access. Do not ask for Modal
@@ -134,9 +140,11 @@ Each experiment:
 7. Run exactly one `/modal-benchmark` from that commit.
 8. Append a result row.
 9. Decide:
-   - `keep`: reproduced mean gain `> 10%`, checks pass, complexity acceptable.
-   - `keep_small_gain`: `0% < gain <= 10%` only if simple, low-risk,
-     simplifying, or compounding.
+   - `keep`: `/modal-benchmark` verdict is `accept`, robust paired speedup
+     `> 1.10`, checks pass, complexity acceptable.
+   - `keep_small_gain`: robust paired speedup `> 1.00` but not accepted only if
+     simple, low-risk, simplifying, or compounding, and the Modal result is not
+     noisy enough to be misleading.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
 10. If kept, update baseline fields and continue from the improved branch.
