@@ -24,6 +24,7 @@ single_ref only
 candidate_ref
 baseline_ref candidate_ref
 pypi-stable-retro-turbo
+pypi-supermariobrosnes-turbo
 ```
 
 If the user explicitly asks to benchmark one ref only, run single-ref mode on
@@ -36,6 +37,12 @@ question before running.
 If the user asks for the latest published `stable-retro-turbo` PyPI baseline,
 use the "Published stable-retro-turbo Oracle Baseline" mode below. That mode is
 not a git-ref benchmark; it measures the latest exact PyPI version once per
+workload hash and caches the result locally.
+
+If the user asks to benchmark the latest published
+`SuperMarioBros-Nes-turbo`/`supermariobrosnes-turbo` PyPI release, use the
+"Published SuperMarioBros-Nes-turbo PyPI Baseline" mode below. That mode is not
+a git-ref benchmark; it measures the latest exact PyPI version once per
 workload hash and caches the result locally.
 
 Do not switch local branches. Resolve refs locally with `git rev-parse` and
@@ -463,7 +470,8 @@ For the default remote target, run from the local repo root:
 
 ```bash
 python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
-  --ssh-target beast-3-local
+  --ssh-target beast-3-local \
+  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
 ```
 
 If the direct LAN route is unavailable, use the tailnet route:
@@ -471,7 +479,8 @@ If the direct LAN route is unavailable, use the tailnet route:
 ```bash
 python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
   --ssh-target beast-3.tail50040f.ts.net \
-  --host-key-alias beast-3-local
+  --host-key-alias beast-3-local \
+  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
 ```
 
 For a user-requested local target, do not touch `beast-3-local`. Use a checked-in
@@ -513,6 +522,67 @@ When both local SuperMario and PyPI oracle aggregates exist, report:
 
 ```text
 speedup = supermariobrosnes_turbo_official_median_sps / stable_retro_turbo_pypi_official_median_sps
+```
+
+Use cached PyPI baselines for future comparisons until PyPI publishes a newer
+version or the workload hash changes.
+
+## Published SuperMarioBros-Nes-turbo PyPI Baseline
+
+Use this special mode when the user wants to benchmark the latest published
+`supermariobrosnes-turbo` PyPI wheel rather than a local git ref. The point is
+to measure the exact artifact users can install from PyPI, using the same fixed
+host workload and cache semantics as the git-ref single-ref protocol.
+
+For the default remote target, run from the local repo root:
+
+```bash
+python3 scripts/run_pypi_supermariobrosnes_turbo_host_benchmark.py \
+  --ssh-target beast-3-local \
+  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
+```
+
+If the direct LAN route is unavailable, use the tailnet route:
+
+```bash
+python3 scripts/run_pypi_supermariobrosnes_turbo_host_benchmark.py \
+  --ssh-target beast-3.tail50040f.ts.net \
+  --host-key-alias beast-3-local \
+  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
+```
+
+Pass `--state-dir` only when the remote host's state directory is not the
+standard
+`/home/tsilva/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0`.
+Before running, ensure the state setup from the main "Setup" section has been
+completed on the selected target.
+
+The runner must:
+
+- query `https://pypi.org/pypi/supermariobrosnes-turbo/json` and resolve the
+  latest exact version at runtime
+- use Python `3.14` on the selected target unless the user explicitly requests a
+  different interpreter for compatibility testing
+- create an isolated target venv and install exactly
+  `supermariobrosnes-turbo==VERSION` from PyPI
+- copy `scripts/benchmark_sps.py` into the isolated target run directory and
+  run it with the host workload: `num_envs=16`, `RAYON_NUM_THREADS=12`,
+  `steps=50000`, `repeats=3`, 2 warmup invocations, 11 measured invocations,
+  frame skip 4, frame stack 4, crop top 32, resize 84x84, grayscale, states
+  `Level1-1,Level1-2,Level1-3,Level1-4`, action set `simple`, action `noop`
+- cache results under
+  `artifacts/benchmarks/host-results/pypi-supermariobrosnes-turbo/VERSION/WORKLOAD_HASH/`
+- write `aggregate.json`, `manifest.json`, raw invocation JSON, load snapshots,
+  and `index.jsonl`
+- return a cache hit without touching the selected target when the exact
+  version/workload hash already has an aggregate, unless `--force` is passed
+- purge the target PyPI run directory after copying and validating the local
+  cache, unless `--keep-remote` is passed
+
+When both local-git and PyPI SuperMario aggregates exist, report:
+
+```text
+ratio = local_git_supermariobrosnes_turbo_official_median_sps / pypi_supermariobrosnes_turbo_official_median_sps
 ```
 
 Use cached PyPI baselines for future comparisons until PyPI publishes a newer

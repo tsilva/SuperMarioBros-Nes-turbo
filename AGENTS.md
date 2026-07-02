@@ -6,7 +6,7 @@ Use `/autoresearch-speed` for future throughput optimization rounds in this repo
 
 ## Host Benchmark Skill
 
-Use `/host-benchmark` when the user wants a reliable fixed-host CPU throughput benchmark or comparison on `beast-3-local`. The skill compares exact local git archives without switching branches, builds isolated per-run source/venv directories under `/home/tsilva/SuperMarioBros-Nes-turbo-host-bench`, runs the beast-3-local protocol, and reports fixed-host variance. The skill lives at `.codex/skills/host-benchmark/SKILL.md`.
+Use `/host-benchmark` when the user wants a reliable fixed-host CPU throughput benchmark or comparison on `beast-3-local`. The skill compares exact local git archives without switching branches, can benchmark cached latest PyPI release baselines, builds isolated per-run source/venv directories under `/home/tsilva/SuperMarioBros-Nes-turbo-host-bench`, runs the beast-3-local protocol, and reports fixed-host variance. The skill lives at `.codex/skills/host-benchmark/SKILL.md`.
 
 ## Build Release Skill
 
