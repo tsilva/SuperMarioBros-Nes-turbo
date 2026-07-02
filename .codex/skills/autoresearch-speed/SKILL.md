@@ -27,9 +27,12 @@ Do not fake speed by skipping emulator progression, weakening the workload,
 returning stale observations, changing the public command, or loosening the
 observed contract.
 
-Throughput evidence must go through `/host-benchmark`.
-Local commands are for correctness, compilation, formatting, profiling, and
-diagnosis only, never acceptance.
+Throughput evidence must go through `/host-benchmark`. At the start of every
+campaign turn that needs timing evidence, read
+`.codex/skills/host-benchmark/SKILL.md` and follow that skill as the benchmark
+subroutine. Invoke it with exact committed refs; local dirty files are never part
+of benchmark acceptance. Local commands are for correctness, compilation,
+formatting, profiling, and diagnosis only, never acceptance.
 
 For comparisons, `/host-benchmark` acceptance must use its paired fixed-host
 decision metric: median candidate/baseline ratio after warmup-pair discard, the
@@ -47,6 +50,12 @@ If the user provides host benchmark run or wall-clock limits, record and obey
 them. If not, leave limit fields as `null` and continue until stopped or
 blocked. Run at most one host benchmark at a time.
 
+If `/host-benchmark` cannot produce a valid local `aggregate.json` because the
+host is unreachable, the load gate is busy, setup fails, metadata is malformed,
+or the result is too noisy, do not accept the candidate. Either mark the trial
+`inconclusive` and reset it away, or stop with a clear `stop_reason` when another
+attempt would just repeat the same blocker.
+
 ## Branch And State
 
 Use one persistent campaign branch, normally:
@@ -63,8 +72,13 @@ Before work:
    starting from the current dirty tree.
 4. If resuming, read `.codex/optimization_campaigns/current.json` and
    `.codex/optimization_campaigns/results.tsv`.
-5. If unrelated dirty changes would be carried in, stop and ask.
-6. Inspect the hot path: `scripts/benchmark_sps.py`,
+5. Verify every manifest ref needed for resuming exists locally:
+   `branch`, `root_sha`, current baseline commit, accepted commits, and any
+   candidate commit being compared. If the branch or required commits are
+   missing, stop and ask whether to recreate a fresh campaign from `main`,
+   recover the missing refs, or deliberately migrate the ledger.
+6. If unrelated dirty changes would be carried in, stop and ask.
+7. Inspect the hot path: `scripts/benchmark_sps.py`,
    `python/supermariobrosnes_turbo/env.py`, `src/py_api.rs`,
    `src/vec_env.rs`, `src/emulator.rs`, `Cargo.toml`, `pyproject.toml`, and
    relevant docs.
@@ -79,10 +93,18 @@ Keep `results.tsv` and `ideas.md` uncommitted unless the user asks to commit
 logs. Accepted source commits stay on the campaign branch; rejected commits are
 reset away.
 
-`results.tsv` header:
+`results.tsv` should stay human-scannable. Older campaigns may already have the
+legacy remote-benchmark header:
 
 ```text
 epoch	commit	mean_env_steps_per_sec	stdev_env_steps_per_sec	best_env_steps_per_sec	gain_pct	status	description	artifact
+```
+
+For new host-benchmark rows, prefer the host decision fields and migrate the
+header when practical:
+
+```text
+epoch	commit	baseline_commit	official_median_sps	median_pair_ratio	ci95_low	ci95_high	candidate_faster_pairs	measured_pairs	status	description	artifact
 ```
 
 Statuses: `baseline`, `keep`, `keep_small_gain`, `discard`, `crash`,
@@ -90,7 +112,8 @@ Statuses: `baseline`, `keep`, `keep_small_gain`, `discard`, `crash`,
 
 Manifest fields should include campaign id/mode, branch names, root SHA, epoch,
 allowed benchmark skill/output root, optional host benchmark limits, host
-benchmarks used, current baseline artifact/mean, accepted commits, discarded commits, current
+benchmarks used, current baseline artifact and official median SPS, latest host
+comparison aggregate fields, accepted commits, discarded commits, current
 experiment, and stop reason.
 
 ## Ideas Queue
@@ -198,9 +221,14 @@ required checks. If repair fails after a few focused attempts, log
 
 Fresh campaign:
 
-1. Run the initial `/host-benchmark` single-ref baseline from the unmodified
-   campaign branch.
-2. Record mean, stdev, best, samples, artifact, metadata, and baseline status.
+1. If `.codex/optimization_campaigns/current.json` says
+   `requires_fresh_host_baseline`, satisfy that before selecting another idea.
+2. Run the initial `/host-benchmark` single-ref baseline from the unmodified
+   campaign branch exact `HEAD` commit.
+3. Record the local result bundle, `aggregate.json`, official median SPS,
+   bootstrap CI, CVs, validity gates, host route/load metadata, and baseline
+   status. Do not use older remote/local mean-SPS artifacts as the active
+   baseline for new candidates.
 
 Each experiment:
 
@@ -213,17 +241,28 @@ Each experiment:
 5. Run required checks.
 6. Commit the candidate before benchmarking.
 7. Run exactly one `/host-benchmark` comparison from the current baseline commit
-   to that candidate commit.
-8. Append a result row.
+   to that candidate commit. The host-benchmark skill may escalate from quick to
+   full official inside that single comparison according to its preregistered
+   gates.
+8. Parse the copied local `aggregate.json` and append a result row with the host
+   decision fields.
 9. Decide:
-   - `keep`: `/host-benchmark` comparison is clearly positive, median paired
-     speedup `> 1.10`, checks pass, complexity acceptable.
-   - `keep_small_gain`: median paired speedup `> 1.00` but not a large win only
-     if simple, low-risk, simplifying, or compounding, and the host result is not
-     noisy enough to be misleading.
+   - `keep`: required checks passed, the aggregate is a valid
+     `paired_compare_fixed_host` result, host load/validity gates passed, the
+     bootstrap lower bound is above `1.00`, candidate-faster pair count satisfies
+     the `/host-benchmark` interpretation rules, and median paired speedup is
+     clearly positive. Treat `median_pair_ratio >= 1.10` as a strong keep signal;
+     smaller wins may still need the `keep_small_gain` rules.
+   - `keep_small_gain`: allowed only when `/host-benchmark` would call the result
+     a small fixed-host win, required checks passed, the change is simple,
+     low-risk, simplifying, or plausibly compounding, the bootstrap lower bound
+     is above `1.00`, and the candidate-faster pair count/CV/outlier/load gates
+     are clean. A raw `median_pair_ratio > 1.00` by itself is never enough.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
-10. If kept, update baseline fields and continue from the improved branch.
+10. If kept, update baseline fields to the candidate commit and its latest host
+    comparison artifact/official metrics, then continue from the improved
+    branch.
 11. If rejected, reset back to pre-experiment SHA and continue.
 
 Never assume independent gains add. Every accepted commit becomes the new source
@@ -257,6 +296,15 @@ Preserve or replace with stronger checks:
 Pause cleanly when access fails, user-provided run/spend limits are exhausted,
 the same regression cannot be fixed, benchmark metadata is untrustworthy,
 unexpected unrelated branch changes appear, or the user asks to stop.
+
+For unattended goal execution, prefer blocking over guessing. A successful
+overnight goal may leave accepted commits only when each accepted candidate has:
+passing required checks, an exact-ref host comparison artifact copied locally,
+valid `/host-benchmark` gates, and an updated campaign ledger. Host busy/unreachable
+states, missing fresh baseline, dirty branch ambiguity, failing tests, malformed
+aggregates, noisy CIs, missing campaign branches, or missing manifest refs must
+end as `blocked`, `inconclusive`, `discard`, or a clear pause state, not as
+`keep`.
 
 On pause, leave accepted commits on the campaign branch, rejected commits out of
 history, update campaign state, and report:
