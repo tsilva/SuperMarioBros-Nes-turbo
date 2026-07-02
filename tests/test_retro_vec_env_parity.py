@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import importlib.metadata
+import inspect
 
 import pytest
 import numpy as np
 from gymnasium import spaces
 
 from scripts import compare_retro_vec_env as compare
-from supermariobrosnes_turbo import Actions, RetroVecEnv, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import Actions, Integrations, Observations, RetroVecEnv, State, SuperMarioBrosVecEnv
 
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
 BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
@@ -25,6 +26,79 @@ def require_stable_retro_oracle() -> None:
             "under Python 3.14",
         )
     assert version == compare.EXPECTED_STABLE_RETRO_VERSION
+
+
+def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> None:
+    stable_retro = pytest.importorskip("stable_retro")
+
+    native_signature = inspect.signature(RetroVecEnv)
+    stable_signature = inspect.signature(stable_retro.RetroVecEnv)
+    assert list(native_signature.parameters) == list(stable_signature.parameters)
+
+    native_defaults = {
+        name: parameter.default
+        for name, parameter in native_signature.parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
+    stable_defaults = {
+        name: parameter.default
+        for name, parameter in stable_signature.parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
+
+    literal_defaults = (
+        "scenario",
+        "info",
+        "record",
+        "players",
+        "render_mode",
+        "num_envs",
+        "num_threads",
+        "rom_path",
+        "obs_copy",
+        "obs_resize",
+        "obs_crop",
+        "obs_grayscale",
+        "obs_resize_algorithm",
+        "obs_layout",
+        "frame_skip",
+        "frame_stack",
+        "frame_maxpool",
+        "reset_noops",
+        "action_sticky_prob",
+        "reward_clip",
+        "info_filter",
+        "done_on",
+    )
+    for name in literal_defaults:
+        assert native_defaults[name] == stable_defaults[name]
+
+    assert native_defaults["state"] is State.DEFAULT
+    assert native_defaults["state"].name == stable_defaults["state"].name == "DEFAULT"
+    assert native_defaults["state"].value == stable_defaults["state"].value
+    assert native_defaults["use_restricted_actions"] is Actions.FILTERED
+    assert native_defaults["use_restricted_actions"].name == stable_defaults["use_restricted_actions"].name == "FILTERED"
+    assert native_defaults["use_restricted_actions"].value == stable_defaults["use_restricted_actions"].value
+    assert native_defaults["inttype"] is Integrations.STABLE
+    assert native_defaults["inttype"].name == stable_defaults["inttype"].name == "STABLE"
+    assert native_defaults["inttype"].value == stable_defaults["inttype"].value
+    assert native_defaults["obs_type"] is Observations.IMAGE
+    assert native_defaults["obs_type"].name == stable_defaults["obs_type"].name == "IMAGE"
+    assert native_defaults["obs_type"].value == stable_defaults["obs_type"].value
+
+    sentinel_defaults = (
+        "copy_observations",
+        "maxpool_last_two",
+        "noop_reset_max",
+        "sticky_action_prob",
+        "info_mode",
+        "info_keys",
+        "done_on_info",
+        "unsafe_zero_copy",
+    )
+    for name in sentinel_defaults:
+        assert type(native_defaults[name]) is object
+        assert type(stable_defaults[name]) is object
 
 
 @pytest.mark.retro_oracle
