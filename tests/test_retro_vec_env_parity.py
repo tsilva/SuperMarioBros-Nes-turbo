@@ -3,8 +3,14 @@ from __future__ import annotations
 import importlib.metadata
 
 import pytest
+import numpy as np
+from gymnasium import spaces
 
 from scripts import compare_retro_vec_env as compare
+from supermariobrosnes_turbo import Actions, RetroVecEnv, SuperMarioBrosVecEnv
+
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 
 
 def require_stable_retro_oracle() -> None:
@@ -58,3 +64,169 @@ def test_stable_retro_vec_env_constructs_with_oracle_keyword_surface() -> None:
         assert getattr(env, "obs_copy", None) == "safe_view"
     finally:
         env.close()
+
+
+def test_native_retro_vec_env_accepts_smb_keyword_surface() -> None:
+    rom_path = compare.DEFAULT_ROM.expanduser()
+    if not rom_path.exists():
+        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+
+    env = RetroVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        state="Level1-1",
+        num_envs=1,
+        num_threads=1,
+        rom_path=str(rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.ALL,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_grayscale=True,
+        obs_resize_algorithm="area",
+        obs_layout="chw",
+        obs_copy="safe_view",
+        frame_skip=4,
+        frame_stack=4,
+        maxpool_last_two=True,
+        noop_reset_max=0,
+        sticky_action_prob=0.0,
+        reward_clip=False,
+        info_filter="terminal",
+        done_on=["life_loss"],
+    )
+    try:
+        assert env.num_envs == 1
+        assert env.num_threads == 1
+        assert env.obs_copy == "safe_view"
+        assert env.copy_observations is False
+        assert env.unsafe_zero_copy is False
+        assert isinstance(env.action_space, spaces.MultiBinary)
+        obs = env.reset()
+        assert obs.shape == (1, 4, 84, 84)
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+        obs, rewards, dones, infos = env.step(masks)
+        assert obs.shape == (1, 4, 84, 84)
+        assert rewards.shape == (1,)
+        assert dones.shape == (1,)
+        assert infos == [{}]
+    finally:
+        env.close()
+
+
+def test_native_retro_vec_env_hwc_layout_and_safe_view_survives_next_step() -> None:
+    rom_path = compare.DEFAULT_ROM.expanduser()
+    if not rom_path.exists():
+        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+
+    env = RetroVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        state="Level1-1",
+        num_envs=1,
+        rom_path=str(rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.ALL,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_grayscale=True,
+        obs_resize_algorithm="nearest",
+        obs_layout="hwc",
+        obs_copy="safe_view",
+        frame_skip=1,
+        frame_stack=1,
+        info_filter="none",
+    )
+    try:
+        first = env.reset()
+        first_snapshot = first.copy()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
+        second, _rewards, _dones, infos = env.step(masks)
+        assert first.shape == (1, 84, 84, 1)
+        assert second.shape == (1, 84, 84, 1)
+        np.testing.assert_array_equal(first, first_snapshot)
+        assert infos == [{}]
+    finally:
+        env.close()
+
+
+def test_native_retro_vec_env_reward_clip_and_info_filter_all() -> None:
+    rom_path = compare.DEFAULT_ROM.expanduser()
+    if not rom_path.exists():
+        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+
+    env = RetroVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        state="Level1-1",
+        num_envs=1,
+        rom_path=str(rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.ALL,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_grayscale=True,
+        obs_layout="chw",
+        reward_clip=(0.0, 0.0),
+        info_filter={"mode": "all", "keys": ("lives", "xscrollHi")},
+        frame_skip=4,
+    )
+    try:
+        env.reset()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
+        _obs, rewards, _dones, infos = env.step(masks)
+        assert rewards.tolist() == [0.0]
+        assert set(infos[0]) <= {"lives", "xscrollHi"}
+        assert "lives" in infos[0]
+    finally:
+        env.close()
+
+
+def test_native_retro_vec_env_actions_all_mask_matches_discrete_fast_env() -> None:
+    rom_path = compare.DEFAULT_ROM.expanduser()
+    if not rom_path.exists():
+        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+
+    retro_env = RetroVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        state="Level1-1",
+        num_envs=1,
+        rom_path=str(rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.ALL,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_grayscale=True,
+        obs_resize_algorithm="area",
+        obs_layout="chw",
+        frame_skip=1,
+        frame_stack=1,
+        info_filter="none",
+    )
+    fast_env = SuperMarioBrosVecEnv(
+        rom_path=rom_path,
+        num_envs=1,
+        frame_skip=1,
+        grayscale=True,
+        frame_stack=1,
+        crop_top=32,
+        resize_width=84,
+        resize_height=84,
+        state="Level1-1",
+        action_set="full",
+        terminate_on_flag=False,
+    )
+    try:
+        np.testing.assert_array_equal(retro_env.reset(), fast_env.reset())
+        masks = np.zeros((1, retro_env.num_buttons), dtype=np.uint8)
+        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
+        masks[0, BUTTON_TO_INDEX["A"]] = 1
+        retro_obs, retro_rewards, retro_dones, _infos = retro_env.step(masks)
+        fast_obs, fast_rewards, fast_dones, _infos = fast_env.step(
+            np.asarray([compare.ACTION_SETS["full"].index("right_a")], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(retro_obs, fast_obs)
+        np.testing.assert_array_equal(retro_rewards, fast_rewards)
+        np.testing.assert_array_equal(retro_dones, fast_dones)
+    finally:
+        retro_env.close()
+        fast_env.close()

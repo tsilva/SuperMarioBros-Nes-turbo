@@ -58,6 +58,11 @@ except ImportError:
             return self.step_wait()
 
 
+_UNSET = object()
+VISIBLE_WIDTH = 240
+VISIBLE_HEIGHT = 224
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 CORE_ACTION_MEANINGS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left", "start")
 ACTION_SETS = {
     "simple": ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left"),
@@ -65,6 +70,20 @@ ACTION_SETS = {
     "full": CORE_ACTION_MEANINGS,
 }
 ACTION_MEANINGS = ACTION_SETS["simple"]
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+    "right_b": ("RIGHT", "B"),
+    "right_a": ("RIGHT", "A"),
+    "right_a_b": ("RIGHT", "A", "B"),
+    "a": ("A",),
+    "left": ("LEFT",),
+    "start": ("START",),
+}
+SMB_EVENT_SPECS = {
+    "life_loss": ("lives", "decrease"),
+    "level_change": (("levelHi", "levelLo"), "change"),
+}
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
 GZIP_MAGIC = b"\x1f\x8b"
 INFO_KEYS = (
@@ -82,6 +101,14 @@ INFO_KEYS = (
 StateSpec = str | Path | bytes | bytearray | memoryview
 DoneOnInfoSpec = Mapping[str, Sequence[Any]]
 DoneOnInfoRule = tuple[str, tuple[str, ...], str]
+
+
+class Actions:
+    """Small Stable Retro action-mode stand-in for SMB-only compatibility."""
+
+    FILTERED = "FILTERED"
+    ALL = "ALL"
+    DISCRETE = "DISCRETE"
 
 
 def _expand_rom_path(path: str | Path) -> str:
@@ -252,6 +279,244 @@ def _core_action_ids(action_meanings: tuple[str, ...]) -> np.ndarray:
     )
 
 
+def _action_masks(action_meanings: tuple[str, ...]) -> np.ndarray:
+    masks = np.zeros((len(action_meanings), len(NES_BUTTONS)), dtype=np.uint8)
+    for action_index, action_name in enumerate(action_meanings):
+        for button in ACTION_BUTTONS[action_name]:
+            masks[action_index, BUTTON_TO_INDEX[button]] = 1
+    return masks
+
+
+def _normalize_action_mode(value: Any) -> str:
+    name = getattr(value, "name", value)
+    text = str(name).split(".")[-1].upper()
+    if text not in {"ALL", "FILTERED", "DISCRETE"}:
+        raise ValueError("use_restricted_actions must be Actions.ALL, Actions.FILTERED, or Actions.DISCRETE")
+    return text
+
+
+def _normalize_obs_copy(
+    obs_copy: str,
+    copy_observations: Any = _UNSET,
+    unsafe_zero_copy: Any = _UNSET,
+) -> tuple[str, bool, bool]:
+    if copy_observations is not _UNSET or unsafe_zero_copy is not _UNSET:
+        if obs_copy != "copy":
+            raise ValueError("cannot pass both obs_copy and copy_observations/unsafe_zero_copy")
+        copy = True if copy_observations is _UNSET else bool(copy_observations)
+        unsafe = False if unsafe_zero_copy is _UNSET else bool(unsafe_zero_copy)
+        if copy and unsafe:
+            raise ValueError("unsafe_zero_copy=True is only valid with copy_observations=False")
+        return ("unsafe_view" if unsafe else "copy" if copy else "safe_view", copy, unsafe)
+
+    if isinstance(obs_copy, bool):
+        raise ValueError("obs_copy must be 'copy', 'safe_view', or 'unsafe_view'")
+    mode = str(obs_copy).lower()
+    if mode == "copy":
+        return mode, True, False
+    if mode == "safe_view":
+        return mode, False, False
+    if mode == "unsafe_view":
+        return mode, False, True
+    raise ValueError("obs_copy must be 'copy', 'safe_view', or 'unsafe_view'")
+
+
+def _normalize_info_keys(info_keys: Any) -> list[str] | None:
+    if info_keys is None:
+        return None
+    if isinstance(info_keys, str):
+        raise ValueError("info_filter keys must be a sequence of strings, not a string")
+    return [str(key) for key in info_keys]
+
+
+def _normalize_info_filter(
+    info_filter: Any,
+    info_mode: Any = _UNSET,
+    info_keys: Any = _UNSET,
+) -> tuple[str, list[str] | None]:
+    if info_mode is not _UNSET or info_keys is not _UNSET:
+        if info_filter != "all":
+            raise ValueError("cannot pass both info_filter and info_mode/info_keys")
+        mode = "all" if info_mode is _UNSET else str(info_mode)
+        keys = None if info_keys is _UNSET else info_keys
+        return _validate_info_mode(mode), _normalize_info_keys(keys)
+
+    if info_filter is None:
+        return "all", None
+    if isinstance(info_filter, str):
+        return _validate_info_mode(info_filter), None
+    if not isinstance(info_filter, Mapping):
+        raise ValueError("info_filter must be a mode string or a mapping with mode/keys")
+    unknown = set(info_filter) - {"mode", "keys"}
+    if unknown:
+        names = ", ".join(sorted(str(key) for key in unknown))
+        raise ValueError(f"unknown info_filter keys: {names}")
+    return _validate_info_mode(str(info_filter.get("mode", "all"))), _normalize_info_keys(
+        info_filter.get("keys", None),
+    )
+
+
+def _validate_info_mode(mode: str) -> str:
+    normalized = str(mode).lower()
+    if normalized not in {"all", "terminal", "none"}:
+        raise ValueError("info_filter mode must be 'all', 'terminal', or 'none'")
+    return normalized
+
+
+def _normalize_reward_clip(reward_clip: bool | Sequence[float]) -> tuple[bool, float, float]:
+    if not reward_clip:
+        return False, -1.0, 1.0
+    if reward_clip is True:
+        return True, -1.0, 1.0
+    if not isinstance(reward_clip, Sequence) or isinstance(reward_clip, (str, bytes, bytearray)):
+        raise ValueError("reward_clip must be False, True, or a (low, high) pair")
+    if len(reward_clip) != 2:
+        raise ValueError("reward_clip must be False, True, or a (low, high) pair")
+    low, high = float(reward_clip[0]), float(reward_clip[1])
+    if low > high:
+        raise ValueError("reward_clip low must be <= high")
+    return True, low, high
+
+
+def _normalize_obs_layout(obs_layout: str) -> str:
+    layout = str(obs_layout).lower()
+    if layout not in {"chw", "hwc"}:
+        raise ValueError("obs_layout must be 'chw' or 'hwc'")
+    return layout
+
+
+def _normalize_resize_algorithm(obs_resize_algorithm: str) -> str:
+    algorithm = str(obs_resize_algorithm).lower()
+    if algorithm not in {"area", "nearest", "bilinear"}:
+        raise ValueError("obs_resize_algorithm must be one of: nearest, bilinear, area")
+    return algorithm
+
+
+def _normalize_done_on_alias(done_on: Any) -> DoneOnInfoSpec | None:
+    if done_on is None:
+        return None
+    if isinstance(done_on, Sequence) and not isinstance(done_on, (str, bytes, bytearray)):
+        resolved = {}
+        for raw_name in done_on:
+            name = str(raw_name)
+            try:
+                resolved[name] = SMB_EVENT_SPECS[name]
+            except KeyError as exc:
+                available = ", ".join(sorted(SMB_EVENT_SPECS))
+                raise ValueError(f"done_on unknown configured event {name!r}. Available events: {available}") from exc
+        return resolved
+    if not isinstance(done_on, Mapping):
+        raise ValueError("done_on must be a mapping or a sequence of configured SMB event names")
+    resolved: dict[str, Sequence[Any]] = {}
+    for raw_name, spec in done_on.items():
+        name = str(raw_name)
+        if spec is None:
+            try:
+                spec = SMB_EVENT_SPECS[name]
+            except KeyError as exc:
+                available = ", ".join(sorted(SMB_EVENT_SPECS))
+                raise ValueError(f"done_on unknown configured event {name!r}. Available events: {available}") from exc
+        resolved[name] = spec
+    return resolved
+
+
+def _normalize_retro_crop(obs_crop: Sequence[int] | None) -> tuple[int, int, int, int]:
+    if obs_crop is None:
+        return 0, 0, 0, 0
+    if len(obs_crop) != 4:
+        raise ValueError("obs_crop must be a (top, right, bottom, left) tuple")
+    top, right, bottom, left = (int(value) for value in obs_crop)
+    if min(top, right, bottom, left) < 0:
+        raise ValueError("obs_crop values must be non-negative")
+    if top + bottom >= VISIBLE_HEIGHT or left + right >= VISIBLE_WIDTH:
+        raise ValueError("obs_crop removes the whole visible frame")
+    return top, right, bottom, left
+
+
+def _normalize_retro_resize(
+    obs_resize: Sequence[int] | None,
+    source_width: int,
+    source_height: int,
+) -> tuple[int, int]:
+    if obs_resize is None:
+        return source_width, source_height
+    if len(obs_resize) != 2:
+        raise ValueError("obs_resize must be a (width, height) tuple")
+    width, height = (int(value) for value in obs_resize)
+    if width <= 0 or height <= 0:
+        raise ValueError("obs_resize dimensions must be positive")
+    return width, height
+
+
+def _resize_chw_batch(src: np.ndarray, width: int, height: int, algorithm: str) -> np.ndarray:
+    if src.shape[-2:] == (height, width):
+        return src
+    if algorithm == "nearest":
+        return _resize_chw_nearest(src, width, height)
+    if algorithm == "bilinear":
+        return _resize_chw_bilinear(src, width, height)
+    return _resize_chw_area(src, width, height)
+
+
+def _resize_chw_nearest(src: np.ndarray, width: int, height: int) -> np.ndarray:
+    src_h, src_w = src.shape[-2:]
+    y_idx = np.minimum((np.arange(height) * src_h // height), src_h - 1)
+    x_idx = np.minimum((np.arange(width) * src_w // width), src_w - 1)
+    return src[:, :, y_idx][:, :, :, x_idx].copy()
+
+
+def _resize_chw_bilinear(src: np.ndarray, width: int, height: int) -> np.ndarray:
+    src_h, src_w = src.shape[-2:]
+    if height == 1:
+        y = np.zeros((1,), dtype=np.float32)
+    else:
+        y = np.linspace(0, src_h - 1, height, dtype=np.float32)
+    if width == 1:
+        x = np.zeros((1,), dtype=np.float32)
+    else:
+        x = np.linspace(0, src_w - 1, width, dtype=np.float32)
+    y0 = np.floor(y).astype(np.intp)
+    x0 = np.floor(x).astype(np.intp)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+    wy = (y - y0).reshape(1, 1, height, 1)
+    wx = (x - x0).reshape(1, 1, 1, width)
+    top = src[:, :, y0][:, :, :, x0] * (1.0 - wx) + src[:, :, y0][:, :, :, x1] * wx
+    bottom = src[:, :, y1][:, :, :, x0] * (1.0 - wx) + src[:, :, y1][:, :, :, x1] * wx
+    out = top * (1.0 - wy) + bottom * wy
+    return np.rint(np.clip(out, 0, 255)).astype(np.uint8)
+
+
+def _resize_chw_area(src: np.ndarray, width: int, height: int) -> np.ndarray:
+    src_h, src_w = src.shape[-2:]
+    out = np.empty((*src.shape[:-2], height, width), dtype=np.uint8)
+    y_scale = src_h / height
+    x_scale = src_w / width
+    for out_y in range(height):
+        y0 = out_y * y_scale
+        y1 = (out_y + 1) * y_scale
+        src_y0 = int(np.floor(y0))
+        src_y1 = int(np.ceil(y1))
+        y_weights = np.asarray(
+            [max(0.0, min(y1, y + 1) - max(y0, y)) for y in range(src_y0, src_y1)],
+            dtype=np.float32,
+        )
+        for out_x in range(width):
+            x0 = out_x * x_scale
+            x1 = (out_x + 1) * x_scale
+            src_x0 = int(np.floor(x0))
+            src_x1 = int(np.ceil(x1))
+            x_weights = np.asarray(
+                [max(0.0, min(x1, x + 1) - max(x0, x)) for x in range(src_x0, src_x1)],
+                dtype=np.float32,
+            )
+            patch = src[:, :, src_y0:src_y1, src_x0:src_x1].astype(np.float32)
+            weighted = patch * y_weights.reshape(1, 1, -1, 1) * x_weights.reshape(1, 1, 1, -1)
+            value = weighted.sum(axis=(-2, -1)) / (y_weights.sum() * x_weights.sum())
+            out[:, :, out_y, out_x] = np.rint(np.clip(value, 0, 255)).astype(np.uint8)
+    return out
+
+
 def _normalize_done_on_info(
     done_on_info: DoneOnInfoSpec | None,
     terminate_on_life_loss: bool,
@@ -320,6 +585,8 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         crop_bottom: int = 0,
         resize_width: int = 84,
         resize_height: int = 84,
+        crop_left: int = 0,
+        crop_right: int = 0,
         state: StateSpec | Sequence[StateSpec] | Mapping[StateSpec, float] | None = None,
         state_dir: str | Path | None = None,
         action_set: str | Sequence[str] = "simple",
@@ -327,8 +594,18 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         terminate_on_life_loss: bool = False,
         terminate_on_level_change: bool = False,
         done_on_info: DoneOnInfoSpec | None = None,
+        done_on: DoneOnInfoSpec | Sequence[str] | None = None,
         noop_reset_max: int = 0,
         sticky_action_prob: float = 0.0,
+        obs_layout: str = "chw",
+        obs_copy: str = "unsafe_view",
+        reward_clip: bool | Sequence[float] = False,
+        info_filter: Any = "all",
+        obs_resize_algorithm: str = "area",
+        copy_observations: Any = _UNSET,
+        unsafe_zero_copy: Any = _UNSET,
+        info_mode: Any = _UNSET,
+        info_keys: Any = _UNSET,
     ) -> None:
         noop_reset_max = int(noop_reset_max)
         sticky_action_prob = float(sticky_action_prob)
@@ -339,9 +616,14 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         self.action_meanings = _resolve_action_set(action_set)
         self.action_set = action_set if isinstance(action_set, str) else "custom"
         self._core_action_ids = _core_action_ids(self.action_meanings)
+        self._action_masks = _action_masks(self.action_meanings)
         self._state_collection = isinstance(state, Mapping) or (
             isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview))
         )
+        if done_on is not None:
+            if done_on_info is not None:
+                raise ValueError("cannot pass both done_on and done_on_info")
+            done_on_info = _normalize_done_on_alias(done_on)
         done_on_info_rules = _normalize_done_on_info(
             done_on_info,
             bool(terminate_on_life_loss),
@@ -352,6 +634,36 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             state_dir,
             num_envs,
         )
+        self.obs_layout = _normalize_obs_layout(obs_layout)
+        self.obs_copy, self.copy_observations, self.unsafe_zero_copy = _normalize_obs_copy(
+            obs_copy,
+            copy_observations,
+            unsafe_zero_copy,
+        )
+        self.info_mode, self.info_keys = _normalize_info_filter(info_filter, info_mode, info_keys)
+        self.reward_clip, self.reward_clip_low, self.reward_clip_high = _normalize_reward_clip(reward_clip)
+        self.obs_resize_algorithm = _normalize_resize_algorithm(obs_resize_algorithm)
+        crop_left = int(crop_left)
+        crop_right = int(crop_right)
+        if crop_left < 0 or crop_right < 0:
+            raise ValueError("crop_left and crop_right must be non-negative")
+        source_height = VISIBLE_HEIGHT - int(crop_top) - int(crop_bottom)
+        source_width = VISIBLE_WIDTH - crop_left - crop_right
+        if source_height <= 0 or source_width <= 0:
+            raise ValueError("crop values remove the whole visible frame")
+        self.crop_left = crop_left
+        self.crop_right = crop_right
+        self._output_resize_width = int(resize_width)
+        self._output_resize_height = int(resize_height)
+        if self._output_resize_width <= 0 or self._output_resize_height <= 0:
+            raise ValueError("resize_width and resize_height must be > 0")
+        self._needs_python_postprocess = (
+            self.obs_resize_algorithm != "area"
+            or crop_left != 0
+            or crop_right != 0
+        )
+        core_resize_width = VISIBLE_WIDTH if self._needs_python_postprocess else self._output_resize_width
+        core_resize_height = source_height if self._needs_python_postprocess else self._output_resize_height
         self._core = FastMarioVecEnv(
             _expand_rom_path(rom_path),
             num_envs,
@@ -361,8 +673,8 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             terminate_on_flag,
             crop_top,
             crop_bottom,
-            resize_width,
-            resize_height,
+            core_resize_width,
+            core_resize_height,
             initial_states,
             list(initial_state_names),
             initial_state_weights,
@@ -388,14 +700,27 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         self.sticky_action_prob = self._core.sticky_action_prob
         self.crop_top = self._core.crop_top
         self.crop_bottom = self._core.crop_bottom
-        self.resize_width = self._core.resize_width
-        self.resize_height = self._core.resize_height
+        self.resize_width = self._output_resize_width
+        self.resize_height = self._output_resize_height
         self.single_action_space = spaces.Discrete(len(self.action_meanings))
         self.vector_action_space = spaces.MultiDiscrete([len(self.action_meanings)] * self.num_envs)
+        self._public_channels = self._core.obs_shape()[1]
+        if self.obs_layout == "chw":
+            self._single_obs_shape = (
+                self._public_channels,
+                self._output_resize_height,
+                self._output_resize_width,
+            )
+        else:
+            self._single_obs_shape = (
+                self._output_resize_height,
+                self._output_resize_width,
+                self._public_channels,
+            )
         observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=self._core.obs_shape()[1:],
+            shape=self._single_obs_shape,
             dtype=np.uint8,
         )
         self.render_mode = None
@@ -407,7 +732,14 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
 
         self._actions = np.zeros((self.num_envs,), dtype=np.uint8)
         self._obs = np.empty(self._core.obs_shape(), dtype=np.uint8)
+        self._unsafe_public_obs: np.ndarray | None = None
+        self._safe_public_obs = [
+            np.empty((self.num_envs, *self._single_obs_shape), dtype=np.uint8),
+            np.empty((self.num_envs, *self._single_obs_shape), dtype=np.uint8),
+        ]
+        self._safe_public_obs_index = 0
         self._rewards = np.empty((self.num_envs,), dtype=np.float32)
+        self._reward_return = np.empty((self.num_envs,), dtype=np.float32)
         self._terminated = np.empty((self.num_envs,), dtype=np.bool_)
         self._truncated = np.empty((self.num_envs,), dtype=np.bool_)
         self._x_pos = np.empty((self.num_envs,), dtype=np.uint16)
@@ -452,7 +784,7 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         self.reset_infos = [self._reset_info_dict(index) for index in range(self.num_envs)]
         self._reset_seeds()
         self._reset_options()
-        return self._obs
+        return self._return_obs()
 
     def seed(self, seed: int | None = None) -> list[int | None]:
         return list(super().seed(seed))
@@ -516,7 +848,7 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             self._write_active_state_indices()
         self._write_done_on_info()
         self._write_terminal_observations()
-        return self._obs, self._rewards, self._terminated, self._truncated
+        return self._return_obs(), self._return_rewards(), self._terminated, self._truncated
 
     def _write_done_on_info(self) -> None:
         reports = self._core.done_on_info()
@@ -544,7 +876,7 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
                 terminal_obs = np.frombuffer(report, dtype=np.uint8).reshape(obs_shape).copy()
             else:
                 terminal_obs = np.asarray(report, dtype=np.uint8).reshape(obs_shape)
-            self._terminal_observations.append(terminal_obs)
+            self._terminal_observations.append(self._public_single_obs(terminal_obs))
 
     def step_gymnasium(
         self,
@@ -577,8 +909,73 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             dtype=np.int32,
         )
 
+    def _return_obs(self) -> np.ndarray:
+        public = self._public_obs_view()
+        if self.obs_copy == "copy":
+            return public.copy()
+        if self.obs_copy == "safe_view":
+            self._safe_public_obs_index = 1 - self._safe_public_obs_index
+            out = self._safe_public_obs[self._safe_public_obs_index]
+            np.copyto(out, public)
+            return out
+        return public
+
+    def _public_obs_view(self) -> np.ndarray:
+        chw = self._obs
+        if self._needs_python_postprocess:
+            if self.crop_left or self.crop_right:
+                right = VISIBLE_WIDTH - self.crop_right if self.crop_right else VISIBLE_WIDTH
+                chw = chw[:, :, :, self.crop_left:right]
+            chw = _resize_chw_batch(
+                chw,
+                self._output_resize_width,
+                self._output_resize_height,
+                self.obs_resize_algorithm,
+            )
+            self._unsafe_public_obs = chw
+        if self.obs_layout == "chw":
+            return chw
+        return np.transpose(chw, (0, 2, 3, 1))
+
+    def _public_single_obs(self, obs: np.ndarray) -> np.ndarray:
+        batch = obs.reshape((1, *obs.shape))
+        original = self._obs
+        try:
+            self._obs = batch
+            return self._public_obs_view()[0].copy()
+        finally:
+            self._obs = original
+
+    def _return_rewards(self) -> np.ndarray:
+        if not self.reward_clip:
+            return self._rewards
+        np.clip(self._rewards, self.reward_clip_low, self.reward_clip_high, out=self._reward_return)
+        return self._reward_return
+
     def _info_dict(self, index: int) -> dict[str, Any]:
-        info = {
+        terminal = bool(self._terminated[index]) or bool(self._truncated[index])
+        if self.info_mode == "none":
+            return {}
+        if self.info_mode == "terminal" and not terminal:
+            return {}
+
+        info = self._base_info_dict(index)
+        if self.info_keys is not None:
+            info = {key: info[key] for key in self.info_keys if key in info}
+        if self._done_on_info[index] and (
+            self.info_keys is None or "done_on_info" in self.info_keys
+        ):
+            info["done_on_info"] = self._done_on_info[index]
+        if terminal:
+            terminal_observation = self._terminal_observations[index]
+            if terminal_observation is not None:
+                info["terminal_observation"] = terminal_observation
+            info["reset_info"] = self._reset_info_dict(index)
+            info["TimeLimit.truncated"] = bool(self._truncated[index])
+        return info
+
+    def _base_info_dict(self, index: int) -> dict[str, Any]:
+        return {
             "coins": int(self._coins[index]),
             "levelHi": int(self._level_hi[index]),
             "levelLo": int(self._level_lo[index]),
@@ -589,15 +986,6 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             "xscrollHi": int(self._xscroll_hi[index]),
             "xscrollLo": int(self._xscroll_lo[index]),
         }
-        if self._done_on_info[index]:
-            info["done_on_info"] = self._done_on_info[index]
-        if bool(self._terminated[index]) or bool(self._truncated[index]):
-            terminal_observation = self._terminal_observations[index]
-            if terminal_observation is not None:
-                info["terminal_observation"] = terminal_observation
-            info["reset_info"] = self._reset_info_dict(index)
-            info["TimeLimit.truncated"] = bool(self._truncated[index])
-        return info
 
     def _reset_info_dict(self, index: int) -> dict[str, Any]:
         if not self._state_collection:
@@ -720,3 +1108,222 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         if isinstance(value, tuple) and len(value) == self.num_envs and value != self.action_meanings:
             return value[int(index)]
         return value
+
+
+def _normalize_state_value(state: Any) -> Any:
+    name = getattr(state, "name", None)
+    if name == "DEFAULT":
+        return "Level1-1"
+    if name == "NONE":
+        return None
+    return state
+
+
+def _normalize_retro_state(state: Any) -> Any:
+    if isinstance(state, Mapping):
+        return {_normalize_state_value(key): value for key, value in state.items()}
+    if isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview)):
+        return [_normalize_state_value(value) for value in state]
+    return _normalize_state_value(state)
+
+
+def _resolve_rom_path(game: str, rom_path: str | Path | None) -> str | Path:
+    if rom_path is not None:
+        return rom_path
+    candidates: list[Path] = []
+    try:
+        import stable_retro.data  # type: ignore[import-not-found]
+
+        for integration in (
+            stable_retro.data.Integrations.STABLE,
+            stable_retro.data.Integrations.ALL,
+        ):
+            try:
+                path = stable_retro.data.get_romfile_path(game, integration)
+            except Exception:
+                path = None
+            if path:
+                candidates.append(Path(path))
+            try:
+                path = stable_retro.data.get_file_path(game, "rom.nes", integration)
+            except Exception:
+                path = None
+            if path:
+                candidates.append(Path(path))
+    except ImportError:
+        pass
+    sibling = _sibling_stable_retro_state_dir()
+    if sibling is not None:
+        candidates.append(sibling / "rom.nes")
+    candidates.append(Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes").expanduser())
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
+
+
+class RetroVecEnv(SuperMarioBrosVecEnv):
+    """SMB-only `stable-retro-turbo` `RetroVecEnv` compatibility surface."""
+
+    _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
+
+    def __init__(
+        self,
+        game: str,
+        state: Any = "Level1-1",
+        scenario: str | Path | None = None,
+        info: str | Path | None = None,
+        use_restricted_actions: Any = Actions.FILTERED,
+        record: bool = False,
+        players: int = 1,
+        inttype: Any = None,
+        obs_type: Any = None,
+        render_mode: str = "human",
+        *,
+        num_envs: int = 1,
+        num_threads: int | None = None,
+        rom_path: str | Path | None = None,
+        obs_copy: str = "copy",
+        obs_resize: Sequence[int] | None = None,
+        obs_crop: Sequence[int] | None = None,
+        obs_grayscale: bool = False,
+        obs_resize_algorithm: str = "nearest",
+        obs_layout: str = "hwc",
+        frame_skip: int = 1,
+        frame_stack: int = 1,
+        maxpool_last_two: bool = False,
+        noop_reset_max: int = 0,
+        sticky_action_prob: float = 0.0,
+        reward_clip: bool | Sequence[float] = False,
+        info_filter: Any = "all",
+        done_on: Any = None,
+        copy_observations: Any = _UNSET,
+        info_mode: Any = _UNSET,
+        info_keys: Any = _UNSET,
+        done_on_info: Any = _UNSET,
+        unsafe_zero_copy: Any = _UNSET,
+    ) -> None:
+        if str(game) != DEFAULT_STABLE_RETRO_GAME:
+            raise ValueError(f"RetroVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
+        if players != 1:
+            raise ValueError("RetroVecEnv currently supports players=1")
+        if record:
+            raise ValueError("RetroVecEnv does not support movie recording")
+        obs_type_name = getattr(obs_type, "name", obs_type)
+        if obs_type is not None and str(obs_type_name).split(".")[-1].upper() != "IMAGE":
+            raise ValueError("RetroVecEnv currently supports image observations only")
+        if info not in (None, "data") and not str(info).endswith(".json"):
+            raise ValueError("RetroVecEnv only supports the SMB data info file")
+        if scenario not in (None, "scenario") and not str(scenario).endswith(".json"):
+            raise ValueError("RetroVecEnv only supports the SMB scenario file")
+
+        crop_top, crop_right, crop_bottom, crop_left = _normalize_retro_crop(obs_crop)
+        source_width = VISIBLE_WIDTH - crop_left - crop_right
+        source_height = VISIBLE_HEIGHT - crop_top - crop_bottom
+        resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
+        action_mode = _normalize_action_mode(use_restricted_actions)
+        resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
+        if done_on is not None:
+            if resolved_done_on is not _UNSET:
+                raise ValueError("cannot pass both done_on and done_on_info")
+            resolved_done_on = done_on
+
+        super().__init__(
+            rom_path=_resolve_rom_path(str(game), rom_path),
+            num_envs=num_envs,
+            frame_skip=frame_skip,
+            grayscale=bool(obs_grayscale),
+            frame_stack=frame_stack,
+            frame_maxpool=bool(maxpool_last_two),
+            terminate_on_flag=False,
+            crop_top=crop_top,
+            crop_bottom=crop_bottom,
+            crop_left=crop_left,
+            crop_right=crop_right,
+            resize_width=resize_width,
+            resize_height=resize_height,
+            state=_normalize_retro_state(state),
+            action_set="full",
+            done_on=None if resolved_done_on is _UNSET else resolved_done_on,
+            noop_reset_max=noop_reset_max,
+            sticky_action_prob=sticky_action_prob,
+            obs_layout=obs_layout,
+            obs_copy=obs_copy,
+            reward_clip=reward_clip,
+            info_filter=info_filter,
+            obs_resize_algorithm=obs_resize_algorithm,
+            copy_observations=copy_observations,
+            unsafe_zero_copy=unsafe_zero_copy,
+            info_mode=info_mode,
+            info_keys=info_keys,
+        )
+        self.game = str(game)
+        self.num_threads = self.num_envs if num_threads is None else int(num_threads)
+        self.num_buttons = len(NES_BUTTONS)
+        self.button_combos = [list(combo) for combo in self._BUTTON_COMBOS]
+        self.use_restricted_actions = use_restricted_actions
+        self._action_mode = action_mode
+        self.render_mode = render_mode
+        self.viewer = None
+        self.closed = False
+        self.action_space = (
+            spaces.Discrete(36)
+            if action_mode == "DISCRETE"
+            else spaces.MultiBinary(self.num_buttons)
+        )
+
+    def step_async(self, actions: np.ndarray) -> None:
+        action_ids = self._actions_to_core_ids(actions)
+        SuperMarioBrosVecEnv.step_async(self, action_ids)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def _actions_to_core_ids(self, actions: Any) -> np.ndarray:
+        if self._action_mode == "DISCRETE":
+            masks = self._discrete_actions_to_masks(actions)
+        else:
+            masks = np.asarray(actions, dtype=np.uint8)
+            if masks.shape == (self.num_buttons,):
+                masks = masks.reshape(1, self.num_buttons)
+            if masks.shape != (self.num_envs, self.num_buttons):
+                raise ValueError(
+                    f"actions must have shape {(self.num_envs, self.num_buttons)}, got {masks.shape}",
+                )
+        return np.asarray([self._mask_to_core_action(mask) for mask in masks], dtype=np.uint8)
+
+    def _discrete_actions_to_masks(self, actions: Any) -> np.ndarray:
+        values = np.asarray(actions, dtype=np.int64).reshape(-1)
+        if values.shape != (self.num_envs,):
+            raise ValueError(f"actions must have shape {(self.num_envs,)}, got {values.shape}")
+        masks = np.zeros((self.num_envs, self.num_buttons), dtype=np.uint8)
+        for env_idx, raw_value in enumerate(values):
+            value = int(raw_value)
+            if value < 0 or value >= 36:
+                raise ValueError("DISCRETE actions must be in [0, 35]")
+            action_bits = 0
+            for combo in self._BUTTON_COMBOS:
+                current = value % len(combo)
+                value //= len(combo)
+                action_bits |= combo[current]
+            for button_idx in range(self.num_buttons):
+                masks[env_idx, button_idx] = (action_bits >> button_idx) & 1
+        return masks
+
+    def _mask_to_core_action(self, mask: np.ndarray) -> int:
+        pressed = {button for button, index in BUTTON_TO_INDEX.items() if int(mask[index])}
+        if "START" in pressed and not (pressed & {"LEFT", "RIGHT", "A", "B"}):
+            return CORE_ACTION_MEANINGS.index("start")
+        if "RIGHT" in pressed:
+            if "A" in pressed and "B" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_a_b")
+            if "A" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_a")
+            if "B" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_b")
+            return CORE_ACTION_MEANINGS.index("right")
+        if "LEFT" in pressed:
+            return CORE_ACTION_MEANINGS.index("left")
+        if "A" in pressed:
+            return CORE_ACTION_MEANINGS.index("a")
+        return CORE_ACTION_MEANINGS.index("noop")
