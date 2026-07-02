@@ -1,14 +1,21 @@
 ---
 name: host-benchmark
-description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits on the fixed beast-3-local CPU host for reliable throughput. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on beast-3/local host, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
+description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits with the fixed host protocol, either on beast-3-local by default or directly on this machine when the user explicitly requests a local run. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on beast-3/local host, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
 ---
 
 # Host Benchmark
 
 ## Contract
 
-This skill benchmarks exact committed refs on `beast-3-local` for fixed-host CPU
-throughput.
+This skill benchmarks exact committed refs with the fixed-host CPU throughput
+protocol.
+
+Execution target:
+
+- Default target: remote `beast-3-local`.
+- Local target: only when the user explicitly asks for a local run, run directly
+  on the current machine with the same ref, isolation, workload, validity, and
+  reporting protocol. Do not use SSH, rsync, or remote cleanup in local mode.
 
 Input forms:
 
@@ -31,14 +38,16 @@ use the "Published stable-retro-turbo Oracle Baseline" mode below. That mode is
 not a git-ref benchmark; it measures the latest exact PyPI version once per
 workload hash and caches the result locally.
 
-Do not switch local branches. Resolve refs locally with `git rev-parse`, create
-exact `git archive` snapshots, and copy those snapshots to `beast-3-local`.
-Local dirty or untracked files are not included unless the user commits them
-and passes that commit/ref.
+Do not switch local branches. Resolve refs locally with `git rev-parse` and
+create exact `git archive` snapshots. For the remote target, copy those
+snapshots to `beast-3-local`. For the local target, extract those snapshots
+directly into a fresh local run directory outside the checkout. Local dirty or
+untracked files are not included unless the user commits them and passes that
+commit/ref.
 
 ## Host And Isolation
 
-Use this fixed host and persistent benchmark root:
+Use this fixed host and persistent benchmark root by default:
 
 ```text
 host: beast-3-local
@@ -47,19 +56,30 @@ rom:  pass an explicit --rom-path for the remote host; do not assume a default l
 states: /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0
 ```
 
+When the user requests a local run, use this local target and root:
+
+```text
+host: local
+root: /Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local
+rom:  pass an explicit --rom-path for this machine; do not assume a default location
+states: /Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/states/SuperMarioBros-Nes-v0
+```
+
 Each benchmark must create a unique run directory:
 
 ```text
 /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/runs/host-compare-YYYY-MM-DD-HHMMSS-BBASE-CCAND
 /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/runs/host-single-YYYY-MM-DD-HHMMSS-RREF
+/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/runs/local-compare-YYYY-MM-DD-HHMMSS-BBASE-CCAND
+/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/runs/local-single-YYYY-MM-DD-HHMMSS-RREF
 ```
 
 During the run, keep all extracted sources, virtualenvs, raw samples, host
 metadata, and aggregate JSON inside that run directory. Never reuse a previous
 run directory. Never edit another run's files. After the benchmark has a valid
-`aggregate.json`, run the local finalizer in the "Result Retention And Cleanup"
-section so the durable result is copied back to this checkout and remote build
-bulk is removed.
+`aggregate.json`, follow the target-specific retention step in the "Result
+Retention And Cleanup" section so the durable result is copied into this
+checkout and build bulk is removed from the selected target.
 
 Use per-ref isolated source directories and venvs. For single-ref mode, use only
 `sources/ref/.venv`; for comparisons, use baseline/candidate trees:
@@ -75,9 +95,10 @@ sources/ref/.venv
 
 Use `uv sync --frozen --no-dev` in each extracted source directory. This keeps
 runtime dependencies minimal and avoids the heavy dev/Torch stack. Build from
-the checked-in `pyproject.toml`/`uv.lock`; do not `apt install` packages or use
-system Python packages. If Rust/Cargo is missing, use the existing user-local
-rustup setup if present. If Rust is truly absent, ask before installing it.
+the checked-in `pyproject.toml`/`uv.lock`; do not `apt install`, `brew install`,
+or use system Python packages. If Rust/Cargo is missing, use the existing
+user-local rustup setup if present. If Rust is truly absent, ask before
+installing it.
 
 ## Workload
 
@@ -108,7 +129,7 @@ run.
 
 ## Load Gate
 
-Before benchmarking, record:
+Before remote benchmarking, record:
 
 ```bash
 ssh beast-3-local 'hostname; uptime; nproc; lscpu | sed -n "1,40p"; ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -20'
@@ -129,6 +150,22 @@ training/build job is active, report that the host is busy and defer unless the
 user explicitly wants to run anyway. A quick smoke check is okay; final timing
 should use a calm host.
 
+Before local benchmarking, record the same class of host metadata without SSH:
+
+```bash
+hostname
+uptime
+sysctl -n hw.ncpu 2>/dev/null || nproc
+sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu | sed -n "1,40p"
+ps -Ao pid,pcpu,pmem,comm,args | sort -k2 -nr | head -20
+```
+
+For local mode, scale the load gate to the machine being used: if the 1-minute
+load is above about one-third of the logical CPU count, or an obvious CPU
+training/build job is active, report that the local machine is busy and defer
+unless the user explicitly wants to run anyway. A quick smoke check is okay;
+final timing should use a calm machine.
+
 ## Setup
 
 From the local repo root:
@@ -136,14 +173,20 @@ From the local repo root:
 1. Run `git status --short`.
 2. Resolve the single ref or baseline/candidate SHAs with
    `git rev-parse --verify REF^{commit}`.
-3. Verify SSH:
+3. For remote target, verify SSH:
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=8 beast-3-local 'hostname && whoami'
 ```
 
-4. Ensure the benchmark root and state directory exist. If the four state files
-are missing on the host, copy them from the sibling checkout:
+4. For local target, skip SSH and create the local root/state directory directly:
+
+```bash
+mkdir -p /Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/states/SuperMarioBros-Nes-v0
+```
+
+5. Ensure the benchmark root and state directory exist. If the four state files
+are missing on the selected target, copy them from the sibling checkout. Remote:
 
 ```bash
 ssh beast-3-local 'mkdir -p ~/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0'
@@ -151,7 +194,14 @@ rsync -az /Users/tsilva/repos/tsilva/stable-retro-turbo/stable_retro/data/stable
   beast-3-local:~/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0/
 ```
 
-5. Create exact archives without switching branches:
+Local:
+
+```bash
+cp /Users/tsilva/repos/tsilva/stable-retro-turbo/stable_retro/data/stable/SuperMarioBros-Nes-v0/Level1-{1,2,3,4}.state \
+  /Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/states/SuperMarioBros-Nes-v0/
+```
+
+6. Create exact archives without switching branches:
 
 ```bash
 mkdir -p artifacts/benchmarks/host-archives
@@ -164,11 +214,28 @@ These local archive files are temporary convenience artifacts. After the final
 result bundle is copied back, remove archive files for the benchmarked SHAs; the
 exact archives are reproducible from Git commits.
 
-## Remote Run Shape
+## Run Shape
 
-On `beast-3-local`, create a new run directory, copy archives into it, extract
-to isolated source trees, run `uv sync --frozen --no-dev` inside each source,
-and verify a smoke benchmark before measured runs.
+On the selected target, create a new run directory, copy or place archives into
+it, extract to isolated source trees, run `uv sync --frozen --no-dev` inside
+each source, and verify a smoke benchmark before measured runs.
+
+Remote target:
+
+- Copy archives to `beast-3-local`.
+- Run setup and timing commands over SSH.
+- Record SSH route metadata in `aggregate.json`.
+
+Local target:
+
+- Do not SSH or rsync.
+- Create the run directory under
+  `/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/runs/`.
+- Copy the local archives into the run's `archives/` directory or extract them
+  from `artifacts/benchmarks/host-archives/` directly.
+- Run setup and timing commands directly on this machine.
+- Record `execution_target: "local"` and local host metadata in
+  `aggregate.json`; set route fields to `null` or `"local"` consistently.
 
 Single-ref mode:
 
@@ -246,16 +313,16 @@ with a median-absolute-deviation or IQR rule and optionally show a diagnostic
 with/without flagged points, while keeping the preregistered official metric as
 `median_pair_ratio`.
 
-## Recommended Remote Command Skeleton
+## Recommended Command Skeleton
 
 Prefer generating a small shell/Python heredoc for the exact refs and run path
-rather than editing files on the host. The core benchmark command inside each
-source is:
+rather than editing files on the host or in the local checkout. The core
+benchmark command inside each extracted source is:
 
 ```bash
 RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py \
-  --rom-path /path/on/remote/to/SuperMarioBros.nes \
-  --state-dir /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0 \
+  --rom-path /path/on/selected/target/to/SuperMarioBros.nes \
+  --state-dir /path/on/selected/target/to/states/SuperMarioBros-Nes-v0 \
   --num-envs 16 \
   --steps 50000 \
   --repeats 3 \
@@ -281,7 +348,9 @@ Minimum `aggregate.json` fields:
 - source archive SHA-256 values
 - ROM SHA-256 and state file SHA-256 values
 - host metadata and load snapshots
-- SSH route used, including tailnet fallback when applicable
+- execution target (`remote_beast_3_local` or `local`)
+- SSH route used for remote mode, including tailnet fallback when applicable;
+  local mode should record no SSH route
 - command and environment (`RAYON_NUM_THREADS`)
 - warmup raw files
 - per-invocation mean and median env steps/sec
@@ -299,11 +368,11 @@ Minimum `aggregate.json` fields:
 ## Result Retention And Cleanup
 
 The host benchmark root must not grow without bound. The durable source of truth
-after a completed benchmark is a local result bundle, not the remote extracted
-source tree or copied tarballs.
+after a completed benchmark is a local result bundle, not the selected target's
+extracted source tree or copied tarballs.
 
-After writing and validating `aggregate.json`, run the checked-in finalizer from
-the local repo root:
+After writing and validating `aggregate.json` for a remote run, run the
+checked-in finalizer from the local repo root:
 
 ```bash
 python3 scripts/finalize_host_benchmark.py \
@@ -324,7 +393,36 @@ python3 scripts/finalize_host_benchmark.py \
   --purge-local-archives
 ```
 
-The finalizer must:
+For a local run, do not use the SSH finalizer. Instead, copy the completed local
+run evidence into the same durable result tree:
+
+```text
+artifacts/benchmarks/host-results/RUN_NAME/
+```
+
+The local retention step must:
+
+- refuse to operate on paths outside
+  `/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/runs/local-*`
+- copy `aggregate.json`, canonical `raw/*.json` files except
+  `*.stdout.json`, and `raw/*.txt` load snapshots into
+  `artifacts/benchmarks/host-results/RUN_NAME/`
+- parse every copied JSON file and write
+  `artifacts/benchmarks/host-results/RUN_NAME/manifest.json` with SHA-256
+  checksums before deleting anything from the run directory
+- append a compact record to `artifacts/benchmarks/host-results/index.jsonl`
+- remove local run `sources/`, local run `archives/`, and duplicate
+  `raw/*.stdout.json` only after the local result manifest exists
+- remove local `artifacts/benchmarks/host-archives/*SHA12*.tar.gz` files for
+  the benchmarked SHAs
+
+Keep the local run `aggregate.json` and canonical `raw/` files as a tiny
+breadcrumb unless the user explicitly asks to delete the entire run directory.
+Do not delete the shared state directory or ROM. Do not `rm -rf ~/.cache/uv`;
+if UV cache pressure becomes material, use `uv cache prune` explicitly and
+report it as shared-cache cleanup.
+
+The remote finalizer must:
 
 - refuse to operate on paths outside
   `/home/tsilva/SuperMarioBros-Nes-turbo-host-bench/runs/host-*`
@@ -347,19 +445,21 @@ cache pressure becomes material, use `uv cache prune` explicitly and report it
 as shared-cache cleanup.
 
 Before the final report, verify the local bundle exists and point the user to
-the local `aggregate.json` first. Report the remote run directory as cleaned if
-`sources/` and `archives/` were removed.
+the local `aggregate.json` first. For remote runs, report the remote run
+directory as cleaned if `sources/` and `archives/` were removed. For local runs,
+report the local run directory as cleaned if `sources/` and `archives/` were
+removed.
 
 ## Published stable-retro-turbo Oracle Baseline
 
 Use this special mode when the user wants to compare this specialized
 `SuperMarioBros-Nes-turbo` environment against the latest published
 `stable-retro-turbo` PyPI wheel on the same ROM, same state set, same
-preprocessing, and same fixed host. The point is to show that this repo preserves
-the stable-retro-turbo behavior contract for `SuperMarioBros-Nes-v0` while being
-faster.
+preprocessing, and same selected target. The point is to show that this repo
+preserves the stable-retro-turbo behavior contract for `SuperMarioBros-Nes-v0`
+while being faster.
 
-Run from the local repo root:
+For the default remote target, run from the local repo root:
 
 ```bash
 python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
@@ -374,13 +474,21 @@ python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
   --host-key-alias beast-3-local
 ```
 
+For a user-requested local target, do not touch `beast-3-local`. Use a checked-in
+local mode if the runner supports one; otherwise mirror the runner's exact
+workload in a fresh local run directory under
+`/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local/runs/`, retain the
+result under the same
+`artifacts/benchmarks/host-results/pypi-stable-retro-turbo/VERSION/WORKLOAD_HASH/`
+cache path, and record `execution_target: "local"` in `aggregate.json`.
+
 The runner must:
 
 - query `https://pypi.org/pypi/stable-retro-turbo/json` and resolve the latest
   exact version at runtime
-- use Python `3.14` on the host, because current published turbo wheels are
-  Python-version-specific
-- create an isolated remote venv and install exactly
+- use Python `3.14` on the selected target, because current published turbo
+  wheels are Python-version-specific
+- create an isolated target venv and install exactly
   `stable-retro-turbo==VERSION` from PyPI
 - run `scripts/benchmark_stable_retro_turbo_pypi.py` with the host workload:
   `num_envs=16`, `num_threads=12`, `steps=50000`, `repeats=3`,
@@ -391,10 +499,10 @@ The runner must:
   `artifacts/benchmarks/host-results/pypi-stable-retro-turbo/VERSION/WORKLOAD_HASH/`
 - write `aggregate.json`, `manifest.json`, raw invocation JSON, load snapshots,
   and `index.jsonl`
-- return a cache hit without touching `beast-3-local` when the exact
+- return a cache hit without touching the selected target when the exact
   version/workload hash already has an aggregate, unless `--force` is passed
-- purge the remote PyPI run directory after copying and validating the local
-  cache, unless `--keep-remote` is passed
+- purge the target PyPI run directory after copying and validating the local
+  cache, unless `--keep-remote` or a local keep flag is passed
 
 The PyPI oracle benchmark intentionally uses a tiny local
 `stable_baselines3.common.vec_env.VecEnv` shim if SB3 is absent, matching the
@@ -472,8 +580,9 @@ For a final high-confidence single-ref baseline, use:
 
 Report:
 
-- whether the fixed-host benchmark worked
-- absolute remote run directory
+- whether the fixed-host protocol benchmark worked
+- execution target (`beast-3-local` remote or local)
+- absolute target run directory
 - mode and ref SHAs
 - command shape and workload knobs
 - measured count and warmup count
@@ -487,9 +596,9 @@ Report:
 - flagged outlier diagnostics, if any, without changing the official metric
 - host load before/after and any obvious competing processes
 - whether dirty local files were excluded
-- whether remote setup changed anything persistent
+- whether remote or local setup changed anything persistent
 - local result bundle path under `artifacts/benchmarks/host-results/`
-- whether remote bulk cleanup ran and what remains on `beast-3-local`
+- whether bulk cleanup ran and what remains on the selected target
 
 End comparison reports with a compact table:
 

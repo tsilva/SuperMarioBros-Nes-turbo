@@ -1,6 +1,7 @@
 .pypirc
 /target/
 /artifacts/
+/wheelhouse*/
 /.venv/
 /.venv314/
 /.mypy_cache/

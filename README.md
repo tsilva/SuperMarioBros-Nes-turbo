@@ -77,7 +77,6 @@ uv run maturin develop --release    # build and install the Rust extension
 make test                           # Rust tests + HF policy completion/parity oracle
 
 uv run python scripts/smoke_smb.py --rom-path /path/to/SuperMarioBros.nes  # quick ROM/emulator smoke check
-uv run python scripts/benchmark_vec_env.py --rom-path /path/to/SuperMarioBros.nes --num-envs 8 --frame-skip 4 --frame-stack 4
 uv run python scripts/benchmark_sps.py --rom-path /path/to/SuperMarioBros.nes --num-envs 16 --steps 500 --repeats 3
 
 uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode external      # raw SDL2 play view

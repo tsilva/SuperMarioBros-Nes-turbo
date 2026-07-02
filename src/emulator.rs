@@ -403,6 +403,7 @@ impl Ppu {
         }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     fn nametable_read(&self, table: usize, offset: usize) -> u8 {
         let physical_table = if self.vertical_mirroring {
