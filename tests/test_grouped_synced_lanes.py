@@ -4,24 +4,38 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import ACTION_MEANINGS, Actions, SuperMarioBrosNesTurboVecEnv
 from rom_helpers import require_rom
 GROUP_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+}
 
 
-def make_env(rom_path: Path, state: str | list[str], num_envs: int) -> SuperMarioBrosVecEnv:
-    return SuperMarioBrosVecEnv(
+def action_batch(name: str, num_envs: int) -> np.ndarray:
+    masks = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
+    for button in ACTION_BUTTONS[name]:
+        masks[:, BUTTON_TO_INDEX[button]] = 1
+    return masks
+
+
+def make_env(rom_path: Path, state: str | list[str], num_envs: int) -> SuperMarioBrosNesTurboVecEnv:
+    return SuperMarioBrosNesTurboVecEnv(
+        "SuperMarioBros-Nes-v0",
+        state=state,
         rom_path=rom_path,
         num_envs=num_envs,
+        use_restricted_actions=Actions.ALL,
         frame_skip=4,
         frame_stack=4,
-        grayscale=True,
-        crop_top=32,
-        crop_bottom=0,
-        resize_width=84,
-        resize_height=84,
-        state=state,
-        terminate_on_flag=False,
+        obs_grayscale=True,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_resize_algorithm="area",
+        obs_layout="chw",
     )
 
 
@@ -45,12 +59,10 @@ def test_repeated_state_groups_match_independent_lane_references() -> None:
         ref_index = GROUP_STATES.index(state)
         np.testing.assert_array_equal(grouped_obs[lane], ref_obs[ref_index][0])
 
-    noop = ACTION_MEANINGS.index("noop")
-    right = ACTION_MEANINGS.index("right")
-    for action_id in (noop, noop, right, noop):
-        grouped_result = grouped.step_fast(np.full((16,), action_id, dtype=np.uint8))
+    for action_name in ("noop", "noop", "right", "noop"):
+        grouped_result = grouped.step_fast(action_batch(action_name, 16))
         ref_results = [
-            ref.step_fast(np.asarray([action_id], dtype=np.uint8)) for ref in refs
+            ref.step_fast(action_batch(action_name, 1)) for ref in refs
         ]
         for lane, state in enumerate(lane_states):
             ref_index = GROUP_STATES.index(state)
@@ -66,10 +78,8 @@ def test_grouped_lanes_materialize_before_divergent_actions() -> None:
     grouped.reset()
     independent.reset()
 
-    noop = ACTION_MEANINGS.index("noop")
-    right = ACTION_MEANINGS.index("right")
-    actions = np.full((16,), noop, dtype=np.uint8)
-    actions[4] = right
+    actions = action_batch("noop", 16)
+    actions[4] = action_batch("right", 1)[0]
 
     assert_fast_step_equal(grouped.step_fast(actions), independent.step_fast(actions))
     assert_fast_step_equal(grouped.step_fast(actions), independent.step_fast(actions))

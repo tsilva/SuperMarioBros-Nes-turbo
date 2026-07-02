@@ -27,7 +27,7 @@ from play import (
     display_frame_from_obs,
     load_sdl2,
 )
-from supermariobrosnes_turbo import ACTION_SETS, SuperMarioBrosVecEnv, resolve_required_rom_path
+from supermariobrosnes_turbo import ACTION_SETS, Actions, SuperMarioBrosNesTurboVecEnv, resolve_required_rom_path
 
 
 DEFAULT_HF_FILENAME = "ppo_supermariobros-nes-v0_4500000_steps.zip"
@@ -173,6 +173,7 @@ class SdlPolicyPlayer:
         self.args = args
         self.action_names = ACTION_SETS[args.action_set]
         self.rom_path = resolve_required_rom_path(args.rom_path)
+        self.retro_action_masks = stable_action_masks(self.action_names, self.rom_path)
         self.env = self.make_env()
         self.obs = self.env.reset()
         self.display_env = self.make_display_env() if args.view == "raw" else None
@@ -235,25 +236,34 @@ class SdlPolicyPlayer:
 
     def make_env(self):
         if self.args.backend == "native":
-            return SuperMarioBrosVecEnv(
+            done_on = {}
+            if self.args.terminate_on_life_loss:
+                done_on["life_loss"] = ("lives", "decrease")
+            if self.args.terminate_on_level_change:
+                done_on["level_change"] = (("levelHi", "levelLo"), "change")
+            env = SuperMarioBrosNesTurboVecEnv(
+                self.args.game,
+                state=self.args.state,
                 rom_path=self.rom_path,
                 num_envs=1,
+                num_threads=1,
+                render_mode="rgb_array",
+                use_restricted_actions=Actions.ALL,
                 frame_skip=self.args.frame_skip,
-                grayscale=True,
+                obs_grayscale=True,
                 frame_stack=self.args.frame_stack,
-                frame_maxpool=self.args.max_pool_frames,
-                terminate_on_flag=self.args.terminate_on_flag,
-                crop_top=self.args.crop_top,
-                crop_bottom=self.args.crop_bottom,
-                resize_width=self.args.resize_width,
-                resize_height=self.args.resize_height,
-                state=self.args.state,
-                state_dir=self.args.state_dir,
-                action_set=self.args.action_set,
-                seed=self.args.seed,
-                terminate_on_life_loss=self.args.terminate_on_life_loss,
-                terminate_on_level_change=self.args.terminate_on_level_change,
+                maxpool_last_two=self.args.max_pool_frames,
+                obs_crop=(self.args.crop_top, self.args.crop_bottom, 0, 0),
+                obs_resize=(self.args.resize_height, self.args.resize_width),
+                obs_resize_algorithm="area",
+                obs_layout="chw",
+                obs_copy="safe_view",
+                reward_clip=False,
+                info_filter="all",
+                done_on=done_on or None,
             )
+            env.seed(self.args.seed)
+            return env
 
         import stable_retro
 
@@ -295,30 +305,38 @@ class SdlPolicyPlayer:
         )
         if hasattr(env, "seed"):
             env.seed(self.args.seed)
-        self.retro_action_masks = stable_action_masks(self.action_names, self.rom_path)
         return env
 
     def make_display_env(self):
         if self.args.backend == "native":
-            return SuperMarioBrosVecEnv(
+            done_on = {}
+            if self.args.terminate_on_life_loss:
+                done_on["life_loss"] = ("lives", "decrease")
+            if self.args.terminate_on_level_change:
+                done_on["level_change"] = (("levelHi", "levelLo"), "change")
+            env = SuperMarioBrosNesTurboVecEnv(
+                self.args.game,
+                state=self.args.state,
                 rom_path=self.rom_path,
                 num_envs=1,
+                num_threads=1,
+                render_mode="rgb_array",
+                use_restricted_actions=Actions.ALL,
                 frame_skip=self.args.frame_skip,
-                grayscale=False,
+                obs_grayscale=False,
                 frame_stack=1,
-                frame_maxpool=False,
-                terminate_on_flag=self.args.terminate_on_flag,
-                crop_top=0,
-                crop_bottom=0,
-                resize_width=NES_WIDTH,
-                resize_height=NES_HEIGHT,
-                state=self.args.state,
-                state_dir=self.args.state_dir,
-                action_set=self.args.action_set,
-                seed=self.args.seed,
-                terminate_on_life_loss=self.args.terminate_on_life_loss,
-                terminate_on_level_change=self.args.terminate_on_level_change,
+                maxpool_last_two=False,
+                obs_crop=None,
+                obs_resize=(NES_HEIGHT, NES_WIDTH),
+                obs_resize_algorithm="area",
+                obs_layout="chw",
+                obs_copy="safe_view",
+                reward_clip=False,
+                info_filter="all",
+                done_on=done_on or None,
             )
+            env.seed(self.args.seed)
+            return env
 
         import stable_retro
 
@@ -379,16 +397,9 @@ class SdlPolicyPlayer:
     def policy_step(self) -> None:
         action, _ = self.model.predict(self.obs, deterministic=self.args.deterministic)
         self.action = int(np.asarray(action).reshape(-1)[0])
-        if self.args.backend == "native":
-            obs, rewards, terminated, truncated, infos = self.env.step_gymnasium(
-                np.asarray([self.action], dtype=np.uint8),
-            )
-            terminated_value = bool(terminated[0])
-            truncated_value = bool(truncated[0])
-        else:
-            obs, rewards, dones, infos = self.env.step(self.retro_action_masks[[self.action]])
-            terminated_value = bool(dones[0])
-            truncated_value = False
+        obs, rewards, dones, infos = self.env.step(self.retro_action_masks[[self.action]])
+        terminated_value = bool(dones[0])
+        truncated_value = False
         self.obs = obs
         self.step_display_env()
         self.reward += float(rewards[0])
@@ -416,14 +427,9 @@ class SdlPolicyPlayer:
             self.display_obs = self.obs
             self.display_info = self.info
             return
-        if self.args.backend == "native":
-            display_obs, _rewards, _terminated, _truncated, display_infos = self.display_env.step_gymnasium(
-                np.asarray([self.action], dtype=np.uint8),
-            )
-        else:
-            display_obs, _rewards, _dones, display_infos = self.display_env.step(
-                self.retro_action_masks[[self.action]],
-            )
+        display_obs, _rewards, _dones, display_infos = self.display_env.step(
+            self.retro_action_masks[[self.action]],
+        )
         self.display_obs = display_obs
         self.display_info = dict(display_infos[0])
 

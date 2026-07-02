@@ -10,13 +10,25 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
+from supermariobrosnes_turbo import Actions, CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
 
 DEFAULT_ROM = default_rom_path()
 NES_WIDTH = 256
 NES_HEIGHT = 240
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+    "right_b": ("RIGHT", "B"),
+    "right_a": ("RIGHT", "A"),
+    "right_a_b": ("RIGHT", "A", "B"),
+    "a": ("A",),
+    "left": ("LEFT",),
+    "start": ("START",),
+}
 
 SDL_INIT_VIDEO = 0x00000020
 SDL_WINDOWPOS_CENTERED = 0x2FFF0000
@@ -68,20 +80,19 @@ class SdlExternalVecPlayer:
             resize_width = NES_WIDTH
             resize_height = NES_HEIGHT
 
-        self.env = SuperMarioBrosVecEnv(
+        self.env = SuperMarioBrosNesTurboVecEnv(
+            "SuperMarioBros-Nes-v0",
+            state=args.state,
             rom_path=resolve_required_rom_path(args.rom_path),
             num_envs=1,
+            use_restricted_actions=Actions.ALL,
             frame_skip=frame_skip,
-            grayscale=grayscale,
+            obs_grayscale=grayscale,
             frame_stack=frame_stack,
-            terminate_on_flag=False,
-            crop_top=crop_top,
-            crop_bottom=crop_bottom,
-            resize_width=resize_width,
-            resize_height=resize_height,
-            state=args.state,
-            state_dir=args.state_dir,
-            action_set="full",
+            obs_crop=(crop_top, crop_bottom, 0, 0),
+            obs_resize=(resize_height, resize_width),
+            obs_resize_algorithm="area",
+            obs_layout="chw",
         )
         self.display_grayscale = grayscale
         self.scale = args.scale
@@ -230,8 +241,12 @@ class SdlExternalVecPlayer:
             self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
 
     def step_one(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
+        action_name = ACTION_MEANINGS[action]
+        action_mask = np.zeros((1, len(NES_BUTTONS)), dtype=np.uint8)
+        for button in ACTION_BUTTONS[action_name]:
+            action_mask[0, BUTTON_TO_INDEX[button]] = 1
         obs, rewards, terminated, truncated, infos = self.env.step_gymnasium(
-            np.asarray([action], dtype=np.uint8)
+            action_mask
         )
         return (
             obs[0],

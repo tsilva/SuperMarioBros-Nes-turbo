@@ -14,7 +14,6 @@ from supermariobrosnes_turbo import (
     Observations,
     State,
     SuperMarioBrosNesTurboVecEnv,
-    SuperMarioBrosVecEnv,
 )
 from rom_helpers import require_rom
 
@@ -305,31 +304,32 @@ def test_native_turbo_vec_env_actions_all_mask_matches_discrete_fast_env() -> No
         frame_stack=1,
         info_filter="none",
     )
-    fast_env = SuperMarioBrosVecEnv(
-        rom_path=rom_path,
-        num_envs=1,
-        frame_skip=1,
-        grayscale=True,
-        frame_stack=1,
-        crop_top=32,
-        resize_width=84,
-        resize_height=84,
+    discrete_env = SuperMarioBrosNesTurboVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
-        action_set="full",
-        terminate_on_flag=False,
+        num_envs=1,
+        rom_path=str(rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.DISCRETE,
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_grayscale=True,
+        obs_resize_algorithm="area",
+        obs_layout="chw",
+        frame_skip=1,
+        frame_stack=1,
+        info_filter="none",
     )
     try:
-        np.testing.assert_array_equal(retro_env.reset(), fast_env.reset())
+        np.testing.assert_array_equal(retro_env.reset(), discrete_env.reset())
         masks = np.zeros((1, retro_env.num_buttons), dtype=np.uint8)
         masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
         masks[0, BUTTON_TO_INDEX["A"]] = 1
         retro_obs, retro_rewards, retro_dones, _infos = retro_env.step(masks)
-        fast_obs, fast_rewards, fast_dones, _infos = fast_env.step(
-            np.asarray([compare.ACTION_SETS["full"].index("right_a")], dtype=np.uint8),
-        )
-        np.testing.assert_array_equal(retro_obs, fast_obs)
-        np.testing.assert_array_equal(retro_rewards, fast_rewards)
-        np.testing.assert_array_equal(retro_dones, fast_dones)
+        discrete_obs, discrete_rewards, discrete_dones, _infos = discrete_env.step(np.asarray([24], dtype=np.uint8))
+        np.testing.assert_array_equal(retro_obs, discrete_obs)
+        np.testing.assert_array_equal(retro_rewards, discrete_rewards)
+        np.testing.assert_array_equal(retro_dones, discrete_dones)
     finally:
         retro_env.close()
-        fast_env.close()
+        discrete_env.close()

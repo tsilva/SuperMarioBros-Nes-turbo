@@ -5,11 +5,18 @@ from pathlib import Path
 
 import numpy as np
 
-from play import action_id, latest_frame, png_from_frame
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
+from play import latest_frame, png_from_frame
+from supermariobrosnes_turbo import Actions, SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
 
 DEFAULT_ROM = default_rom_path()
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "start": ("START",),
+    "right_b": ("RIGHT", "B"),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,20 +37,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    env = SuperMarioBrosVecEnv(
+    env = SuperMarioBrosNesTurboVecEnv(
+        "SuperMarioBros-Nes-v0",
         rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=1,
+        use_restricted_actions=Actions.ALL,
         frame_skip=1,
-        grayscale=False,
+        obs_grayscale=False,
         frame_stack=1,
-        resize_width=256,
-        resize_height=240,
-        action_set="full",
+        obs_resize=(240, 256),
     )
     obs = env.reset()[0]
 
     def step_one(action_name: str) -> np.ndarray:
-        actions = np.asarray([action_id(action_name)], dtype=np.uint8)
+        actions = np.zeros((1, len(NES_BUTTONS)), dtype=np.uint8)
+        for button in ACTION_BUTTONS[action_name]:
+            actions[0, BUTTON_TO_INDEX[button]] = 1
         return env.step_fast(actions)[0][0]
 
     for _ in range(args.pre_start_frames):

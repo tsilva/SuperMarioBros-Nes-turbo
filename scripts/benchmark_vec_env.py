@@ -8,10 +8,24 @@ import numpy as np
 
 from supermariobrosnes_turbo import (
     ACTION_SETS,
-    SuperMarioBrosVecEnv,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
     default_rom_path,
     resolve_required_rom_path,
 )
+
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+    "right_b": ("RIGHT", "B"),
+    "right_a": ("RIGHT", "A"),
+    "right_a_b": ("RIGHT", "A", "B"),
+    "a": ("A",),
+    "left": ("LEFT",),
+    "start": ("START",),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,26 +47,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
-    parser.add_argument("--action", type=int, default=0)
+    parser.add_argument("--action", default="noop")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    env = SuperMarioBrosVecEnv(
+    action_names = ACTION_SETS[args.action_set]
+    if args.action not in action_names:
+        raise ValueError(f"--action must be one of: {', '.join(action_names)}")
+    env = SuperMarioBrosNesTurboVecEnv(
+        "SuperMarioBros-Nes-v0",
+        state=args.state,
         rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=args.num_envs,
+        use_restricted_actions=Actions.ALL,
         frame_skip=args.frame_skip,
-        grayscale=not args.rgb,
+        obs_grayscale=not args.rgb,
         frame_stack=args.frame_stack,
-        resize_width=args.resize_width,
-        resize_height=args.resize_height,
-        state=args.state,
-        state_dir=args.state_dir,
-        action_set=args.action_set,
+        obs_resize=(args.resize_height, args.resize_width),
+        obs_layout="chw",
+        obs_resize_algorithm="area",
     )
     obs = env.reset()
-    actions = np.full((args.num_envs,), args.action, dtype=np.uint8)
+    actions = np.zeros((args.num_envs, len(NES_BUTTONS)), dtype=np.uint8)
+    for button in ACTION_BUTTONS[args.action]:
+        actions[:, BUTTON_TO_INDEX[button]] = 1
 
     for _ in range(args.warmup):
         env.step_fast(actions)

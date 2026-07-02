@@ -461,13 +461,13 @@ def _normalize_retro_crop(obs_crop: Sequence[int] | None) -> tuple[int, int, int
     if obs_crop is None:
         return 0, 0, 0, 0
     if len(obs_crop) != 4:
-        raise ValueError("obs_crop must be a (top, right, bottom, left) tuple")
-    top, right, bottom, left = (int(value) for value in obs_crop)
+        raise ValueError("obs_crop must be a (top, bottom, left, right) tuple")
+    top, bottom, left, right = (int(value) for value in obs_crop)
     if min(top, right, bottom, left) < 0:
         raise ValueError("obs_crop values must be non-negative")
     if top + bottom >= VISIBLE_HEIGHT or left + right >= VISIBLE_WIDTH:
         raise ValueError("obs_crop removes the whole visible frame")
-    return top, right, bottom, left
+    return top, bottom, left, right
 
 
 def _normalize_retro_resize(
@@ -478,8 +478,8 @@ def _normalize_retro_resize(
     if obs_resize is None:
         return source_width, source_height
     if len(obs_resize) != 2:
-        raise ValueError("obs_resize must be a (width, height) tuple")
-    width, height = (int(value) for value in obs_resize)
+        raise ValueError("obs_resize must be a (height, width) tuple")
+    height, width = (int(value) for value in obs_resize)
     if width <= 0 or height <= 0:
         raise ValueError("obs_resize dimensions must be positive")
     return width, height
@@ -599,76 +599,101 @@ def _normalize_done_on_info(
     return tuple((name, keys, op) for name, (keys, op) in rules.items())
 
 
-class SuperMarioBrosVecEnv(_SB3VecEnv):
-    """SB3-compatible vectorized Mario environment with the hot loop in Rust.
-
-    `step_wait()` follows the Stable Baselines3 `VecEnv` contract and returns
-    `(obs, rewards, dones, infos)`. Use `step_wait_gymnasium()` when code needs
-    separate `terminated` and `truncated` arrays.
-    """
+class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
+    """SMB-only vector env with the `stable-retro-turbo` RetroVecEnv signature."""
 
     metadata = {"render_modes": []}
+    _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
 
     def __init__(
         self,
-        rom_path: str | Path | None = None,
+        game: str,
+        state: Any = State.DEFAULT,
+        scenario: str | Path | None = None,
+        info: str | Path | None = None,
+        use_restricted_actions: Any = Actions.FILTERED,
+        record: bool = False,
+        players: int = 1,
+        inttype: Any = Integrations.STABLE,
+        obs_type: Any = Observations.IMAGE,
+        render_mode: str = "human",
+        *,
         num_envs: int = 1,
-        frame_skip: int = 4,
-        grayscale: bool = True,
-        frame_stack: int = 4,
-        frame_maxpool: bool = False,
-        terminate_on_flag: bool = True,
-        crop_top: int = 0,
-        crop_bottom: int = 0,
-        resize_width: int = 84,
-        resize_height: int = 84,
-        crop_left: int = 0,
-        crop_right: int = 0,
-        state: StateSpec | Sequence[StateSpec] | Mapping[StateSpec, float] | None = None,
-        state_dir: str | Path | None = None,
-        action_set: str | Sequence[str] = "simple",
-        seed: int | None = None,
-        terminate_on_life_loss: bool = False,
-        terminate_on_level_change: bool = False,
-        done_on_info: DoneOnInfoSpec | None = None,
-        done_on: DoneOnInfoSpec | Sequence[str] | None = None,
+        num_threads: int | None = None,
+        rom_path: str | Path | None = None,
+        obs_copy: str = "copy",
+        obs_resize: Sequence[int] | None = None,
+        obs_crop: Sequence[int] | None = None,
+        obs_grayscale: bool = False,
+        obs_resize_algorithm: str = "nearest",
+        obs_layout: str = "hwc",
+        frame_skip: int = 1,
+        frame_stack: int = 1,
+        maxpool_last_two: bool = False,
         noop_reset_max: int = 0,
         sticky_action_prob: float = 0.0,
-        obs_layout: str = "chw",
-        obs_copy: str = "unsafe_view",
         reward_clip: bool | Sequence[float] = False,
         info_filter: Any = "all",
-        obs_resize_algorithm: str = "area",
+        done_on: Any = None,
         copy_observations: Any = _UNSET,
-        unsafe_zero_copy: Any = _UNSET,
         info_mode: Any = _UNSET,
         info_keys: Any = _UNSET,
+        done_on_info: Any = _UNSET,
+        unsafe_zero_copy: Any = _UNSET,
     ) -> None:
+        if str(game) != DEFAULT_STABLE_RETRO_GAME:
+            raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
+        if players != 1:
+            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports players=1")
+        if record:
+            raise ValueError("SuperMarioBrosNesTurboVecEnv does not support movie recording")
+        obs_type_name = getattr(obs_type, "name", obs_type)
+        if obs_type is not None and str(obs_type_name).split(".")[-1].upper() != "IMAGE":
+            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports image observations only")
+        if info not in (None, "data") and not str(info).endswith(".json"):
+            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB data info file")
+        if scenario not in (None, "scenario") and not str(scenario).endswith(".json"):
+            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB scenario file")
+
         noop_reset_max = int(noop_reset_max)
         sticky_action_prob = float(sticky_action_prob)
         if noop_reset_max < 0:
             raise ValueError("noop_reset_max must be non-negative")
         if not 0.0 <= sticky_action_prob <= 1.0:
             raise ValueError("sticky_action_prob must be between 0.0 and 1.0")
-        self.action_meanings = _resolve_action_set(action_set)
-        self.action_set = action_set if isinstance(action_set, str) else "custom"
+        crop_top, crop_bottom, crop_left, crop_right = _normalize_retro_crop(obs_crop)
+        source_width = VISIBLE_WIDTH - crop_left - crop_right
+        source_height = VISIBLE_HEIGHT - crop_top - crop_bottom
+        resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
+        action_mode = _normalize_action_mode(use_restricted_actions)
+        resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
+        if done_on is not None:
+            if resolved_done_on is not _UNSET:
+                raise ValueError("cannot pass both done_on and done_on_info")
+            resolved_done_on = done_on
+
+        self.game = str(game)
+        self.action_meanings = ACTION_SETS["full"]
+        self.action_set = "full"
         self._core_action_ids = _core_action_ids(self.action_meanings)
         self._action_masks = _action_masks(self.action_meanings)
+        state = _normalize_retro_state(state)
         self._state_collection = isinstance(state, Mapping) or (
             isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview))
         )
-        if done_on is not None:
-            if done_on_info is not None:
-                raise ValueError("cannot pass both done_on and done_on_info")
-            done_on_info = _normalize_done_on_alias(done_on)
+        normalized_done_on_info = (
+            None
+            if resolved_done_on is _UNSET
+            else _normalize_done_on_alias(resolved_done_on)
+        )
         done_on_info_rules = _normalize_done_on_info(
-            done_on_info,
-            bool(terminate_on_life_loss),
-            bool(terminate_on_level_change),
+            normalized_done_on_info,
+            False,
+            False,
         )
         initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
             state,
-            state_dir,
+            None,
             num_envs,
         )
         self.obs_layout = _normalize_obs_layout(obs_layout)
@@ -680,14 +705,6 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         self.info_mode, self.info_keys = _normalize_info_filter(info_filter, info_mode, info_keys)
         self.reward_clip, self.reward_clip_low, self.reward_clip_high = _normalize_reward_clip(reward_clip)
         self.obs_resize_algorithm = _normalize_resize_algorithm(obs_resize_algorithm)
-        crop_left = int(crop_left)
-        crop_right = int(crop_right)
-        if crop_left < 0 or crop_right < 0:
-            raise ValueError("crop_left and crop_right must be non-negative")
-        source_height = VISIBLE_HEIGHT - int(crop_top) - int(crop_bottom)
-        source_width = VISIBLE_WIDTH - crop_left - crop_right
-        if source_height <= 0 or source_width <= 0:
-            raise ValueError("crop values remove the whole visible frame")
         self.crop_left = crop_left
         self.crop_right = crop_right
         self._output_resize_width = int(resize_width)
@@ -702,12 +719,12 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         core_resize_width = VISIBLE_WIDTH if self._needs_python_postprocess else self._output_resize_width
         core_resize_height = source_height if self._needs_python_postprocess else self._output_resize_height
         self._core = FastMarioVecEnv(
-            _expand_rom_path(rom_path),
+            _expand_rom_path(_resolve_rom_path(str(game), rom_path)),
             num_envs,
             frame_skip,
-            grayscale,
+            bool(obs_grayscale),
             frame_stack,
-            terminate_on_flag,
+            False,
             crop_top,
             crop_bottom,
             core_resize_width,
@@ -715,23 +732,25 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             initial_states,
             list(initial_state_names),
             initial_state_weights,
-            0 if seed is None else int(seed),
-            bool(terminate_on_life_loss),
-            bool(terminate_on_level_change),
+            0,
+            False,
+            False,
             [(name, list(keys), op) for name, keys, op in done_on_info_rules],
-            bool(frame_maxpool),
+            bool(maxpool_last_two),
             noop_reset_max,
             sticky_action_prob,
         )
         self.initial_state_names = tuple(self._core.initial_state_names)
         self.num_envs = self._core.num_envs
+        self.num_threads = self.num_envs if num_threads is None else int(num_threads)
+        self.num_buttons = len(NES_BUTTONS)
+        self.button_combos = [list(combo) for combo in self._BUTTON_COMBOS]
+        self.use_restricted_actions = use_restricted_actions
+        self._action_mode = action_mode
         self.frame_skip = self._core.frame_skip
-        self.grayscale = self._core.grayscale
+        self.obs_grayscale = self._core.grayscale
         self.frame_stack = self._core.frame_stack
-        self.frame_maxpool = self._core.frame_maxpool
-        self.terminate_on_flag = terminate_on_flag
-        self.terminate_on_life_loss = bool(terminate_on_life_loss)
-        self.terminate_on_level_change = bool(terminate_on_level_change)
+        self.maxpool_last_two = self._core.frame_maxpool
         self.done_on_info_rules = done_on_info_rules
         self.noop_reset_max = self._core.noop_reset_max
         self.sticky_action_prob = self._core.sticky_action_prob
@@ -760,11 +779,18 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
             shape=self._single_obs_shape,
             dtype=np.uint8,
         )
-        self.render_mode = None
+        action_space = (
+            spaces.Discrete(36)
+            if action_mode == "DISCRETE"
+            else spaces.MultiBinary(self.num_buttons)
+        )
+        self.render_mode = render_mode
+        self.viewer = None
+        self.closed = False
         super().__init__(
             num_envs=self.num_envs,
             observation_space=observation_space,
-            action_space=self.single_action_space,
+            action_space=action_space,
         )
 
         self._actions = np.zeros((self.num_envs,), dtype=np.uint8)
@@ -839,15 +865,56 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         return json.loads(self._core.profiler_snapshot(int(top_n)))
 
     def step_async(self, actions: np.ndarray) -> None:
-        actions_arr = np.asarray(actions, dtype=np.uint8)
-        if actions_arr.shape != (self.num_envs,):
-            raise ValueError(f"actions must have shape {(self.num_envs,)}, got {actions_arr.shape}")
-        if actions_arr.size and int(actions_arr.max()) >= len(self.action_meanings):
-            raise ValueError(
-                f"actions must be in [0, {len(self.action_meanings) - 1}] "
-                f"for action_set={self.action_set!r}"
-            )
-        np.copyto(self._actions, self._core_action_ids[actions_arr])
+        np.copyto(self._actions, self._actions_to_core_ids(actions))
+
+    def _actions_to_core_ids(self, actions: Any) -> np.ndarray:
+        if self._action_mode == "DISCRETE":
+            masks = self._discrete_actions_to_masks(actions)
+        else:
+            masks = np.asarray(actions, dtype=np.uint8)
+            if masks.shape == (self.num_buttons,):
+                masks = masks.reshape(1, self.num_buttons)
+            if masks.shape != (self.num_envs, self.num_buttons):
+                raise ValueError(
+                    f"actions must have shape {(self.num_envs, self.num_buttons)}, got {masks.shape}",
+                )
+        return np.asarray([self._mask_to_core_action(mask) for mask in masks], dtype=np.uint8)
+
+    def _discrete_actions_to_masks(self, actions: Any) -> np.ndarray:
+        values = np.asarray(actions, dtype=np.int64).reshape(-1)
+        if values.shape != (self.num_envs,):
+            raise ValueError(f"actions must have shape {(self.num_envs,)}, got {values.shape}")
+        masks = np.zeros((self.num_envs, self.num_buttons), dtype=np.uint8)
+        for env_idx, raw_value in enumerate(values):
+            value = int(raw_value)
+            if value < 0 or value >= 36:
+                raise ValueError("DISCRETE actions must be in [0, 35]")
+            action_bits = 0
+            for combo in self._BUTTON_COMBOS:
+                current = value % len(combo)
+                value //= len(combo)
+                action_bits |= combo[current]
+            for button_idx in range(self.num_buttons):
+                masks[env_idx, button_idx] = (action_bits >> button_idx) & 1
+        return masks
+
+    def _mask_to_core_action(self, mask: np.ndarray) -> int:
+        pressed = {button for button, index in BUTTON_TO_INDEX.items() if int(mask[index])}
+        if "START" in pressed and not (pressed & {"LEFT", "RIGHT", "A", "B"}):
+            return CORE_ACTION_MEANINGS.index("start")
+        if "RIGHT" in pressed:
+            if "A" in pressed and "B" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_a_b")
+            if "A" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_a")
+            if "B" in pressed:
+                return CORE_ACTION_MEANINGS.index("right_b")
+            return CORE_ACTION_MEANINGS.index("right")
+        if "LEFT" in pressed:
+            return CORE_ACTION_MEANINGS.index("left")
+        if "A" in pressed:
+            return CORE_ACTION_MEANINGS.index("a")
+        return CORE_ACTION_MEANINGS.index("noop")
 
     def step_wait(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
         obs, rewards, terminated, truncated = self.step_wait_fast()
@@ -1091,7 +1158,7 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
         )
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
     def get_attr(self, attr_name: str, indices: None | int | Iterable[int] = None) -> list[Any]:
         if not hasattr(self, attr_name):
@@ -1203,169 +1270,3 @@ def _resolve_rom_path(game: str, rom_path: str | Path | None) -> str | Path:
         "or import the ROM into stable-retro data"
     )
 
-
-class SuperMarioBrosNesTurboVecEnv(SuperMarioBrosVecEnv):
-    """SMB-only vector env with a `stable-retro-turbo` compatible surface."""
-
-    _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
-
-    def __init__(
-        self,
-        game: str,
-        state: Any = State.DEFAULT,
-        scenario: str | Path | None = None,
-        info: str | Path | None = None,
-        use_restricted_actions: Any = Actions.FILTERED,
-        record: bool = False,
-        players: int = 1,
-        inttype: Any = Integrations.STABLE,
-        obs_type: Any = Observations.IMAGE,
-        render_mode: str = "human",
-        *,
-        num_envs: int = 1,
-        num_threads: int | None = None,
-        rom_path: str | Path | None = None,
-        obs_copy: str = "copy",
-        obs_resize: Sequence[int] | None = None,
-        obs_crop: Sequence[int] | None = None,
-        obs_grayscale: bool = False,
-        obs_resize_algorithm: str = "nearest",
-        obs_layout: str = "hwc",
-        frame_skip: int = 1,
-        frame_stack: int = 1,
-        maxpool_last_two: bool = False,
-        noop_reset_max: int = 0,
-        sticky_action_prob: float = 0.0,
-        reward_clip: bool | Sequence[float] = False,
-        info_filter: Any = "all",
-        done_on: Any = None,
-        copy_observations: Any = _UNSET,
-        info_mode: Any = _UNSET,
-        info_keys: Any = _UNSET,
-        done_on_info: Any = _UNSET,
-        unsafe_zero_copy: Any = _UNSET,
-    ) -> None:
-        if str(game) != DEFAULT_STABLE_RETRO_GAME:
-            raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
-        if players != 1:
-            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports players=1")
-        if record:
-            raise ValueError("SuperMarioBrosNesTurboVecEnv does not support movie recording")
-        obs_type_name = getattr(obs_type, "name", obs_type)
-        if obs_type is not None and str(obs_type_name).split(".")[-1].upper() != "IMAGE":
-            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports image observations only")
-        if info not in (None, "data") and not str(info).endswith(".json"):
-            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB data info file")
-        if scenario not in (None, "scenario") and not str(scenario).endswith(".json"):
-            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB scenario file")
-
-        crop_top, crop_right, crop_bottom, crop_left = _normalize_retro_crop(obs_crop)
-        source_width = VISIBLE_WIDTH - crop_left - crop_right
-        source_height = VISIBLE_HEIGHT - crop_top - crop_bottom
-        resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
-        action_mode = _normalize_action_mode(use_restricted_actions)
-        resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
-        if done_on is not None:
-            if resolved_done_on is not _UNSET:
-                raise ValueError("cannot pass both done_on and done_on_info")
-            resolved_done_on = done_on
-
-        super().__init__(
-            rom_path=_resolve_rom_path(str(game), rom_path),
-            num_envs=num_envs,
-            frame_skip=frame_skip,
-            grayscale=bool(obs_grayscale),
-            frame_stack=frame_stack,
-            frame_maxpool=bool(maxpool_last_two),
-            terminate_on_flag=False,
-            crop_top=crop_top,
-            crop_bottom=crop_bottom,
-            crop_left=crop_left,
-            crop_right=crop_right,
-            resize_width=resize_width,
-            resize_height=resize_height,
-            state=_normalize_retro_state(state),
-            action_set="full",
-            done_on=None if resolved_done_on is _UNSET else resolved_done_on,
-            noop_reset_max=noop_reset_max,
-            sticky_action_prob=sticky_action_prob,
-            obs_layout=obs_layout,
-            obs_copy=obs_copy,
-            reward_clip=reward_clip,
-            info_filter=info_filter,
-            obs_resize_algorithm=obs_resize_algorithm,
-            copy_observations=copy_observations,
-            unsafe_zero_copy=unsafe_zero_copy,
-            info_mode=info_mode,
-            info_keys=info_keys,
-        )
-        self.game = str(game)
-        self.num_threads = self.num_envs if num_threads is None else int(num_threads)
-        self.num_buttons = len(NES_BUTTONS)
-        self.button_combos = [list(combo) for combo in self._BUTTON_COMBOS]
-        self.use_restricted_actions = use_restricted_actions
-        self._action_mode = action_mode
-        self.render_mode = render_mode
-        self.viewer = None
-        self.closed = False
-        self.action_space = (
-            spaces.Discrete(36)
-            if action_mode == "DISCRETE"
-            else spaces.MultiBinary(self.num_buttons)
-        )
-
-    def step_async(self, actions: np.ndarray) -> None:
-        action_ids = self._actions_to_core_ids(actions)
-        SuperMarioBrosVecEnv.step_async(self, action_ids)
-
-    def close(self) -> None:
-        self.closed = True
-
-    def _actions_to_core_ids(self, actions: Any) -> np.ndarray:
-        if self._action_mode == "DISCRETE":
-            masks = self._discrete_actions_to_masks(actions)
-        else:
-            masks = np.asarray(actions, dtype=np.uint8)
-            if masks.shape == (self.num_buttons,):
-                masks = masks.reshape(1, self.num_buttons)
-            if masks.shape != (self.num_envs, self.num_buttons):
-                raise ValueError(
-                    f"actions must have shape {(self.num_envs, self.num_buttons)}, got {masks.shape}",
-                )
-        return np.asarray([self._mask_to_core_action(mask) for mask in masks], dtype=np.uint8)
-
-    def _discrete_actions_to_masks(self, actions: Any) -> np.ndarray:
-        values = np.asarray(actions, dtype=np.int64).reshape(-1)
-        if values.shape != (self.num_envs,):
-            raise ValueError(f"actions must have shape {(self.num_envs,)}, got {values.shape}")
-        masks = np.zeros((self.num_envs, self.num_buttons), dtype=np.uint8)
-        for env_idx, raw_value in enumerate(values):
-            value = int(raw_value)
-            if value < 0 or value >= 36:
-                raise ValueError("DISCRETE actions must be in [0, 35]")
-            action_bits = 0
-            for combo in self._BUTTON_COMBOS:
-                current = value % len(combo)
-                value //= len(combo)
-                action_bits |= combo[current]
-            for button_idx in range(self.num_buttons):
-                masks[env_idx, button_idx] = (action_bits >> button_idx) & 1
-        return masks
-
-    def _mask_to_core_action(self, mask: np.ndarray) -> int:
-        pressed = {button for button, index in BUTTON_TO_INDEX.items() if int(mask[index])}
-        if "START" in pressed and not (pressed & {"LEFT", "RIGHT", "A", "B"}):
-            return CORE_ACTION_MEANINGS.index("start")
-        if "RIGHT" in pressed:
-            if "A" in pressed and "B" in pressed:
-                return CORE_ACTION_MEANINGS.index("right_a_b")
-            if "A" in pressed:
-                return CORE_ACTION_MEANINGS.index("right_a")
-            if "B" in pressed:
-                return CORE_ACTION_MEANINGS.index("right_b")
-            return CORE_ACTION_MEANINGS.index("right")
-        if "LEFT" in pressed:
-            return CORE_ACTION_MEANINGS.index("left")
-        if "A" in pressed:
-            return CORE_ACTION_MEANINGS.index("a")
-        return CORE_ACTION_MEANINGS.index("noop")

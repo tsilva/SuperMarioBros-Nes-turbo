@@ -14,7 +14,8 @@ import numpy as np
 
 from supermariobrosnes_turbo import (
     ACTION_SETS,
-    SuperMarioBrosVecEnv,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
     default_rom_path,
     resolve_required_rom_path,
 )
@@ -339,27 +340,45 @@ def install_sb3_vecenv_shim_if_needed() -> None:
     sys.modules["stable_baselines3.common.vec_env"] = vec_env
 
 
-def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosVecEnv:
-    return SuperMarioBrosVecEnv(
-        rom_path=config.rom_path,
+def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosNesTurboVecEnv:
+    source_height = STABLE_VISIBLE_HEIGHT - config.crop_top - config.crop_bottom
+    obs_crop = None
+    if config.crop_top != 0 or config.crop_bottom != 0:
+        obs_crop = (config.crop_top, config.crop_bottom, 0, 0)
+    obs_resize = None
+    if config.resize_width != STABLE_VISIBLE_WIDTH or config.resize_height != source_height:
+        obs_resize = (config.resize_height, config.resize_width)
+    done_on = {}
+    if config.terminate_on_life_loss:
+        done_on["life_loss"] = ("lives", "decrease")
+    if config.terminate_on_level_change:
+        done_on["level_change"] = (("levelHi", "levelLo"), "change")
+
+    env = SuperMarioBrosNesTurboVecEnv(
+        config.game,
+        state=config.state,
         num_envs=config.num_envs,
+        num_threads=config.env_threads if config.env_threads > 0 else None,
+        rom_path=str(config.rom_path),
+        render_mode="rgb_array",
+        use_restricted_actions=Actions.ALL,
+        obs_crop=obs_crop,
+        obs_resize=obs_resize,
+        obs_grayscale=config.grayscale,
+        obs_resize_algorithm="area",
+        obs_layout="chw",
+        obs_copy=config.obs_copy,
         frame_skip=config.frame_skip,
-        grayscale=config.grayscale,
         frame_stack=config.frame_stack,
-        frame_maxpool=config.frame_maxpool,
+        maxpool_last_two=config.frame_maxpool,
         noop_reset_max=config.noop_reset_max,
         sticky_action_prob=config.sticky_action_prob,
-        terminate_on_flag=config.terminate_on_flag,
-        terminate_on_life_loss=config.terminate_on_life_loss,
-        terminate_on_level_change=config.terminate_on_level_change,
-        crop_top=config.crop_top,
-        crop_bottom=config.crop_bottom,
-        resize_width=config.resize_width,
-        resize_height=config.resize_height,
-        state=config.state,
-        action_set=config.action_set,
-        seed=config.seed,
+        reward_clip=False,
+        info_filter="all",
+        done_on=done_on or None,
     )
+    env.seed(config.seed)
+    return env
 
 
 def make_retro_env(config: ComparisonConfig):

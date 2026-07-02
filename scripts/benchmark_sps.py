@@ -12,7 +12,8 @@ import numpy as np
 from supermariobrosnes_turbo import (
     ACTION_SETS,
     CORE_ACTION_MEANINGS,
-    SuperMarioBrosVecEnv,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
     default_rom_path,
     resolve_required_rom_path,
 )
@@ -20,6 +21,18 @@ from supermariobrosnes_turbo import (
 
 DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+    "right_b": ("RIGHT", "B"),
+    "right_a": ("RIGHT", "A"),
+    "right_a_b": ("RIGHT", "A", "B"),
+    "a": ("A",),
+    "left": ("LEFT",),
+    "start": ("START",),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,10 +151,14 @@ def has_initial_state(args: argparse.Namespace) -> bool:
 
 
 def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
-    return np.full((num_envs,), action_meanings.index(action_name), dtype=np.uint8)
+    del action_meanings
+    actions = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
+    for button in ACTION_BUTTONS[action_name]:
+        actions[:, BUTTON_TO_INDEX[button]] = 1
+    return actions
 
 
-def step_env(env: SuperMarioBrosVecEnv, actions: np.ndarray, include_info: bool) -> None:
+def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, include_info: bool) -> None:
     if include_info:
         env.step(actions)
     else:
@@ -149,7 +166,7 @@ def step_env(env: SuperMarioBrosVecEnv, actions: np.ndarray, include_info: bool)
 
 
 def step_repeated(
-    env: SuperMarioBrosVecEnv,
+    env: SuperMarioBrosNesTurboVecEnv,
     actions: np.ndarray,
     count: int,
     include_info: bool,
@@ -159,7 +176,7 @@ def step_repeated(
 
 
 def prepare_game(
-    env: SuperMarioBrosVecEnv,
+    env: SuperMarioBrosNesTurboVecEnv,
     args: argparse.Namespace,
     action_meanings: tuple[str, ...],
 ) -> None:
@@ -173,7 +190,7 @@ def prepare_game(
     step_repeated(env, noop, args.post_start_steps, args.include_info)
 
 
-def run_once(env: SuperMarioBrosVecEnv, actions: np.ndarray, args: argparse.Namespace) -> dict[str, float]:
+def run_once(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, args: argparse.Namespace) -> dict[str, float]:
     start = time.perf_counter()
     step_repeated(env, actions, args.steps, args.include_info)
     elapsed = time.perf_counter() - start
@@ -296,20 +313,19 @@ def main() -> None:
     args.parsed_states = initial_states_for_args(args)
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
-    env = SuperMarioBrosVecEnv(
+    env = SuperMarioBrosNesTurboVecEnv(
+        "SuperMarioBros-Nes-v0",
+        state=benchmark_state(args),
         rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=args.num_envs,
+        use_restricted_actions=Actions.ALL,
         frame_skip=args.frame_skip,
-        grayscale=not args.rgb,
+        obs_grayscale=not args.rgb,
         frame_stack=args.frame_stack,
-        terminate_on_flag=args.terminate_on_flag,
-        crop_top=args.crop_top,
-        crop_bottom=args.crop_bottom,
-        resize_width=args.resize_width,
-        resize_height=args.resize_height,
-        state=benchmark_state(args),
-        state_dir=args.state_dir,
-        action_set=action_set,
+        obs_crop=(args.crop_top, args.crop_bottom, 0, 0),
+        obs_resize=(args.resize_height, args.resize_width),
+        obs_resize_algorithm="area",
+        obs_layout="chw",
     )
     if args.profile_output is not None:
         env.enable_profiler()

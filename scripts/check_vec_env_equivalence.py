@@ -4,11 +4,19 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
+from supermariobrosnes_turbo import Actions
+from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
 
 DEFAULT_ROM = default_rom_path()
+NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
+BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
+ACTION_BUTTONS = {
+    "noop": (),
+    "right": ("RIGHT",),
+    "a": ("A",),
+    "start": ("START",),
+}
 INFO_ARRAYS = (
     ("x_pos", np.uint16),
     ("coins", np.uint8),
@@ -23,26 +31,36 @@ INFO_ARRAYS = (
 )
 
 
-def make_env(rom_path: Path, num_envs: int) -> SuperMarioBrosVecEnv:
-    return SuperMarioBrosVecEnv(
+def make_env(rom_path: Path, num_envs: int) -> SuperMarioBrosNesTurboVecEnv:
+    return SuperMarioBrosNesTurboVecEnv(
+        "SuperMarioBros-Nes-v0",
         rom_path=rom_path.expanduser(),
         num_envs=num_envs,
+        use_restricted_actions=Actions.ALL,
         frame_skip=4,
-        grayscale=True,
+        obs_grayscale=True,
         frame_stack=4,
-        terminate_on_flag=False,
-        crop_top=32,
-        crop_bottom=0,
-        resize_width=84,
-        resize_height=84,
-        action_set="full",
+        obs_crop=(32, 0, 0, 0),
+        obs_resize=(84, 84),
+        obs_resize_algorithm="area",
+        obs_layout="chw",
     )
 
 
+def action_batch(names: str | list[str], num_envs: int) -> np.ndarray:
+    if isinstance(names, str):
+        names = [names] * num_envs
+    actions = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
+    for env_idx, name in enumerate(names):
+        for button in ACTION_BUTTONS[name]:
+            actions[env_idx, BUTTON_TO_INDEX[button]] = 1
+    return actions
+
+
 def step_uniform(
-    env: SuperMarioBrosVecEnv, action: int, count: int
+    env: SuperMarioBrosNesTurboVecEnv, action: str, count: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    actions = np.full((env.num_envs,), action, dtype=np.uint8)
+    actions = action_batch(action, env.num_envs)
     result = None
     for _ in range(count):
         result = env.step_fast(actions)
@@ -50,7 +68,7 @@ def step_uniform(
     return result
 
 
-def assert_uniform_info(vec: SuperMarioBrosVecEnv, one: SuperMarioBrosVecEnv) -> None:
+def assert_uniform_info(vec: SuperMarioBrosNesTurboVecEnv, one: SuperMarioBrosNesTurboVecEnv) -> None:
     for attr, dtype in INFO_ARRAYS:
         vec_values = getattr(vec, attr)
         one_values = getattr(one, attr)
@@ -60,16 +78,12 @@ def assert_uniform_info(vec: SuperMarioBrosVecEnv, one: SuperMarioBrosVecEnv) ->
         )
 
 
-def assert_lane_info(vec: SuperMarioBrosVecEnv, lane: int, ref: SuperMarioBrosVecEnv) -> None:
+def assert_lane_info(vec: SuperMarioBrosNesTurboVecEnv, lane: int, ref: SuperMarioBrosNesTurboVecEnv) -> None:
     for attr, _dtype in INFO_ARRAYS:
         assert getattr(vec, attr)[lane] == getattr(ref, attr)[0]
 
 
 def check_uniform_sync(rom_path: Path) -> None:
-    noop = ACTION_MEANINGS.index("noop")
-    start = ACTION_MEANINGS.index("start")
-    right = ACTION_MEANINGS.index("right")
-
     vec = make_env(rom_path, 16)
     one = make_env(rom_path, 1)
     obs_vec = vec.reset()
@@ -79,12 +93,12 @@ def check_uniform_sync(rom_path: Path) -> None:
     np.testing.assert_array_equal(obs_vec[0], obs_one[0])
 
     for action, count in (
-        (noop, 30),
-        (start, 8),
-        (noop, 30),
-        (noop, 20),
-        (right, 5),
-        (noop, 10),
+        ("noop", 30),
+        ("start", 8),
+        ("noop", 30),
+        ("noop", 20),
+        ("right", 5),
+        ("noop", 10),
     ):
         vec_obs, vec_rewards, vec_terminated, vec_truncated = step_uniform(vec, action, count)
         one_obs, one_rewards, one_terminated, one_truncated = step_uniform(one, action, count)
@@ -102,28 +116,22 @@ def check_uniform_sync(rom_path: Path) -> None:
 
 
 def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
-    noop = ACTION_MEANINGS.index("noop")
-    start = ACTION_MEANINGS.index("start")
-    right = ACTION_MEANINGS.index("right")
-    a_button = ACTION_MEANINGS.index("a")
-
     vec = make_env(rom_path, 8)
     refs = [make_env(rom_path, 1) for _ in range(8)]
     vec.reset()
     for ref in refs:
         ref.reset()
 
-    for action, count in ((noop, 30), (start, 8), (noop, 30), (noop, 5)):
+    for action, count in (("noop", 30), ("start", 8), ("noop", 30), ("noop", 5)):
         step_uniform(vec, action, count)
         for ref in refs:
             step_uniform(ref, action, count)
 
-    actions = np.array([noop, right, a_button, start, noop, right, a_button, start], dtype=np.uint8)
+    action_names = ["noop", "right", "a", "start", "noop", "right", "a", "start"]
+    actions = action_batch(action_names, 8)
     obs, rewards, terminated, truncated = vec.step_fast(actions)
     for lane, ref in enumerate(refs):
-        ref_obs, ref_rewards, ref_terminated, ref_truncated = ref.step_fast(
-            np.asarray([int(actions[lane])], dtype=np.uint8)
-        )
+        ref_obs, ref_rewards, ref_terminated, ref_truncated = ref.step_fast(action_batch(action_names[lane], 1))
         np.testing.assert_array_equal(obs[lane], ref_obs[0])
         assert rewards[lane] == ref_rewards[0]
         assert terminated[lane] == ref_terminated[0]
