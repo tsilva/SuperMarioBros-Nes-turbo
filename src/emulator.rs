@@ -30,6 +30,8 @@ const DEFAULT_GRAY_RESIZE_HEIGHT: usize = 84;
 const DEFAULT_GRAY_RESIZE_PIXELS: usize = DEFAULT_GRAY_RESIZE_WIDTH * DEFAULT_GRAY_RESIZE_HEIGHT;
 const SMB_IDLE_JMP_PC: u16 = 0x8057;
 const SMB_IDLE_JMP_PPU_CYCLES: usize = 9;
+const SMB_SPRITE0_POLL_PC: u16 = 0x8150;
+const SMB_SPRITE0_POLL_PPU_CYCLES: usize = 27;
 
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
@@ -283,6 +285,11 @@ impl Ppu {
     #[inline]
     fn cycles_until_next_event(&self) -> usize {
         next_ppu_event_dot(self.dot()) - self.dot()
+    }
+
+    #[inline]
+    fn sprite0_hit_set(&self) -> bool {
+        self.status & 0x40 != 0
     }
 
     #[inline]
@@ -1366,6 +1373,15 @@ fn prg_rom_supports_smb_idle_jmp(prg_rom: &[u8], mask: usize) -> bool {
         && prg_rom.get((offset + 2) & mask) == Some(&((SMB_IDLE_JMP_PC >> 8) as u8))
 }
 
+fn prg_rom_supports_smb_sprite0_poll(prg_rom: &[u8], mask: usize) -> bool {
+    let offset = (SMB_SPRITE0_POLL_PC as usize).wrapping_sub(0x8000) & mask;
+    let expected = [0xad, 0x02, 0x20, 0x29, 0x40, 0xf0, 0xf9];
+    expected
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+}
+
 fn required_field<'a>(
     state: &'a [u8],
     name: &'static [u8; 4],
@@ -1421,6 +1437,7 @@ pub struct NesEmulator {
     prg_rom: Vec<u8>,
     prg_addr_mask: usize,
     smb_idle_jmp_supported: bool,
+    smb_sprite0_poll_supported: bool,
     controller_state: u8,
     controller_shift: u8,
     controller_strobe: bool,
@@ -1443,6 +1460,8 @@ impl NesEmulator {
     pub fn new_with_options(cart: Cartridge, terminate_on_flag: bool) -> Self {
         let prg_addr_mask = cart.prg_rom.len() - 1;
         let smb_idle_jmp_supported = prg_rom_supports_smb_idle_jmp(&cart.prg_rom, prg_addr_mask);
+        let smb_sprite0_poll_supported =
+            prg_rom_supports_smb_sprite0_poll(&cart.prg_rom, prg_addr_mask);
         let ppu = Ppu::new(cart.chr_rom, cart.vertical_mirroring);
         let mut emu = Self {
             cpu: Cpu::new(),
@@ -1451,6 +1470,7 @@ impl NesEmulator {
             prg_rom: cart.prg_rom,
             prg_addr_mask,
             smb_idle_jmp_supported,
+            smb_sprite0_poll_supported,
             controller_state: 0,
             controller_shift: 0,
             controller_strobe: false,
@@ -1702,6 +1722,16 @@ impl NesEmulator {
                 pending_ppu_cycles = 0;
                 continue;
             }
+            if self.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
+                if self.ppu.tick(pending_ppu_cycles)
+                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                {
+                    pending_ppu_cycles = 0;
+                    break;
+                }
+                pending_ppu_cycles = 0;
+                continue;
+            }
             let cycles = self.cpu_step() as usize;
             cpu_cycle_guard += cycles;
             pending_ppu_cycles += cycles * 3;
@@ -1731,6 +1761,16 @@ impl NesEmulator {
                 self.interrupt(0xfffa, false);
             }
             if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
+                if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                {
+                    pending_ppu_cycles = 0;
+                    break;
+                }
+                pending_ppu_cycles = 0;
+                continue;
+            }
+            if self.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
                 if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
                     || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
                 {
@@ -1775,6 +1815,30 @@ impl NesEmulator {
         let jumps = remaining.div_ceil(SMB_IDLE_JMP_PPU_CYCLES).max(1);
         *cpu_cycle_guard += jumps * 3;
         *pending_ppu_cycles += jumps * SMB_IDLE_JMP_PPU_CYCLES;
+        *pending_ppu_cycles >= ppu_cycles_until_event
+            || *cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+    }
+
+    #[inline]
+    fn try_fast_forward_sprite0_poll(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_SPRITE0_POLL_PC
+            || !self.smb_sprite0_poll_supported
+            || self.ppu.sprite0_hit_set()
+        {
+            return false;
+        }
+
+        let ppu_cycles_until_event = self.ppu.cycles_until_next_event();
+        let remaining = ppu_cycles_until_event.saturating_sub(*pending_ppu_cycles);
+        let loops = remaining.div_ceil(SMB_SPRITE0_POLL_PPU_CYCLES).max(1);
+        self.cpu.a = 0;
+        self.set_zn(0);
+        *cpu_cycle_guard += loops * 9;
+        *pending_ppu_cycles += loops * SMB_SPRITE0_POLL_PPU_CYCLES;
         *pending_ppu_cycles >= ppu_cycles_until_event
             || *cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
     }
@@ -3061,6 +3125,70 @@ mod tests {
         set_sprite(&mut ppu, 1, 74, 7, 0x22, 44);
         set_sprite(&mut ppu, 2, 190, 9, 0xc3, 250);
         ppu
+    }
+
+    fn make_test_cart_with_prg(prg_rom: Vec<u8>) -> Cartridge {
+        Cartridge {
+            prg_rom,
+            chr_rom: vec![0; 8192],
+            vertical_mirroring: true,
+        }
+    }
+
+    #[test]
+    fn smb_sprite0_poll_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
+        prg[offset..offset + 7].copy_from_slice(&[0xad, 0x02, 0x20, 0x29, 0x40, 0xf0, 0xf9]);
+
+        assert!(prg_rom_supports_smb_sprite0_poll(&prg, prg.len() - 1));
+
+        prg[offset + 6] = 0xf7;
+        assert!(!prg_rom_supports_smb_sprite0_poll(&prg, prg.len() - 1));
+    }
+
+    #[test]
+    fn sprite0_poll_fast_forward_skips_failed_poll_iterations() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
+        prg[offset..offset + 7].copy_from_slice(&[0xad, 0x02, 0x20, 0x29, 0x40, 0xf0, 0xf9]);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_SPRITE0_POLL_PC;
+        emu.cpu.a = 0xff;
+        emu.cpu.p = FLAG_U | FLAG_N;
+        emu.ppu.status &= !0x40;
+        emu.ppu.set_dot(PPU_PRERENDER_DOT);
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(emu.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles));
+        assert_eq!(emu.cpu.pc, SMB_SPRITE0_POLL_PC);
+        assert_eq!(emu.cpu.a, 0);
+        assert!(emu.flag(FLAG_Z));
+        assert!(!emu.flag(FLAG_N));
+        assert!(pending_ppu_cycles >= PPU_SPRITE0_DOT - PPU_PRERENDER_DOT);
+        assert_eq!(
+            cpu_cycle_guard,
+            (pending_ppu_cycles / SMB_SPRITE0_POLL_PPU_CYCLES) * 9
+        );
+    }
+
+    #[test]
+    fn sprite0_poll_fast_forward_stops_once_hit_is_set() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
+        prg[offset..offset + 7].copy_from_slice(&[0xad, 0x02, 0x20, 0x29, 0x40, 0xf0, 0xf9]);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_SPRITE0_POLL_PC;
+        emu.ppu.status |= 0x40;
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(!emu.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles));
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
     }
 
     #[test]
