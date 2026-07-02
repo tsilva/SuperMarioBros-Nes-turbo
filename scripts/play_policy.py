@@ -378,7 +378,7 @@ class SdlPolicyPlayer:
         action, _ = self.model.predict(self.obs, deterministic=self.args.deterministic)
         self.action = int(np.asarray(action).reshape(-1)[0])
         if self.args.backend == "native":
-            obs, rewards, terminated, truncated, infos = self.env.step(
+            obs, rewards, terminated, truncated, infos = self.env.step_gymnasium(
                 np.asarray([self.action], dtype=np.uint8),
             )
             terminated_value = bool(terminated[0])
@@ -415,7 +415,7 @@ class SdlPolicyPlayer:
             self.display_info = self.info
             return
         if self.args.backend == "native":
-            display_obs, _rewards, _terminated, _truncated, display_infos = self.display_env.step(
+            display_obs, _rewards, _terminated, _truncated, display_infos = self.display_env.step_gymnasium(
                 np.asarray([self.action], dtype=np.uint8),
             )
         else:

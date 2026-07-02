@@ -230,7 +230,7 @@ class SdlExternalVecPlayer:
             self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
 
     def step_one(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
-        obs, rewards, terminated, truncated, infos = self.env.step(
+        obs, rewards, terminated, truncated, infos = self.env.step_gymnasium(
             np.asarray([action], dtype=np.uint8)
         )
         return (

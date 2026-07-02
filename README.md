@@ -54,10 +54,10 @@ env = SuperMarioBrosVecEnv(
 obs = env.reset()
 actions = np.zeros((env.num_envs,), dtype=np.uint8)
 env.step_async(actions)
-obs, rewards, terminated, truncated, infos = env.step_wait()
+obs, rewards, dones, infos = env.step_wait()
 ```
 
-`step_wait()` calls the Rust `FastMarioVecEnv` once for the whole batch and fills reusable NumPy arrays in place. Use `step_fast()` when you do not need per-env `info` dictionaries.
+`step_wait()` follows the Stable Baselines3 `VecEnv` contract: it calls the Rust `FastMarioVecEnv` once for the whole batch and returns `(obs, rewards, dones, infos)` from reusable NumPy arrays. Use `step_fast()` when you do not need per-env `info` dictionaries, or `step_wait_gymnasium()` when you need separate `terminated` and `truncated` arrays.
 
 Initial states can be a single stable-retro state, one state per env slot, or a weighted mapping sampled independently for each lane on reset:
 
@@ -98,7 +98,7 @@ uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBro
 
 - Python `>=3.9` and a Rust toolchain are required to build the Maturin extension.
 - The current emulator scope is SuperMarioBros-Nes mapper 0 NROM.
-- The Python package exposes `SuperMarioBrosVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`.
+- The Python package exposes `SuperMarioBrosVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`. `SuperMarioBrosVecEnv` subclasses Stable Baselines3 `VecEnv` when SB3 is installed; `action_space` is the per-lane `Discrete` action space, while `vector_action_space` describes the batched action array.
 - The default `simple` action set matches the Stable Retro Mario training mapper: `noop`, `right`, `right_b`, `right_a`, `right_a_b`, `a`, and `left`. Use `action_set="full"` when a tool needs the `start` button.
 - `scripts/play_policy.py` loads Stable Baselines3 PPO checkpoints from a local `.zip`, a Hugging Face repo id, or a `https://huggingface.co/...` URL and displays raw RGB gameplay in the SDL2 GUI while feeding the model its preprocessed observation stack. It defaults to a Stable Retro playback backend so public SB3/Hugging Face checkpoints use the preprocessing they were trained with; pass `--view preprocessed` to inspect the model input or `--backend native` when checking this repo's fast-env parity. The SB3, PyTorch, and Hugging Face Hub dependencies are included in the repo's `uv` dev environment.
 - By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin. Use `--state Level1-1` or another stable-retro state to start every lane from one saved level state. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.

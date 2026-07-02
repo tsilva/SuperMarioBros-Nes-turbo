@@ -16,6 +16,7 @@ Input forms:
 single_ref only
 candidate_ref
 baseline_ref candidate_ref
+pypi-stable-retro-turbo
 ```
 
 If the user explicitly asks to benchmark one ref only, run single-ref mode on
@@ -24,6 +25,11 @@ comparison", or equivalent, baseline is the latest local `main` commit and the
 provided ref is the candidate. If two refs are provided, the first is baseline
 and the second is candidate. If the mode is ambiguous, ask one short clarifying
 question before running.
+
+If the user asks for the latest published `stable-retro-turbo` PyPI baseline,
+use the "Published stable-retro-turbo Oracle Baseline" mode below. That mode is
+not a git-ref benchmark; it measures the latest exact PyPI version once per
+workload hash and caches the result locally.
 
 Do not switch local branches. Resolve refs locally with `git rev-parse`, create
 exact `git archive` snapshots, and copy those snapshots to `beast-3-local`.
@@ -343,6 +349,66 @@ as shared-cache cleanup.
 Before the final report, verify the local bundle exists and point the user to
 the local `aggregate.json` first. Report the remote run directory as cleaned if
 `sources/` and `archives/` were removed.
+
+## Published stable-retro-turbo Oracle Baseline
+
+Use this special mode when the user wants to compare this specialized
+`SuperMarioBros-Nes-turbo` environment against the latest published
+`stable-retro-turbo` PyPI wheel on the same ROM, same state set, same
+preprocessing, and same fixed host. The point is to show that this repo preserves
+the stable-retro-turbo behavior contract for `SuperMarioBros-Nes-v0` while being
+faster.
+
+Run from the local repo root:
+
+```bash
+python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
+  --ssh-target beast-3-local
+```
+
+If the direct LAN route is unavailable, use the tailnet route:
+
+```bash
+python3 scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
+  --ssh-target beast-3.tail50040f.ts.net \
+  --host-key-alias beast-3-local
+```
+
+The runner must:
+
+- query `https://pypi.org/pypi/stable-retro-turbo/json` and resolve the latest
+  exact version at runtime
+- use Python `3.14` on the host, because current published turbo wheels are
+  Python-version-specific
+- create an isolated remote venv and install exactly
+  `stable-retro-turbo==VERSION` from PyPI
+- run `scripts/benchmark_stable_retro_turbo_pypi.py` with the host workload:
+  `num_envs=16`, `num_threads=12`, `steps=50000`, `repeats=3`,
+  2 warmup invocations, 11 measured invocations, frame skip 4, frame stack 4,
+  crop top 32, resize 84x84, grayscale, states
+  `Level1-1,Level1-2,Level1-3,Level1-4`, action `noop`
+- cache results under
+  `artifacts/benchmarks/host-results/pypi-stable-retro-turbo/VERSION/WORKLOAD_HASH/`
+- write `aggregate.json`, `manifest.json`, raw invocation JSON, load snapshots,
+  and `index.jsonl`
+- return a cache hit without touching `beast-3-local` when the exact
+  version/workload hash already has an aggregate, unless `--force` is passed
+- purge the remote PyPI run directory after copying and validating the local
+  cache, unless `--keep-remote` is passed
+
+The PyPI oracle benchmark intentionally uses a tiny local
+`stable_baselines3.common.vec_env.VecEnv` shim if SB3 is absent, matching the
+repo's parity-test approach. Do not install the heavy SB3/Torch stack just to
+time `RetroVecEnv`.
+
+When both local SuperMario and PyPI oracle aggregates exist, report:
+
+```text
+speedup = supermariobrosnes_turbo_official_median_sps / stable_retro_turbo_pypi_official_median_sps
+```
+
+Use cached PyPI baselines for future comparisons until PyPI publishes a newer
+version or the workload hash changes.
 
 ## Interpreting Results
 

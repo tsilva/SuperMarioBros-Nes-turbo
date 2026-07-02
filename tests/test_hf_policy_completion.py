@@ -135,7 +135,7 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
                 action_names = [action_meanings[int(action_id)] for action_id in fast_actions]
                 retro_actions = retro_masks_by_action[fast_actions]
 
-                fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step(
+                fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step_gymnasium(
                     fast_actions,
                 )
                 retro_obs, retro_rewards, retro_dones, retro_infos = retro_env.step(retro_actions)
