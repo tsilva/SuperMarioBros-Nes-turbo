@@ -94,19 +94,21 @@ uv run python scripts/play.py --mode external --view preprocessed --scale 4
 uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBros-NES_Level1
 ```
 
-## Fixed-host benchmark
+## Fixed-host benchmark target
 
-On the fixed `beast-3` CPU host, using the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs, this specialized environment is about `6.40x` faster than the latest published `stable-retro-turbo` PyPI oracle baseline.
+Use `stable-retro-turbo==1.0.1.post1` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the fixed `beast-3` CPU host.
+
+Historical fixed-host results:
 
 | Environment | Version / Ref | Official median env steps/sec | Mean invocation-median env steps/sec | Run-median CV | Notes |
 | --- | --- | ---: | ---: | ---: | --- |
 | `SuperMarioBros-Nes-turbo` | `main` | `47,611.14` | `47,605.89` | `0.28%` | Full official fixed-host run; all validity gates passed. |
-| `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Full official fixed-host run; statistical gates passed, but the post-run host-load gate failed because the 1-minute load was sampled immediately after the benchmark's own CPU-heavy timing. |
+| `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Historical only; superseded by `1.0.1.post1` for new comparisons. Statistical gates passed, but the post-run host-load gate failed because the 1-minute load was sampled immediately after the benchmark's own CPU-heavy timing. |
 
 Artifacts:
 
 - [`SuperMarioBros-Nes-turbo` fixed-host aggregate](./artifacts/benchmarks/host-results/host-single-2026-07-02-123806-R17c60e1eb88e/aggregate.json)
-- [`stable-retro-turbo==1.0.0.post23` PyPI oracle aggregate](./artifacts/benchmarks/host-results/pypi-stable-retro-turbo/1.0.0.post23/0bcebd32669e8e46/aggregate.json)
+- Historical [`stable-retro-turbo==1.0.0.post23` PyPI oracle aggregate](./artifacts/benchmarks/host-results/pypi-stable-retro-turbo/1.0.0.post23/0bcebd32669e8e46/aggregate.json)
 
 ## Notes
 
@@ -117,7 +119,7 @@ Artifacts:
 - `scripts/play_policy.py` loads Stable Baselines3 PPO checkpoints from a local `.zip`, a Hugging Face repo id, or a `https://huggingface.co/...` URL and displays raw RGB gameplay in the SDL2 GUI while feeding the model its preprocessed observation stack. It defaults to a Stable Retro playback backend so public SB3/Hugging Face checkpoints use the preprocessing they were trained with; pass `--view preprocessed` to inspect the model input or `--backend native` when checking this repo's fast-env parity. The SB3, PyTorch, and Hugging Face Hub dependencies are included in the repo's `uv` dev environment.
 - By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin. Use `--state Level1-1` or another stable-retro state to start every lane from one saved level state. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
 - For `SuperMarioBrosVecEnv`, `done_on_info` accepts named terminal rules like `{"life_loss": ("lives", "decrease")}`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired rules are reported in `info["done_on_info"]` with `op`, `keys`, `prev`, and `next`.
-- Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.0.post23` and constructs `RetroVecEnv` with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
+- Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post1` for new benchmarks and comparisons, and constructs `RetroVecEnv` with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
 - Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
 - ROM files are not included in the repository; use the SHA-256 digest above to confirm you are testing with the expected ROM.
