@@ -6,15 +6,20 @@ from pathlib import Path
 import numpy as np
 
 from play import action_id, latest_frame, png_from_frame
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
 
 
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_ROM = default_rom_path()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument("--output", type=Path, default=Path("artifacts/play-frame.png"))
     parser.add_argument("--scale", type=int, default=3)
     parser.add_argument("--pre-start-frames", type=int, default=120)
@@ -26,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     env = SuperMarioBrosVecEnv(
-        rom_path=args.rom_path.expanduser(),
+        rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=1,
         frame_skip=1,
         grayscale=False,

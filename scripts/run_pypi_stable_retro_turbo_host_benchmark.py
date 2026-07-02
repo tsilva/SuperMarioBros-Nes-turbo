@@ -19,7 +19,6 @@ from typing import Any
 
 
 REMOTE_ROOT = PurePosixPath("/home/tsilva/SuperMarioBros-Nes-turbo-host-bench")
-DEFAULT_ROM = "/home/tsilva/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes"
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE = "stable-retro-turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -64,7 +63,7 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "package": PACKAGE,
         "version": version,
         "python": args.python,
-        "rom_path": DEFAULT_ROM,
+        "rom_path": args.rom_path,
         "num_envs": args.num_envs,
         "num_threads": args.num_threads,
         "steps": args.steps,
@@ -176,7 +175,7 @@ def run_invocations(args: argparse.Namespace, remote: PurePosixPath) -> None:
     base_cmd = (
         f"cd {quote(str(remote))} && "
         f"RAYON_NUM_THREADS={args.num_threads} .venv/bin/python scripts/benchmark_stable_retro_turbo_pypi.py "
-        f"--rom-path {quote(DEFAULT_ROM)} "
+        f"--rom-path {quote(args.rom_path)} "
         f"--num-envs {args.num_envs} --num-threads {args.num_threads} "
         f"--steps {args.steps} --repeats {args.repeats} --warmup {args.warmup} "
         f"--json --output-json "
@@ -308,6 +307,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--python", default="3.14")
     parser.add_argument("--ssh-target", default="beast-3-local")
     parser.add_argument("--host-key-alias", default=None)
+    parser.add_argument("--rom-path", required=True, help="ROM path on the remote benchmark host.")
     parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/host-results/pypi-stable-retro-turbo"))
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)

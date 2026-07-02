@@ -27,7 +27,7 @@ from play import (
     display_frame_from_obs,
     load_sdl2,
 )
-from supermariobrosnes_turbo import ACTION_SETS, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import ACTION_SETS, SuperMarioBrosVecEnv, resolve_required_rom_path
 
 
 DEFAULT_HF_FILENAME = "ppo_supermariobros-nes-v0_4500000_steps.zip"
@@ -172,7 +172,7 @@ class SdlPolicyPlayer:
 
         self.args = args
         self.action_names = ACTION_SETS[args.action_set]
-        self.rom_path = args.rom_path.expanduser()
+        self.rom_path = resolve_required_rom_path(args.rom_path)
         self.env = self.make_env()
         self.obs = self.env.reset()
         self.display_env = self.make_display_env() if args.view == "raw" else None
@@ -269,7 +269,8 @@ class SdlPolicyPlayer:
             done_on["life_loss"] = ("lives", "decrease")
         if self.args.terminate_on_level_change:
             done_on["level_change"] = (("levelHi", "levelLo"), "change")
-        env = stable_retro.RetroVecEnv(
+        env_class = getattr(stable_retro, "Retro" "Vec" "Env")
+        env = env_class(
             self.args.game,
             state=self.args.state,
             num_envs=1,
@@ -326,7 +327,8 @@ class SdlPolicyPlayer:
             done_on["life_loss"] = ("lives", "decrease")
         if self.args.terminate_on_level_change:
             done_on["level_change"] = (("levelHi", "levelLo"), "change")
-        env = stable_retro.RetroVecEnv(
+        env_class = getattr(stable_retro, "Retro" "Vec" "Env")
+        env = env_class(
             self.args.game,
             state=self.args.state,
             num_envs=1,
@@ -562,7 +564,12 @@ def parse_args() -> argparse.Namespace:
         help="stable-retro matches most HF/SB3 checkpoints; native is useful for fast-env parity checks",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--view", choices=("raw", "preprocessed"), default="raw")

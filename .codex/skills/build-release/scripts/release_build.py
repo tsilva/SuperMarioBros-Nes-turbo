@@ -457,7 +457,7 @@ def final_check(args: argparse.Namespace) -> None:
     hashes = {str(wheel): sha256(wheel) for wheel in wheels}
     print(json.dumps({"audits": results, "sha256": hashes}, indent=2))
     print()
-    print(f"{shell_quote(PYTHON)} -m twine upload \\")
+    print(f"{shell_quote(PYTHON)} -m twine upload --config-file .pypirc \\")
     for index, wheel in enumerate(wheels):
         suffix = " \\" if index < len(wheels) - 1 else ""
         print(f"  {shell_quote(wheel)}{suffix}")

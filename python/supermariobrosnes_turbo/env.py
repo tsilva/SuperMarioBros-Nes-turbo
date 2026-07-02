@@ -86,6 +86,7 @@ SMB_EVENT_SPECS = {
     "level_change": (("levelHi", "levelLo"), "change"),
 }
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
+ROM_PATH_ENV_VAR = "SMB_ROM_PATH"
 GZIP_MAGIC = b"\x1f\x8b"
 INFO_KEYS = (
     "x_pos",
@@ -134,8 +135,21 @@ class Integrations(Flag):
     ALL = STABLE | EXPERIMENTAL_ONLY | CONTRIB_ONLY | CUSTOM_ONLY
 
 
-def _expand_rom_path(path: str | Path) -> str:
-    return str(Path(path).expanduser())
+def default_rom_path() -> Path | None:
+    value = os.environ.get(ROM_PATH_ENV_VAR)
+    return Path(value).expanduser() if value else None
+
+
+def resolve_required_rom_path(path: str | Path | None = None) -> Path:
+    if path is None:
+        path = default_rom_path()
+    if path is None:
+        raise ValueError(f"ROM path required; pass rom_path or set {ROM_PATH_ENV_VAR}")
+    return Path(path).expanduser()
+
+
+def _expand_rom_path(path: str | Path | None) -> str:
+    return str(resolve_required_rom_path(path))
 
 
 def _stable_retro_state_dir() -> Path | None:
@@ -597,7 +611,7 @@ class SuperMarioBrosVecEnv(_SB3VecEnv):
 
     def __init__(
         self,
-        rom_path: str | Path = "~/Desktop/roms/SuperMarioBros.nes",
+        rom_path: str | Path | None = None,
         num_envs: int = 1,
         frame_skip: int = 4,
         grayscale: bool = True,
@@ -1153,6 +1167,9 @@ def _normalize_retro_state(state: Any) -> Any:
 def _resolve_rom_path(game: str, rom_path: str | Path | None) -> str | Path:
     if rom_path is not None:
         return rom_path
+    env_rom_path = default_rom_path()
+    if env_rom_path is not None:
+        return env_rom_path
     candidates: list[Path] = []
     try:
         import stable_retro.data  # type: ignore[import-not-found]
@@ -1178,15 +1195,17 @@ def _resolve_rom_path(game: str, rom_path: str | Path | None) -> str | Path:
     sibling = _sibling_stable_retro_state_dir()
     if sibling is not None:
         candidates.append(sibling / "rom.nes")
-    candidates.append(Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes").expanduser())
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return candidates[-1]
+    raise ValueError(
+        f"ROM path required for {game}; pass rom_path, set {ROM_PATH_ENV_VAR}, "
+        "or import the ROM into stable-retro data"
+    )
 
 
-class RetroVecEnv(SuperMarioBrosVecEnv):
-    """SMB-only `stable-retro-turbo` `RetroVecEnv` compatibility surface."""
+class SuperMarioBrosNesTurboVecEnv(SuperMarioBrosVecEnv):
+    """SMB-only vector env with a `stable-retro-turbo` compatible surface."""
 
     _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
 
@@ -1227,18 +1246,18 @@ class RetroVecEnv(SuperMarioBrosVecEnv):
         unsafe_zero_copy: Any = _UNSET,
     ) -> None:
         if str(game) != DEFAULT_STABLE_RETRO_GAME:
-            raise ValueError(f"RetroVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
+            raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
         if players != 1:
-            raise ValueError("RetroVecEnv currently supports players=1")
+            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports players=1")
         if record:
-            raise ValueError("RetroVecEnv does not support movie recording")
+            raise ValueError("SuperMarioBrosNesTurboVecEnv does not support movie recording")
         obs_type_name = getattr(obs_type, "name", obs_type)
         if obs_type is not None and str(obs_type_name).split(".")[-1].upper() != "IMAGE":
-            raise ValueError("RetroVecEnv currently supports image observations only")
+            raise ValueError("SuperMarioBrosNesTurboVecEnv currently supports image observations only")
         if info not in (None, "data") and not str(info).endswith(".json"):
-            raise ValueError("RetroVecEnv only supports the SMB data info file")
+            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB data info file")
         if scenario not in (None, "scenario") and not str(scenario).endswith(".json"):
-            raise ValueError("RetroVecEnv only supports the SMB scenario file")
+            raise ValueError("SuperMarioBrosNesTurboVecEnv only supports the SMB scenario file")
 
         crop_top, crop_right, crop_bottom, crop_left = _normalize_retro_crop(obs_crop)
         source_width = VISIBLE_WIDTH - crop_left - crop_right

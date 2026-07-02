@@ -6,10 +6,13 @@ from .env import (
     Actions,
     Integrations,
     Observations,
-    RetroVecEnv,
+    ROM_PATH_ENV_VAR,
     State,
+    SuperMarioBrosNesTurboVecEnv,
     SuperMarioBrosVecEnv,
+    default_rom_path,
     list_available_states,
+    resolve_required_rom_path,
 )
 
 __all__ = [
@@ -20,8 +23,11 @@ __all__ = [
     "Actions",
     "Integrations",
     "Observations",
-    "RetroVecEnv",
+    "ROM_PATH_ENV_VAR",
     "State",
+    "SuperMarioBrosNesTurboVecEnv",
     "SuperMarioBrosVecEnv",
+    "default_rom_path",
     "list_available_states",
+    "resolve_required_rom_path",
 ]

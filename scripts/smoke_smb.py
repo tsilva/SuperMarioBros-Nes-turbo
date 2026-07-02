@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
 
 from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
 
 
-ROM_PATH = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=default_rom_path(),
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
+    return parser.parse_args()
 
 
 def info_summary(env: SuperMarioBrosVecEnv) -> str:
@@ -23,8 +32,9 @@ def info_summary(env: SuperMarioBrosVecEnv) -> str:
 
 
 def main() -> None:
+    args = parse_args()
     env = SuperMarioBrosVecEnv(
-        rom_path=ROM_PATH.expanduser(),
+        rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=4,
         frame_skip=1,
         grayscale=True,

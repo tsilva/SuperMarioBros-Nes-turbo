@@ -13,7 +13,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import play_policy  # noqa: E402
-import compare_retro_vec_env as compare  # noqa: E402
+import compare_supermariobrosnes_turbo_vec_env as compare  # noqa: E402
+from rom_helpers import require_rom  # noqa: E402
 
 
 HF_LEVEL1_POLICY = "https://huggingface.co/tsilva/SuperMarioBros-NES_Level1"
@@ -23,9 +24,7 @@ EXPECTED_STABLE_RETRO_VERSION = "1.0.0.post23"
 
 
 def require_policy_prerequisites() -> None:
-    rom_path = play_policy.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+    require_rom()
 
     for package in ("stable_baselines3", "stable-retro-turbo"):
         try:
@@ -53,7 +52,7 @@ def level_was_cleared(info: dict[str, object]) -> bool:
 
 def level1_policy_config(*, steps: int = MAX_STEPS_PER_EPISODE) -> compare.ComparisonConfig:
     return compare.ComparisonConfig(
-        rom_path=compare.DEFAULT_ROM.expanduser(),
+        rom_path=require_rom(),
         stable_retro_path=None,
         game=compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",

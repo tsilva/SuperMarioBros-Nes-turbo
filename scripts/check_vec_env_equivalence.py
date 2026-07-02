@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 
 from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
 
 
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_ROM = default_rom_path()
 INFO_ARRAYS = (
     ("x_pos", np.uint16),
     ("coins", np.uint8),
@@ -132,7 +132,7 @@ def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
 
 
 def main() -> None:
-    rom_path = DEFAULT_ROM.expanduser()
+    rom_path = resolve_required_rom_path(DEFAULT_ROM)
     check_uniform_sync(rom_path)
     check_divergence_materializes_independent_lanes(rom_path)
     print("equivalence=ok obs_shape=(16, 4, 84, 84) obs_dtype=uint8")

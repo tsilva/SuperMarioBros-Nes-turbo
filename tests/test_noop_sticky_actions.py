@@ -6,16 +6,7 @@ import numpy as np
 import pytest
 
 from supermariobrosnes_turbo import ACTION_MEANINGS, SuperMarioBrosVecEnv
-
-
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
-
-
-def require_rom() -> Path:
-    rom_path = DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
-    return rom_path
+from rom_helpers import require_rom
 
 
 def make_env(

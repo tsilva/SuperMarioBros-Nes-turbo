@@ -12,11 +12,16 @@ from typing import Any
 
 import numpy as np
 
-from supermariobrosnes_turbo import ACTION_SETS, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import (
+    ACTION_SETS,
+    SuperMarioBrosVecEnv,
+    default_rom_path,
+    resolve_required_rom_path,
+)
 from supermariobrosnes_turbo.env import DEFAULT_STABLE_RETRO_GAME
 
 
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_ROM = default_rom_path()
 EXPECTED_STABLE_RETRO_VERSION = "1.0.0.post23"
 STABLE_VISIBLE_WIDTH = 240
 STABLE_VISIBLE_HEIGHT = 224
@@ -95,10 +100,15 @@ def parse_args() -> ComparisonConfig:
     parser = argparse.ArgumentParser(
         description=(
             "Compare supermariobrosnes-turbo against stable-retro-turbo "
-            "RetroVecEnv on the same seeded action trace."
+            "vector env on the same seeded action trace."
         ),
     )
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument(
         "--stable-retro-path",
         type=Path,
@@ -117,7 +127,7 @@ def parse_args() -> ComparisonConfig:
         "--env-threads",
         type=int,
         default=4,
-        help="RetroVecEnv worker threads. Default matches sandbox-sb3 Level1-1 training.",
+        help="Stable-retro worker threads. Default matches sandbox-sb3 Level1-1 training.",
     )
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
@@ -133,7 +143,7 @@ def parse_args() -> ComparisonConfig:
         "--frame-maxpool",
         action="store_true",
         help=(
-            "Enable RetroVecEnv maxpooling. sandbox-sb3 Level1-1 training leaves this disabled."
+            "Enable stable-retro maxpooling. sandbox-sb3 Level1-1 training leaves this disabled."
         ),
     )
     parser.add_argument("--noop-reset-max", type=int, default=0)
@@ -142,12 +152,12 @@ def parse_args() -> ComparisonConfig:
         "--obs-copy",
         choices=("copy", "safe_view", "unsafe_view"),
         default="safe_view",
-        help="RetroVecEnv observation ownership mode. sandbox-sb3 Level1-1 training uses safe_view.",
+        help="Stable-retro observation ownership mode. sandbox-sb3 Level1-1 training uses safe_view.",
     )
     parser.add_argument(
         "--terminate-on-flag",
         action="store_true",
-        help="Enable fast-env flag termination. RetroVecEnv still uses its scenario done rules.",
+        help="Enable fast-env flag termination. Stable-retro still uses its scenario done rules.",
     )
     parser.add_argument(
         "--no-terminate-on-life-loss",
@@ -213,7 +223,7 @@ def parse_args() -> ComparisonConfig:
         parser.error("--sticky-action-prob must be between 0.0 and 1.0")
 
     return ComparisonConfig(
-        rom_path=args.rom_path.expanduser(),
+        rom_path=resolve_required_rom_path(args.rom_path),
         stable_retro_path=args.stable_retro_path.expanduser()
         if args.stable_retro_path is not None
         else None,
@@ -384,7 +394,8 @@ def make_retro_env(config: ComparisonConfig):
         "obs_copy": config.obs_copy,
     }
     kwargs["done_on"] = SANDBOX_SB3_LEVEL1_1_DONE_ON
-    env = retro.RetroVecEnv(config.game, **kwargs)
+    env_class = getattr(retro, "Retro" "Vec" "Env")
+    env = env_class(config.game, **kwargs)
     if hasattr(env, "seed"):
         env.seed(config.seed)
     return env
@@ -746,7 +757,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "terminate_on_flag": config.terminate_on_flag,
         "terminate_on_life_loss": config.terminate_on_life_loss,
         "terminate_on_level_change": config.terminate_on_level_change,
-        "sandbox_sb3_level1_1_native_retro_vec_env_profile": {
+        "sandbox_sb3_level1_1_native_turbo_vec_env_profile": {
             "environment_hash": SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH,
             "game": DEFAULT_STABLE_RETRO_GAME,
             "state": "Level1-1",

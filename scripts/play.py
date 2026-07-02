@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 
 from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
-from supermariobrosnes_turbo import SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import SuperMarioBrosVecEnv, default_rom_path, resolve_required_rom_path
 
 
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_ROM = default_rom_path()
 NES_WIDTH = 256
 NES_HEIGHT = 240
 
@@ -69,7 +69,7 @@ class SdlExternalVecPlayer:
             resize_height = NES_HEIGHT
 
         self.env = SuperMarioBrosVecEnv(
-            rom_path=args.rom_path.expanduser(),
+            rom_path=resolve_required_rom_path(args.rom_path),
             num_envs=1,
             frame_skip=frame_skip,
             grayscale=grayscale,
@@ -461,7 +461,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("external",), default="external")
     parser.add_argument("--view", choices=("raw", "preprocessed"), default="raw")
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--scale", type=int, default=3)
     parser.add_argument("--frame-skip", type=int, default=1)

@@ -9,10 +9,16 @@ from typing import Any
 
 import numpy as np
 
-from supermariobrosnes_turbo import ACTION_SETS, CORE_ACTION_MEANINGS, SuperMarioBrosVecEnv
+from supermariobrosnes_turbo import (
+    ACTION_SETS,
+    CORE_ACTION_MEANINGS,
+    SuperMarioBrosVecEnv,
+    default_rom_path,
+    resolve_required_rom_path,
+)
 
 
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 
 
@@ -20,7 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark no-GUI Super Mario Bros vector-env steps per second."
     )
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--repeats", type=int, default=3)
@@ -286,7 +297,7 @@ def main() -> None:
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
     env = SuperMarioBrosVecEnv(
-        rom_path=args.rom_path.expanduser(),
+        rom_path=resolve_required_rom_path(args.rom_path),
         num_envs=args.num_envs,
         frame_skip=args.frame_skip,
         grayscale=not args.rgb,

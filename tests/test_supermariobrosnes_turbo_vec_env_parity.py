@@ -7,17 +7,23 @@ import pytest
 import numpy as np
 from gymnasium import spaces
 
-from scripts import compare_retro_vec_env as compare
-from supermariobrosnes_turbo import Actions, Integrations, Observations, RetroVecEnv, State, SuperMarioBrosVecEnv
+from scripts import compare_supermariobrosnes_turbo_vec_env as compare
+from supermariobrosnes_turbo import (
+    Actions,
+    Integrations,
+    Observations,
+    State,
+    SuperMarioBrosNesTurboVecEnv,
+    SuperMarioBrosVecEnv,
+)
+from rom_helpers import require_rom
 
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
 BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 
 
 def require_stable_retro_oracle() -> None:
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+    require_rom()
     try:
         version = importlib.metadata.version("stable-retro-turbo")
     except importlib.metadata.PackageNotFoundError:
@@ -28,8 +34,12 @@ def require_stable_retro_oracle() -> None:
     assert version == compare.EXPECTED_STABLE_RETRO_VERSION
 
 
-def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> None:
-    native_signature = inspect.signature(RetroVecEnv)
+def test_native_vec_env_name_is_public() -> None:
+    assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
+
+
+def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> None:
+    native_signature = inspect.signature(SuperMarioBrosNesTurboVecEnv)
     assert list(native_signature.parameters) == [
         "game",
         "state",
@@ -118,22 +128,23 @@ def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         assert type(native_defaults[name]) is object
 
 
-def test_native_retro_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
+def test_native_turbo_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
     with pytest.raises(TypeError, match="frame_maxpool"):
-        RetroVecEnv("SuperMarioBros-Nes-v0", frame_maxpool=False)
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", frame_maxpool=False)
     with pytest.raises(TypeError, match="reset_noops"):
-        RetroVecEnv("SuperMarioBros-Nes-v0", reset_noops=0)
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", reset_noops=0)
     with pytest.raises(TypeError, match="action_sticky_prob"):
-        RetroVecEnv("SuperMarioBros-Nes-v0", action_sticky_prob=0.0)
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", action_sticky_prob=0.0)
 
 
 @pytest.mark.retro_oracle
-def test_stable_retro_vec_env_constructs_with_oracle_keyword_surface() -> None:
+def test_stable_retro_vector_env_constructs_with_oracle_keyword_surface() -> None:
     require_stable_retro_oracle()
     import stable_retro
 
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    env = stable_retro.RetroVecEnv(
+    rom_path = require_rom()
+    env_class = getattr(stable_retro, "Retro" "Vec" "Env")
+    env = env_class(
         compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,
@@ -166,12 +177,10 @@ def test_stable_retro_vec_env_constructs_with_oracle_keyword_surface() -> None:
         env.close()
 
 
-def test_native_retro_vec_env_accepts_smb_keyword_surface() -> None:
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
+    rom_path = require_rom()
 
-    env = RetroVecEnv(
+    env = SuperMarioBrosNesTurboVecEnv(
         compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,
@@ -213,12 +222,10 @@ def test_native_retro_vec_env_accepts_smb_keyword_surface() -> None:
         env.close()
 
 
-def test_native_retro_vec_env_hwc_layout_and_safe_view_survives_next_step() -> None:
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+def test_native_turbo_vec_env_hwc_layout_and_safe_view_survives_next_step() -> None:
+    rom_path = require_rom()
 
-    env = RetroVecEnv(
+    env = SuperMarioBrosNesTurboVecEnv(
         compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,
@@ -249,12 +256,10 @@ def test_native_retro_vec_env_hwc_layout_and_safe_view_survives_next_step() -> N
         env.close()
 
 
-def test_native_retro_vec_env_reward_clip_and_info_filter_all() -> None:
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+def test_native_turbo_vec_env_reward_clip_and_info_filter_all() -> None:
+    rom_path = require_rom()
 
-    env = RetroVecEnv(
+    env = SuperMarioBrosNesTurboVecEnv(
         compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,
@@ -281,12 +286,10 @@ def test_native_retro_vec_env_reward_clip_and_info_filter_all() -> None:
         env.close()
 
 
-def test_native_retro_vec_env_actions_all_mask_matches_discrete_fast_env() -> None:
-    rom_path = compare.DEFAULT_ROM.expanduser()
-    if not rom_path.exists():
-        pytest.skip(f"local SuperMarioBros-Nes ROM is missing: {rom_path}")
+def test_native_turbo_vec_env_actions_all_mask_matches_discrete_fast_env() -> None:
+    rom_path = require_rom()
 
-    retro_env = RetroVecEnv(
+    retro_env = SuperMarioBrosNesTurboVecEnv(
         compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,

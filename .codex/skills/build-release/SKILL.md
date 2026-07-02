@@ -1,6 +1,6 @@
 ---
 name: build-release
-description: Build, validate, and prepare SuperMarioBros-Nes-turbo PyPI release wheels. Use when the user says /build-release, asks to build release wheels, asks to tag a version, or asks for macOS and Linux supermariobrosnes-turbo wheels. This skill does not upload to PyPI.
+description: Build, validate, and prepare SuperMarioBros-Nes-turbo PyPI release wheels. Use when the user says /build-release, asks to build release wheels, asks to tag a version, asks to upload a prepared release, or asks for macOS and Linux supermariobrosnes-turbo wheels.
 ---
 
 # Build Release
@@ -12,9 +12,11 @@ and `Cargo.toml`, not upstream-aligned `.postN` versions unless the user
 explicitly asks for one.
 
 Keep fragile release mechanics in `.codex/skills/build-release/scripts/release_build.py`.
-Run that helper instead of retyping long shell workflows. Do not upload to PyPI;
-the final output should print the exact upload command for the user to run or
-approve separately.
+Run that helper instead of retyping long shell workflows. Do not upload to PyPI
+unless the user explicitly asks to publish/upload. When uploading, use the
+repo-local `.pypirc` with `twine upload --config-file .pypirc ...`; do not rely
+on global `TWINE_PASSWORD`/`TWINE_USERNAME`, because this machine also has
+project-scoped credentials for other packages. Never print or commit the token.
 
 Do not run this skill unless the current branch is fully clean and synchronized:
 all changes committed, no untracked files, upstream configured, remote state
@@ -181,8 +183,9 @@ uv run python .codex/skills/build-release/scripts/release_build.py final-check -
 
 This audits wheel contents, rejects pycache/source-tree artifacts and ROM
 payloads, runs `twine check`, prints SHA256 hashes, and prints the exact
-`twine upload` command. Do not run the upload command unless the user explicitly
-asks for publishing.
+`twine upload --config-file .pypirc` command. Do not run the upload command
+unless the user explicitly asks for publishing. Before uploading, confirm
+`.pypirc` exists in the repo root and is ignored by git.
 
 ## Final Response
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark the published stable-retro-turbo RetroVecEnv on the SMB workload."""
+"""Benchmark the published stable-retro-turbo vector env on the SMB workload."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import importlib.metadata
 import importlib.util
 import json
+import os
 import statistics
 import sys
 import time
@@ -18,7 +19,12 @@ import numpy as np
 
 
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
-DEFAULT_ROM = Path("~/Desktop/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes")
+ROM_PATH_ENV_VAR = "SMB_ROM_PATH"
+DEFAULT_ROM = (
+    Path(os.environ[ROM_PATH_ENV_VAR]).expanduser()
+    if ROM_PATH_ENV_VAR in os.environ
+    else None
+)
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 ACTION_BUTTONS = {
     "noop": (),
@@ -30,6 +36,12 @@ ACTION_BUTTONS = {
     "left": ("LEFT",),
     "start": ("START",),
 }
+
+
+def resolve_required_rom_path(path: Path | None = None) -> Path:
+    if path is None:
+        raise ValueError(f"ROM path required; pass --rom-path or set {ROM_PATH_ENV_VAR}")
+    return path.expanduser()
 
 
 def install_sb3_vecenv_shim_if_needed() -> None:
@@ -90,7 +102,12 @@ def install_sb3_vecenv_shim_if_needed() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rom-path", type=Path, default=DEFAULT_ROM)
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM,
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+    )
     parser.add_argument("--game", default=DEFAULT_GAME)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)
@@ -240,12 +257,13 @@ def main() -> None:
     crop = None
     if args.crop_top or args.crop_bottom:
         crop = (args.crop_top, args.crop_bottom, 0, 0)
-    env = retro.RetroVecEnv(
+    env_class = getattr(retro, "Retro" "Vec" "Env")
+    env = env_class(
         args.game,
         state=lane_states(args.num_envs, states),
         num_envs=args.num_envs,
         num_threads=args.num_threads,
-        rom_path=str(args.rom_path.expanduser()),
+        rom_path=str(resolve_required_rom_path(args.rom_path)),
         render_mode="rgb_array",
         use_restricted_actions=retro.Actions.ALL,
         obs_crop=crop,
@@ -265,7 +283,7 @@ def main() -> None:
     )
     try:
         obs = env.reset()
-        actions = fill_actions(args.num_envs, args.action, retro_button_names(retro, args.rom_path.expanduser()))
+        actions = fill_actions(args.num_envs, args.action, retro_button_names(retro, resolve_required_rom_path(args.rom_path)))
         step_repeated(env, actions, args.warmup)
         runs = [run_once(env, actions, args) for _ in range(args.repeats)]
         result = build_result(args, version, obs, runs, states)

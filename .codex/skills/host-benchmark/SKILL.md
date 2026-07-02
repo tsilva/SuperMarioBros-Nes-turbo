@@ -43,7 +43,7 @@ Use this fixed host and persistent benchmark root:
 ```text
 host: beast-3-local
 root: /home/tsilva/SuperMarioBros-Nes-turbo-host-bench
-rom:  /home/tsilva/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes
+rom:  pass an explicit --rom-path for the remote host; do not assume a default location
 states: /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0
 ```
 
@@ -254,7 +254,7 @@ source is:
 
 ```bash
 RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py \
-  --rom-path /home/tsilva/roms/NES/mapper-000-NROM/SuperMarioBros-Nes-v0.nes \
+  --rom-path /path/on/remote/to/SuperMarioBros.nes \
   --state-dir /home/tsilva/SuperMarioBros-Nes-turbo-host-bench/states/SuperMarioBros-Nes-v0 \
   --num-envs 16 \
   --steps 50000 \
