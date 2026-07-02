@@ -183,7 +183,13 @@ def check_tools(args: argparse.Namespace) -> None:
         "cargo": run_capture(["cargo", "--version"]),
         "docker": run_capture(["docker", "--version"]),
         "maturin": run_capture([str(PYTHON), "-m", "maturin", "--version"]),
-        "cibuildwheel": run_capture([str(PYTHON), "-m", "cibuildwheel", "--version"]),
+        "cibuildwheel": run_capture(
+            [
+                str(PYTHON),
+                "-c",
+                "from importlib.metadata import version; print('cibuildwheel ' + version('cibuildwheel'))",
+            ]
+        ),
         "twine": run_capture([str(PYTHON), "-m", "twine", "--version"]),
     }
     result = {
