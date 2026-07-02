@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from supermariobrosnes_turbo import Actions, SuperMarioBrosNesTurboVecEnv
 from rom_helpers import require_rom
+from supermariobrosnes_turbo.env import _normalize_initial_state_config, _resolve_state_path
 
 
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
@@ -52,6 +54,23 @@ def make_env(rom_path: Path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:
 
 def test_super_mario_vec_env_is_sb3_vec_env_type() -> None:
     assert issubclass(SuperMarioBrosNesTurboVecEnv, VecEnv)
+
+
+def test_state_dir_env_resolves_named_initial_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_dir = tmp_path / "states"
+    state_dir.mkdir()
+    shutil.copy2(_resolve_state_path("Level1-1"), state_dir / "Level1-1.state")
+    monkeypatch.setenv("SUPERMARIOBROSNES_FASTENV_STATE_DIR", str(state_dir))
+
+    initial_states, state_names, state_weights = _normalize_initial_state_config(
+        "Level1-1",
+        None,
+        num_envs=1,
+    )
+
+    assert len(initial_states) == 1
+    assert state_names == ("Level1-1",)
+    assert state_weights is None
 
 
 def test_sb3_step_contract_and_reset_infos() -> None:

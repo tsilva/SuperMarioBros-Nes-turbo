@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import time
 from pathlib import Path
@@ -313,6 +314,8 @@ def main() -> None:
     args.parsed_states = initial_states_for_args(args)
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
+    if args.state_dir is not None:
+        os.environ["SUPERMARIOBROSNES_FASTENV_STATE_DIR"] = str(args.state_dir)
     env = SuperMarioBrosNesTurboVecEnv(
         "SuperMarioBros-Nes-v0",
         state=benchmark_state(args),
