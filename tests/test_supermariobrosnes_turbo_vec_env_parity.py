@@ -8,6 +8,7 @@ import numpy as np
 from gymnasium import spaces
 
 from scripts import compare_supermariobrosnes_turbo_vec_env as compare
+from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
 from supermariobrosnes_turbo import (
     Actions,
     Integrations,
@@ -35,6 +36,8 @@ def require_stable_retro_oracle() -> None:
 
 def test_native_vec_env_name_is_public() -> None:
     assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
+    assert native.SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
+    assert not hasattr(native, "FastMarioVecEnv")
 
 
 def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> None:

@@ -10,12 +10,12 @@ use crate::vec_env::{
 };
 
 #[pyclass]
-pub struct FastMarioVecEnv {
+pub struct SuperMarioBrosNesTurboVecEnv {
     inner: MarioVecEnv,
 }
 
 #[pymethods]
-impl FastMarioVecEnv {
+impl SuperMarioBrosNesTurboVecEnv {
     #[new]
     #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0))]
     pub fn new(
@@ -468,7 +468,7 @@ impl FastMarioVecEnv {
     }
 }
 
-impl FastMarioVecEnv {
+impl SuperMarioBrosNesTurboVecEnv {
     fn validate_obs_shape(&self, obs: &PyReadwriteArray4<'_, u8>) -> PyResult<()> {
         let shape = obs.shape();
         let expected = self.obs_shape();
@@ -641,7 +641,7 @@ fn parse_done_on_info_rule(
 
 #[pymodule]
 fn _supermariobrosnes_turbo(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<FastMarioVecEnv>()?;
+    m.add_class::<SuperMarioBrosNesTurboVecEnv>()?;
     m.add("NES_WIDTH", NES_WIDTH)?;
     m.add("NES_HEIGHT", NES_HEIGHT)?;
     m.add("VISIBLE_FRAME_WIDTH", VISIBLE_FRAME_WIDTH)?;

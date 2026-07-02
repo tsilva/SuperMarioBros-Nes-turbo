@@ -47,7 +47,7 @@ env.step_async(actions)
 obs, rewards, dones, infos = env.step_wait()
 ```
 
-`step_wait()` follows the Stable Baselines3 `VecEnv` contract: it calls the Rust `FastMarioVecEnv` once for the whole batch and returns `(obs, rewards, dones, infos)` from reusable NumPy arrays. Use `step_fast()` when you do not need per-env `info` dictionaries, or `step_wait_gymnasium()` when you need separate `terminated` and `truncated` arrays.
+`step_wait()` follows the Stable Baselines3 `VecEnv` contract: it calls the Rust `SuperMarioBrosNesTurboVecEnv` once for the whole batch and returns `(obs, rewards, dones, infos)` from reusable NumPy arrays. Use `step_fast()` when you do not need per-env `info` dictionaries, or `step_wait_gymnasium()` when you need separate `terminated` and `truncated` arrays.
 
 Initial states can be a single stable-retro state, one state per env slot, or a weighted mapping sampled independently for each lane on reset:
 

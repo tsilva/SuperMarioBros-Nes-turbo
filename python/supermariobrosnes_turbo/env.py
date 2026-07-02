@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from gymnasium import spaces
 
-from ._supermariobrosnes_turbo import FastMarioVecEnv
+from ._supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv as _CoreSuperMarioBrosNesTurboVecEnv
 
 try:
     from stable_baselines3.common.vec_env import VecEnv as _SB3VecEnv
@@ -718,7 +718,7 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         )
         core_resize_width = VISIBLE_WIDTH if self._needs_python_postprocess else self._output_resize_width
         core_resize_height = source_height if self._needs_python_postprocess else self._output_resize_height
-        self._core = FastMarioVecEnv(
+        self._core = _CoreSuperMarioBrosNesTurboVecEnv(
             _expand_rom_path(_resolve_rom_path(str(game), rom_path)),
             num_envs,
             frame_skip,
@@ -1269,4 +1269,3 @@ def _resolve_rom_path(game: str, rom_path: str | Path | None) -> str | Path:
         f"ROM path required for {game}; pass rom_path, set {ROM_PATH_ENV_VAR}, "
         "or import the ROM into stable-retro data"
     )
-
