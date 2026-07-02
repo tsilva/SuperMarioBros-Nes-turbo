@@ -1,4 +1,4 @@
-.PHONY: benchmark benchmark-local develop test test-full test-python test-python-stress test-rust
+.PHONY: benchmark benchmark-local develop test test-python test-rust
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -22,9 +22,4 @@ test-rust:
 test-python:
 	$(PYTHON) -m pytest
 
-test-python-stress:
-	SUPERMARIOBROSNES_RETRO_STRESS=1 $(PYTHON) -m pytest
-
 test: test-rust test-python
-
-test-full: develop test-rust test-python-stress

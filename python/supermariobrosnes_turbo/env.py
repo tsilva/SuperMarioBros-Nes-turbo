@@ -281,7 +281,15 @@ class SuperMarioBrosVecEnv:
         terminate_on_life_loss: bool = False,
         terminate_on_level_change: bool = False,
         done_on_info: DoneOnInfoSpec | None = None,
+        noop_reset_max: int = 0,
+        sticky_action_prob: float = 0.0,
     ) -> None:
+        noop_reset_max = int(noop_reset_max)
+        sticky_action_prob = float(sticky_action_prob)
+        if noop_reset_max < 0:
+            raise ValueError("noop_reset_max must be non-negative")
+        if not 0.0 <= sticky_action_prob <= 1.0:
+            raise ValueError("sticky_action_prob must be between 0.0 and 1.0")
         self.action_meanings = _resolve_action_set(action_set)
         self.action_set = action_set if isinstance(action_set, str) else "custom"
         self._core_action_ids = _core_action_ids(self.action_meanings)
@@ -314,6 +322,8 @@ class SuperMarioBrosVecEnv:
             bool(terminate_on_level_change),
             [(name, list(keys), op) for name, keys, op in done_on_info_rules],
             bool(frame_maxpool),
+            noop_reset_max,
+            sticky_action_prob,
         )
         self.initial_state_names = tuple(self._core.initial_state_names)
         self.num_envs = self._core.num_envs
@@ -325,6 +335,8 @@ class SuperMarioBrosVecEnv:
         self.terminate_on_life_loss = bool(terminate_on_life_loss)
         self.terminate_on_level_change = bool(terminate_on_level_change)
         self.done_on_info_rules = done_on_info_rules
+        self.noop_reset_max = self._core.noop_reset_max
+        self.sticky_action_prob = self._core.sticky_action_prob
         self.crop_top = self._core.crop_top
         self.crop_bottom = self._core.crop_bottom
         self.resize_width = self._core.resize_width
@@ -357,6 +369,9 @@ class SuperMarioBrosVecEnv:
         self._done_on_info: list[dict[str, dict[str, Any]]] = [
             {} for _ in range(self.num_envs)
         ]
+        self._terminal_observations: list[np.ndarray | None] = [
+            None for _ in range(self.num_envs)
+        ]
         self._write_active_state_indices()
 
     def reset(self) -> np.ndarray:
@@ -365,6 +380,7 @@ class SuperMarioBrosVecEnv:
         self._terminated.fill(False)
         self._truncated.fill(False)
         self._done_on_info = [{} for _ in range(self.num_envs)]
+        self._terminal_observations = [None for _ in range(self.num_envs)]
         self._write_active_state_indices()
         self._write_info_arrays()
         return self._obs
@@ -424,6 +440,7 @@ class SuperMarioBrosVecEnv:
         if np.any(self._terminated) or np.any(self._truncated):
             self._write_active_state_indices()
         self._write_done_on_info()
+        self._write_terminal_observations()
         return self._obs, self._rewards, self._terminated, self._truncated
 
     def _write_done_on_info(self) -> None:
@@ -439,6 +456,20 @@ class SuperMarioBrosVecEnv:
                     "next": list(next_values),
                 }
             self._done_on_info.append(lane_done_on_info)
+
+    def _write_terminal_observations(self) -> None:
+        reports = self._core.terminal_observations()
+        obs_shape = self._obs.shape[1:]
+        self._terminal_observations = []
+        for report in reports:
+            if report is None:
+                self._terminal_observations.append(None)
+                continue
+            if isinstance(report, (bytes, bytearray, memoryview)):
+                terminal_obs = np.frombuffer(report, dtype=np.uint8).reshape(obs_shape).copy()
+            else:
+                terminal_obs = np.asarray(report, dtype=np.uint8).reshape(obs_shape)
+            self._terminal_observations.append(terminal_obs)
 
     def step(
         self, actions: np.ndarray
@@ -472,7 +503,6 @@ class SuperMarioBrosVecEnv:
 
     def _info_dict(self, index: int) -> dict[str, Any]:
         info = {
-            "x_pos": int(self._x_pos[index]),
             "coins": int(self._coins[index]),
             "levelHi": int(self._level_hi[index]),
             "levelLo": int(self._level_lo[index]),
@@ -485,6 +515,12 @@ class SuperMarioBrosVecEnv:
         }
         if self._done_on_info[index]:
             info["done_on_info"] = self._done_on_info[index]
+        if bool(self._terminated[index]) or bool(self._truncated[index]):
+            terminal_observation = self._terminal_observations[index]
+            if terminal_observation is not None:
+                info["terminal_observation"] = terminal_observation
+            info["reset_info"] = {}
+            info["TimeLimit.truncated"] = bool(self._truncated[index])
         return info
 
     @property

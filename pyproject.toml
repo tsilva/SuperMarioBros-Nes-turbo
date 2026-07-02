@@ -37,9 +37,9 @@ constraint-dependencies = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 markers = [
   "retro_oracle: tests that compare against stable-retro-turbo and require the local ROM",
-  "slow: long-running parity stress tests",
 ]
 
 [dependency-groups]

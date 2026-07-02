@@ -17,7 +17,7 @@ pub struct FastMarioVecEnv {
 #[pymethods]
 impl FastMarioVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -37,6 +37,8 @@ impl FastMarioVecEnv {
         terminate_on_level_change: bool,
         done_on_info: Option<Vec<(String, Vec<String>, String)>>,
         frame_maxpool: bool,
+        noop_reset_max: isize,
+        sticky_action_prob: f64,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -56,6 +58,14 @@ impl FastMarioVecEnv {
         if resize_width == 0 || resize_height == 0 {
             return Err(PyValueError::new_err(
                 "resize_width and resize_height must be > 0",
+            ));
+        }
+        if noop_reset_max < 0 {
+            return Err(PyValueError::new_err("noop_reset_max must be non-negative"));
+        }
+        if !(0.0..=1.0).contains(&sticky_action_prob) {
+            return Err(PyValueError::new_err(
+                "sticky_action_prob must be between 0.0 and 1.0",
             ));
         }
 
@@ -83,6 +93,8 @@ impl FastMarioVecEnv {
             crop_bottom,
             resize_width,
             resize_height,
+            noop_reset_max: noop_reset_max as usize,
+            sticky_action_prob,
         };
         Ok(Self {
             inner: MarioVecEnv::new(
@@ -120,6 +132,16 @@ impl FastMarioVecEnv {
     #[getter]
     pub fn frame_maxpool(&self) -> bool {
         self.inner.config().frame_maxpool
+    }
+
+    #[getter]
+    pub fn noop_reset_max(&self) -> usize {
+        self.inner.config().noop_reset_max
+    }
+
+    #[getter]
+    pub fn sticky_action_prob(&self) -> f64 {
+        self.inner.config().sticky_action_prob
     }
 
     #[getter]
@@ -181,6 +203,10 @@ impl FastMarioVecEnv {
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    pub fn terminal_observations(&self) -> Vec<Option<Vec<u8>>> {
+        self.inner.terminal_observations().to_vec()
     }
 
     pub fn seed(&mut self, seed: u64) {

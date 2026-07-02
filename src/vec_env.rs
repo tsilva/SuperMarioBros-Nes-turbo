@@ -16,6 +16,8 @@ pub struct VecEnvConfig {
     pub grayscale: bool,
     pub frame_stack: usize,
     pub frame_maxpool: bool,
+    pub noop_reset_max: usize,
+    pub sticky_action_prob: f64,
     pub terminate_on_flag: bool,
     pub crop_top: usize,
     pub crop_bottom: usize,
@@ -194,6 +196,10 @@ impl VecEnvConfig {
     fn uses_default_gray_area_resize(&self) -> bool {
         false
     }
+
+    fn has_action_randomization(&self) -> bool {
+        self.noop_reset_max > 0 || self.sticky_action_prob > 0.0
+    }
 }
 
 pub struct MarioVecEnv {
@@ -206,6 +212,8 @@ pub struct MarioVecEnv {
     done_on_info_rules: Vec<DoneOnInfoRule>,
     done_on_info_baselines: Vec<InfoSnapshot>,
     last_done_on_info: Vec<Vec<FiredDoneOnInfoRule>>,
+    last_terminal_observations: Vec<Option<Vec<u8>>>,
+    last_actions: Vec<u8>,
     rng: XorShift64,
     scratch: Vec<Vec<u8>>,
     synced_lanes: bool,
@@ -246,6 +254,8 @@ impl MarioVecEnv {
             done_on_info_rules,
             done_on_info_baselines: vec![InfoSnapshot::default(); config.num_envs],
             last_done_on_info: vec![Vec::new(); config.num_envs],
+            last_terminal_observations: vec![None; config.num_envs],
+            last_actions: vec![MarioAction::Noop as u8; config.num_envs],
             rng: XorShift64::new(seed),
             scratch,
             synced_lanes: true,
@@ -261,10 +271,12 @@ impl MarioVecEnv {
         if self.initial_states.is_empty() {
             for env_idx in 0..self.config.num_envs {
                 self.envs[env_idx].reset();
+                self.last_actions[env_idx] = MarioAction::Noop as u8;
+                self.apply_noop_reset(env_idx);
                 self.refresh_done_baseline(env_idx);
             }
             self.active_state_indices.fill(-1);
-            self.synced_lanes = true;
+            self.synced_lanes = !self.config.has_action_randomization();
             self.synced_groups.clear();
             return Ok(());
         }
@@ -280,10 +292,14 @@ impl MarioVecEnv {
             }
             self.active_state_indices[env_idx] = state_index as i32;
             self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
+            self.last_actions[env_idx] = MarioAction::Noop as u8;
+            self.apply_noop_reset(env_idx);
             self.refresh_done_baseline(env_idx);
         }
-        self.synced_lanes = all_same;
+        self.synced_lanes = all_same && !self.config.has_action_randomization();
         if self.synced_lanes {
+            self.synced_groups.clear();
+        } else if self.config.has_action_randomization() {
             self.synced_groups.clear();
         } else {
             self.refresh_synced_groups();
@@ -305,6 +321,38 @@ impl MarioVecEnv {
         } else {
             env_idx
         }
+    }
+
+    fn apply_noop_reset(&mut self, env_idx: usize) {
+        if self.config.noop_reset_max == 0 {
+            return;
+        }
+        let noop_count = self.rng.next_bounded_usize(self.config.noop_reset_max + 1);
+        for _ in 0..noop_count {
+            self.envs[env_idx].step_frame(MarioAction::Noop);
+            if self.envs[env_idx].is_done() {
+                break;
+            }
+        }
+    }
+
+    fn effective_actions(&mut self, actions: &[u8]) -> Vec<u8> {
+        if self.config.sticky_action_prob <= 0.0 {
+            self.last_actions.copy_from_slice(actions);
+            return actions.to_vec();
+        }
+
+        let mut effective = Vec::with_capacity(actions.len());
+        for (env_idx, &action) in actions.iter().enumerate() {
+            let chosen = if self.rng.next_unit_f64() < self.config.sticky_action_prob {
+                self.last_actions[env_idx]
+            } else {
+                action
+            };
+            self.last_actions[env_idx] = chosen;
+            effective.push(chosen);
+        }
+        effective
     }
 
     pub fn config(&self) -> VecEnvConfig {
@@ -368,6 +416,10 @@ impl MarioVecEnv {
 
     pub fn done_on_info(&self) -> &[Vec<FiredDoneOnInfoRule>] {
         &self.last_done_on_info
+    }
+
+    pub fn terminal_observations(&self) -> &[Option<Vec<u8>>] {
+        &self.last_terminal_observations
     }
 
     pub fn seed(&mut self, seed: u64) {
@@ -503,8 +555,25 @@ impl MarioVecEnv {
 
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
+        let effective_actions_storage;
+        let actions = if config.sticky_action_prob > 0.0 {
+            effective_actions_storage = self.effective_actions(actions);
+            effective_actions_storage.as_slice()
+        } else {
+            self.last_actions.copy_from_slice(actions);
+            actions
+        };
         for lane in &mut self.last_done_on_info {
             lane.clear();
+        }
+        for terminal_obs in &mut self.last_terminal_observations {
+            *terminal_obs = None;
+        }
+        if self.synced_lanes && config.num_envs > 1 && config.has_action_randomization() {
+            self.materialize_synced_lanes();
+        }
+        if !self.synced_groups.is_empty() && config.has_action_randomization() {
+            self.materialize_synced_groups();
         }
         if self.synced_lanes && config.num_envs > 1 && !self.done_on_info_rules.is_empty() {
             self.materialize_synced_lanes();
@@ -701,8 +770,25 @@ impl MarioVecEnv {
 
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
+        let effective_actions_storage;
+        let actions = if config.sticky_action_prob > 0.0 {
+            effective_actions_storage = self.effective_actions(actions);
+            effective_actions_storage.as_slice()
+        } else {
+            self.last_actions.copy_from_slice(actions);
+            actions
+        };
         for lane in &mut self.last_done_on_info {
             lane.clear();
+        }
+        for terminal_obs in &mut self.last_terminal_observations {
+            *terminal_obs = None;
+        }
+        if self.synced_lanes && config.num_envs > 1 && config.has_action_randomization() {
+            self.materialize_synced_lanes_profiled();
+        }
+        if !self.synced_groups.is_empty() && config.has_action_randomization() {
+            self.materialize_synced_groups_profiled();
         }
         if self.synced_lanes && config.num_envs > 1 && !self.done_on_info_rules.is_empty() {
             self.materialize_synced_lanes_profiled();
@@ -1306,6 +1392,8 @@ impl MarioVecEnv {
         if self.initial_states.is_empty() {
             self.envs[env_idx].reset();
             self.active_state_indices[env_idx] = -1;
+            self.last_actions[env_idx] = MarioAction::Noop as u8;
+            self.apply_noop_reset(env_idx);
             self.refresh_done_baseline(env_idx);
             return;
         }
@@ -1315,6 +1403,8 @@ impl MarioVecEnv {
         self.envs[env_idx]
             .load_fceu_state(&self.initial_states[state_index].data)
             .expect("previously validated initial state failed to reload");
+        self.last_actions[env_idx] = MarioAction::Noop as u8;
+        self.apply_noop_reset(env_idx);
         self.refresh_done_baseline(env_idx);
     }
 
@@ -1342,9 +1432,10 @@ impl MarioVecEnv {
                 continue;
             }
 
-            self.reset_one_env(env_idx);
             let start = env_idx * obs_stride;
             let end = start + obs_stride;
+            self.last_terminal_observations[env_idx] = Some(obs[start..end].to_vec());
+            self.reset_one_env(env_idx);
             write_reset_stack(
                 config,
                 &self.resize_plan,
@@ -1432,6 +1523,13 @@ impl XorShift64 {
     fn next_unit_f64(&mut self) -> f64 {
         const DENOM: f64 = (1u64 << 53) as f64;
         ((self.next_u64() >> 11) as f64) / DENOM
+    }
+
+    fn next_bounded_usize(&mut self, upper_exclusive: usize) -> usize {
+        if upper_exclusive <= 1 {
+            return 0;
+        }
+        (self.next_u64() % upper_exclusive as u64) as usize
     }
 }
 
@@ -2221,6 +2319,8 @@ mod tests {
             grayscale: true,
             frame_stack: 4,
             frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
             terminate_on_flag: true,
             crop_top: 32,
             crop_bottom: 0,
@@ -2262,6 +2362,8 @@ mod tests {
             grayscale: false,
             frame_stack: 1,
             frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
             terminate_on_flag: true,
             crop_top: 32,
             crop_bottom: 0,

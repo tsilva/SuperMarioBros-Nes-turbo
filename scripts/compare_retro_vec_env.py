@@ -69,6 +69,8 @@ class ComparisonConfig:
     resize_height: int
     action_set: str
     frame_maxpool: bool
+    noop_reset_max: int
+    sticky_action_prob: float
     obs_copy: str
     terminate_on_flag: bool
     terminate_on_life_loss: bool
@@ -134,6 +136,8 @@ def parse_args() -> ComparisonConfig:
             "Enable RetroVecEnv maxpooling. sandbox-sb3 Level1-1 training leaves this disabled."
         ),
     )
+    parser.add_argument("--noop-reset-max", type=int, default=0)
+    parser.add_argument("--sticky-action-prob", type=float, default=0.0)
     parser.add_argument(
         "--obs-copy",
         choices=("copy", "safe_view", "unsafe_view"),
@@ -203,6 +207,10 @@ def parse_args() -> ComparisonConfig:
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if args.crop_top < 0 or args.crop_bottom < 0:
         parser.error("--crop-top and --crop-bottom must be non-negative")
+    if args.noop_reset_max < 0:
+        parser.error("--noop-reset-max must be non-negative")
+    if not 0.0 <= args.sticky_action_prob <= 1.0:
+        parser.error("--sticky-action-prob must be between 0.0 and 1.0")
 
     return ComparisonConfig(
         rom_path=args.rom_path.expanduser(),
@@ -224,6 +232,8 @@ def parse_args() -> ComparisonConfig:
         resize_height=args.resize_height,
         action_set=args.action_set,
         frame_maxpool=args.frame_maxpool,
+        noop_reset_max=args.noop_reset_max,
+        sticky_action_prob=args.sticky_action_prob,
         obs_copy=args.obs_copy,
         terminate_on_flag=args.terminate_on_flag,
         terminate_on_life_loss=args.terminate_on_life_loss,
@@ -327,6 +337,8 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosVecEnv:
         grayscale=config.grayscale,
         frame_stack=config.frame_stack,
         frame_maxpool=config.frame_maxpool,
+        noop_reset_max=config.noop_reset_max,
+        sticky_action_prob=config.sticky_action_prob,
         terminate_on_flag=config.terminate_on_flag,
         terminate_on_life_loss=config.terminate_on_life_loss,
         terminate_on_level_change=config.terminate_on_level_change,
@@ -363,9 +375,9 @@ def make_retro_env(config: ComparisonConfig):
         "obs_resize_algorithm": "area",
         "frame_skip": config.frame_skip,
         "frame_stack": config.frame_stack,
-        "frame_maxpool": config.frame_maxpool,
-        "reset_noops": 0,
-        "action_sticky_prob": 0.0,
+        "maxpool_last_two": config.frame_maxpool,
+        "noop_reset_max": config.noop_reset_max,
+        "sticky_action_prob": config.sticky_action_prob,
         "reward_clip": False,
         "info_filter": "all",
         "obs_layout": "chw",
@@ -476,51 +488,49 @@ def require_array_equal(
     raise ComparisonFailure(payload)
 
 
-def fast_info_snapshot(env: SuperMarioBrosVecEnv) -> dict[str, np.ndarray]:
-    return {
-        retro_key: np.asarray(getattr(env, fast_attr)).copy()
-        for retro_key, fast_attr in INFO_KEY_MAP.items()
-    }
+def normalize_info_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return {
+            "__ndarray__": True,
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+            "values": value.tolist(),
+        }
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): normalize_info_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [normalize_info_value(item) for item in value]
+    return value
 
 
-def retro_info_snapshot(infos: list[dict[str, Any]]) -> dict[str, np.ndarray]:
-    snapshot = {}
-    for key in INFO_KEY_MAP:
-        snapshot[key] = np.asarray([info.get(key) for info in infos])
-    return snapshot
-
-
-def fast_infos_from_env(env: SuperMarioBrosVecEnv) -> list[dict[str, Any]]:
-    snapshot = fast_info_snapshot(env)
-    return [
-        {key: values[index].item() for key, values in snapshot.items()}
-        for index in range(env.num_envs)
-    ]
+def normalize_info(info: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): normalize_info_value(value) for key, value in info.items()}
 
 
 def compare_infos(
     *,
     phase: str,
     step: int | None,
-    fast_env: SuperMarioBrosVecEnv,
+    fast_infos: list[dict[str, Any]],
     retro_infos: list[dict[str, Any]],
     action_names: list[str] | None = None,
 ) -> None:
-    fast = fast_info_snapshot(fast_env)
-    retro = retro_info_snapshot(retro_infos)
-    for key, fast_values in fast.items():
-        try:
-            retro_values = retro[key].astype(fast_values.dtype, copy=False)
-        except (TypeError, ValueError):
-            retro_values = retro[key]
-        require_array_equal(
-            phase=phase,
-            step=step,
-            field=f"info.{key}",
-            fast=fast_values,
-            retro=retro_values,
-            action_names=action_names,
-        )
+    fast = [normalize_info(info) for info in fast_infos]
+    retro = [normalize_info(info) for info in retro_infos]
+    if fast == retro:
+        return
+    payload: dict[str, Any] = {
+        "phase": phase,
+        "step": step,
+        "field": "infos",
+        "fast": fast,
+        "retro": retro,
+    }
+    if action_names is not None:
+        payload["actions"] = action_names
+    raise ComparisonFailure(payload)
 
 
 def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
@@ -600,7 +610,7 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
                 compare_infos(
                     phase="step",
                     step=step,
-                    fast_env=fast_env,
+                    fast_infos=fast_infos,
                     retro_infos=retro_infos,
                     action_names=action_names,
                 )
@@ -730,6 +740,8 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "resize_height": config.resize_height,
         "action_set": config.action_set,
         "frame_maxpool": config.frame_maxpool,
+        "noop_reset_max": config.noop_reset_max,
+        "sticky_action_prob": config.sticky_action_prob,
         "obs_copy": config.obs_copy,
         "terminate_on_flag": config.terminate_on_flag,
         "terminate_on_life_loss": config.terminate_on_life_loss,
@@ -742,15 +754,15 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
             "env_threads": 4,
             "frame_skip": 4,
             "frame_stack": 4,
-            "frame_maxpool": False,
+            "maxpool_last_two": False,
             "obs_copy": "safe_view",
             "obs_crop": [32, 0, 0, 0],
             "obs_grayscale": True,
             "obs_resize": [84, 84],
             "obs_resize_algorithm": "area",
             "obs_layout": "chw",
-            "reset_noops": 0,
-            "action_sticky_prob": 0.0,
+            "noop_reset_max": 0,
+            "sticky_action_prob": 0.0,
             "action_set": "simple",
             "info_filter": "all",
             "done_on": {
