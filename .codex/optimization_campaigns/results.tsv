@@ -1,5 +1,5 @@
 epoch	commit	mean_env_steps_per_sec	stdev_env_steps_per_sec	best_env_steps_per_sec	gain_pct	status	description	artifact
-0	694b4d3	13323.438848928437	265.20808423233206	13613.33573531567	0.0	baseline	fresh Modal baseline for codex/autoresearch-continuous	artifacts/benchmarks/autoresearch-baseline-2026-06-30-2127.json
+0	694b4d3	13323.438848928437	265.20808423233206	13613.33573531567	0.0	baseline	fresh remote baseline for codex/autoresearch-continuous	artifacts/benchmarks/autoresearch-baseline-2026-06-30-2127.json
 1	c75909e	10110.454769306416	18.15000183245132	10130.11208397936	-24.115276213996594	discard	group repeated identical saved-state lanes while actions remain uniform within each group	artifacts/benchmarks/grouped-synced-state-lanes-2026-06-30-2135.json
 2	68bea25	15578.861179563328	476.39830746456073	16019.593596967652	16.928229687610163	keep	parallelize repeated saved-state group leaders before copying peer lane outputs	artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json
 3	40089b0	11788.82555283185	679.4459538515811	12572.927458363924	-24.328065980222767	discard	reuse a persistent grouped-action mask instead of allocating it per grouped step	artifacts/benchmarks/reuse-synced-group-action-mask-2026-06-30-2147.json

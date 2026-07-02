@@ -5,7 +5,8 @@
 - Build a low-overhead hot-path profiler before selecting another speed
   candidate. This is infrastructure for choosing ideas, not itself an
   optimization idea. The profiler should be disabled by default and should not
-  be judged by Modal speedup unless it accidentally changes the normal hot path.
+  be judged by host benchmark speedup unless it accidentally changes the normal
+  hot path.
 - Profiler evidence now exists. Policy-completion profile:
   `artifacts/benchmarks/policy-profile-level1-1-native-maxpool-levelchange-strict-20260701-224421.json`.
   Canonical local validation profile:
@@ -16,9 +17,9 @@
 ## Ready
 
 Curated order: highest estimated ROI first. ROI is judged from local profiler
-evidence, expected Modal signal, implementation size, correctness risk, and the
-existing reject/keep ledger. Local profiles rank candidates only; Modal remains
-the acceptance source of truth.
+evidence, expected host benchmark signal, implementation size, correctness risk,
+and the existing reject/keep ledger. Local profiles rank candidates only; the
+fixed host benchmark is the acceptance source of truth.
 
 ### IDEA-20260701-002: Fast-Forward SMB Sprite-0 Polling
 
@@ -26,7 +27,7 @@ the acceptance source of truth.
 - Perspective: emulator-core
 - Estimated ROI: highest. Hot in both policy-completion and grouped-lane
   profiles, narrow PC/routine target, and likely enough CPU-step removal to show
-  through Modal variance.
+  through fixed-host variance.
 - Hypothesis: SMB has a known sprite-0 wait loop that repeatedly reads
   `PPUSTATUS` until the sprite-0 bit is set. The emulator already has a coarse
   PPU event model and a committed SMB idle-jump fast-forward; a ROM-signature
@@ -48,8 +49,8 @@ the acceptance source of truth.
   reads, or missing `PPUSTATUS` side effects.
 - Required checks: Add a targeted regression for the guarded loop if practical,
   then run `cargo fmt --check`, `cargo check --release`,
-  `.venv/bin/python -m maturin develop --release`, `make test`, and the Modal
-  paired benchmark before accepting.
+  `.venv/bin/python -m maturin develop --release`, `make test`, and the
+  fixed-host paired benchmark before accepting.
 - Expected benchmark signal: Candidate should show a robust paired speedup if
   this loop is hot in the first four level states; rough expectation `+3%` to
   `+12%`.
@@ -80,7 +81,7 @@ the acceptance source of truth.
   mismatch.
 - Required checks: Add a focused controller-routine equivalence test or a
   step-sequence parity check with `noop`, `right`, `right_a`, and `right_a_b`,
-  then run required checks and paired Modal benchmark.
+  then run required checks and the fixed-host paired benchmark.
 - Expected benchmark signal: Rough expectation `+1%` to `+5%`; the value is
   mainly compounding with other PC-specific fast-forwards.
 
@@ -113,7 +114,7 @@ the acceptance source of truth.
   mirroring, or scroll behavior can regress visually.
 - Required checks: Existing scratch-resize and stable-retro parity tests are
   mandatory; add a targeted sprite-priority parity case if needed, then run the
-  required checks and paired Modal benchmark.
+  required checks and the fixed-host paired benchmark.
 - Expected benchmark signal: Rough expectation `+3%` to `+8%` only if sprite
   overlay is a measured hotspot; discard quickly if the extra cache hurts
   locality.
@@ -145,7 +146,7 @@ the acceptance source of truth.
   make the side effects clear.
 - Required checks: Add a targeted smoke/parity check over Level1-1 through
   Level1-4 startup and gameplay frames, then run the full required checks and
-  paired Modal benchmark.
+  fixed-host paired benchmark.
 - Expected benchmark signal: Only worth keeping if robust paired speedup is
   clearly positive; rough expectation `+2%` to `+8%` if audio is hot.
 
@@ -172,7 +173,7 @@ the acceptance source of truth.
 - Contract risks: High. Any incorrect cycle count, flag update, interrupt
   boundary, or memory side effect can silently corrupt gameplay.
 - Required checks: Add targeted CPU-block equivalence tests if implemented,
-  run the full required checks, and require a strong paired Modal result before
+  run the full required checks, and require a strong fixed-host paired result before
   accepting.
 - Expected benchmark signal: Unknown; possible `+5%` to `+15%` for a successful
   very narrow block cache, but likely discard if complexity grows.
@@ -183,7 +184,7 @@ the acceptance source of truth.
 - Perspective: vec-env
 - Estimated ROI: lowest among current ready ideas. Group sharing itself already
   won; local profiling shows copy cost is tiny and the mask-reuse follow-up was
-  a large Modal regression.
+  a large benchmark regression.
 - Hypothesis: The accepted grouped-lane candidate wins by stepping repeated
   state group leaders in parallel, then copying peer outputs. The remaining
   overhead may be Rayon scheduling and cache behavior for a small number of
@@ -204,7 +205,7 @@ the acceptance source of truth.
 - Contract risks: Accidentally serializing too much work, changing reset/group
   materialization semantics, or repeating the discarded mask-reuse mechanism.
 - Required checks: `scripts/check_vec_env_equivalence.py`, full required checks,
-  and paired Modal benchmark.
+  and the fixed-host paired benchmark.
 - Expected benchmark signal: Rough expectation `+1%` to `+4%`; discard quickly
   if host variance or scheduling overhead hides the signal.
 
@@ -218,7 +219,7 @@ the acceptance source of truth.
 - Perspective: vec-env
 - Result: commit `c75909e`, artifact
   `artifacts/benchmarks/grouped-synced-state-lanes-2026-06-30-2135.json`.
-- Reason: Modal result was substantially slower than the baseline despite the
+- Reason: Benchmark result was substantially slower than the baseline despite the
   plausible mechanism. Do not repeat a single-thread grouped-lane design.
 
 ### IDEA-20260630-D02: Parallelize Repeated Saved-State Group Leaders
@@ -227,7 +228,7 @@ the acceptance source of truth.
 - Perspective: vec-env
 - Result: commit `68bea25`, artifact
   `artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json`.
-- Reason: Parallel group leaders preserved Modal CPU parallelism while avoiding
+- Reason: Parallel group leaders preserved CPU parallelism while avoiding
   duplicate emulator work for repeated saved-state lanes.
 
 ### IDEA-20260630-D03: Reuse Persistent Grouped-Action Mask
@@ -236,5 +237,5 @@ the acceptance source of truth.
 - Perspective: vec-env
 - Result: commit `40089b0`, artifact
   `artifacts/benchmarks/reuse-synced-group-action-mask-2026-06-30-2147.json`.
-- Reason: Clean Modal run was substantially slower than the accepted parallel
+- Reason: Clean benchmark run was substantially slower than the accepted parallel
   grouped-state baseline. Avoid this mask-reuse follow-up shape.

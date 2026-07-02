@@ -1,6 +1,6 @@
 ---
 name: autoresearch-speed
-description: Single-threaded Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with Modal-judged experiments, make-test regression gating, commit/revert discipline, and experiment tracking.
+description: Single-threaded Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with fixed-host experiments, make-test regression gating, commit/revert discipline, and experiment tracking.
 ---
 
 # Autoresearch Speed
@@ -27,26 +27,25 @@ Do not fake speed by skipping emulator progression, weakening the workload,
 returning stale observations, changing the public command, or loosening the
 observed contract.
 
-Throughput evidence is Modal-only and must go through `/modal-benchmark`.
+Throughput evidence must go through `/host-benchmark`.
 Local commands are for correctness, compilation, formatting, profiling, and
 diagnosis only, never acceptance.
 
-`/modal-benchmark` reports pooled absolute SPS for context, but optimization
-acceptance must use its robust paired decision metric: the median of per-replica
-median candidate/baseline ratios after warmup-pair discard, with its bootstrap
-confidence interval and faster-replica count. Treat pooled absolute SPS stdev as
-diagnostic host-variance information, not as the decision statistic.
+For comparisons, `/host-benchmark` acceptance must use its paired fixed-host
+decision metric: median candidate/baseline ratio after warmup-pair discard, the
+bootstrap confidence interval, faster-pair count, and validity gates. Treat
+absolute SPS as useful context, not as the decision statistic for candidate
+acceptance.
 
-## Full Access
+## Benchmark Access
 
-Assume `/autoresearch-speed` is invoked with full access. Do not ask for Modal
-permission, upload approval, spend approval, or confirmation before benchmarking.
-The invocation grants Modal network/auth/upload, repo snapshot upload, local ROM
-byte upload, and local state byte upload.
+Assume `/autoresearch-speed` may use the fixed `beast-3-local` benchmark host
+through `/host-benchmark`. Do not ask for cloud spend, upload approval, or
+external-service confirmation before benchmarking.
 
-If the user provides Modal run or spend limits, record and obey them. If not,
-leave limit fields as `null` and continue until stopped or blocked. Run at most
-one Modal benchmark at a time.
+If the user provides host benchmark run or wall-clock limits, record and obey
+them. If not, leave limit fields as `null` and continue until stopped or
+blocked. Run at most one host benchmark at a time.
 
 ## Branch And State
 
@@ -66,9 +65,9 @@ Before work:
    `.codex/optimization_campaigns/results.tsv`.
 5. If unrelated dirty changes would be carried in, stop and ask.
 6. Inspect the hot path: `scripts/benchmark_sps.py`,
-   `scripts/modal_benchmark_sps.py`, `python/supermariobrosnes_turbo/env.py`,
-   `src/py_api.rs`, `src/vec_env.rs`, `src/emulator.rs`, `Cargo.toml`,
-   `pyproject.toml`, and relevant docs.
+   `python/supermariobrosnes_turbo/env.py`, `src/py_api.rs`,
+   `src/vec_env.rs`, `src/emulator.rs`, `Cargo.toml`, `pyproject.toml`, and
+   relevant docs.
 
 Track every trial, including crashes and rejects:
 
@@ -90,8 +89,8 @@ Statuses: `baseline`, `keep`, `keep_small_gain`, `discard`, `crash`,
 `regression_fixed_keep`, `regression_unfixed_discard`, `inconclusive`.
 
 Manifest fields should include campaign id/mode, branch names, root SHA, epoch,
-allowed benchmark skill/output root, optional run/spend limits, Modal runs used,
-current baseline artifact/mean, accepted commits, discarded commits, current
+allowed benchmark skill/output root, optional host benchmark limits, host
+benchmarks used, current baseline artifact/mean, accepted commits, discarded commits, current
 experiment, and stop reason.
 
 ## Ideas Queue
@@ -162,13 +161,13 @@ experiment per entry. Merge their entries into `ideas.md`, deduplicate by
 mechanism and target files, assign stable `IDEA-YYYYMMDD-NNN` IDs, and keep the
 highest-signal ideas near the top of `Ready`.
 
-Do not spend Modal runs merely to generate ideas. Idea generation is analysis
+Do not spend host benchmark runs merely to generate ideas. Idea generation is analysis
 work; only concrete candidates selected from the queue go through the required
-checks and `/modal-benchmark`.
+checks and `/host-benchmark`.
 
 ## Required Checks
 
-Before every candidate Modal benchmark, run:
+Before every candidate host benchmark, run:
 
 ```bash
 cargo fmt --check
@@ -199,8 +198,8 @@ required checks. If repair fails after a few focused attempts, log
 
 Fresh campaign:
 
-1. Run the initial `/modal-benchmark` baseline from the unmodified campaign
-   branch.
+1. Run the initial `/host-benchmark` single-ref baseline from the unmodified
+   campaign branch.
 2. Record mean, stdev, best, samples, artifact, metadata, and baseline status.
 
 Each experiment:
@@ -213,13 +212,14 @@ Each experiment:
 4. Run local diagnosis/build checks as needed.
 5. Run required checks.
 6. Commit the candidate before benchmarking.
-7. Run exactly one `/modal-benchmark` from that commit.
+7. Run exactly one `/host-benchmark` comparison from the current baseline commit
+   to that candidate commit.
 8. Append a result row.
 9. Decide:
-   - `keep`: `/modal-benchmark` verdict is `accept`, robust paired speedup
-     `> 1.10`, checks pass, complexity acceptable.
-   - `keep_small_gain`: robust paired speedup `> 1.00` but not accepted only if
-     simple, low-risk, simplifying, or compounding, and the Modal result is not
+   - `keep`: `/host-benchmark` comparison is clearly positive, median paired
+     speedup `> 1.10`, checks pass, complexity acceptable.
+   - `keep_small_gain`: median paired speedup `> 1.00` but not a large win only
+     if simple, low-risk, simplifying, or compounding, and the host result is not
      noisy enough to be misleading.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
@@ -227,7 +227,8 @@ Each experiment:
 11. If rejected, reset back to pre-experiment SHA and continue.
 
 Never assume independent gains add. Every accepted commit becomes the new source
-baseline and later candidates are judged against a fresh Modal benchmark.
+baseline and later candidates are judged against a fresh host benchmark
+comparison.
 
 ## Optimization Guidance
 
@@ -265,7 +266,7 @@ history, update campaign state, and report:
 - accepted commits and discarded count
 - checks run
 - changed files
-- Modal runs/remaining limits if provided
+- host benchmarks/remaining limits if provided
 - next plausible experiment
 - whether the branch appears fast-forwardable from `main`
 

@@ -5,34 +5,34 @@
   "root_branch": "main",
   "root_sha": "694b4d3bcf6c29b1c882e630fd68bbe9b5e42e00",
   "created_at": "2026-06-30T21:27:00+01:00",
-  "updated_at": "2026-06-30T21:52:00+01:00",
-  "allowed_benchmark_skill": "/modal-benchmark",
+  "updated_at": "2026-07-02T12:36:20+01:00",
+  "allowed_benchmark_skill": "/host-benchmark",
   "allowed_output_root": "artifacts/benchmarks/",
   "run_limits": {
-    "max_total_modal_runs": null,
-    "max_estimated_spend_usd": null
+    "max_total_host_benchmarks": null,
+    "max_estimated_wall_clock_minutes": null
   },
-  "modal_runs_used": 4,
-  "initial_baseline_artifact": "artifacts/benchmarks/autoresearch-baseline-2026-06-30-2127.json",
-  "initial_baseline_modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-dR23r7fqcl2XuGibBDfDYv",
-  "initial_baseline_mean_env_steps_per_sec": 13323.438848928437,
-  "current_baseline_artifact": "artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json",
-  "current_baseline_modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-cmCU2qywGUubzxCh56KE8N",
-  "current_baseline_mean_env_steps_per_sec": 15578.861179563328,
-  "current_baseline_stdev_env_steps_per_sec": 476.39830746456073,
-  "current_baseline_best_env_steps_per_sec": 16019.593596967652,
+  "host_benchmarks_used": 0,
+  "previous_remote_benchmarks_used": 4,
+  "requires_fresh_host_baseline": true,
+  "previous_remote_initial_baseline_artifact": "artifacts/benchmarks/autoresearch-baseline-2026-06-30-2127.json",
+  "previous_remote_initial_baseline_mean_env_steps_per_sec": 13323.438848928437,
+  "current_baseline_artifact": null,
+  "current_baseline_host_run_dir": null,
+  "current_baseline_mean_env_steps_per_sec": null,
+  "current_baseline_stdev_env_steps_per_sec": null,
+  "current_baseline_best_env_steps_per_sec": null,
   "accepted_commits": [
     {
       "commit": "68bea25aea9fe923c49a3871317f7b9d6365d815",
       "description": "Share repeated state groups in parallel",
       "artifact": "artifacts/benchmarks/grouped-synced-state-lanes-parallel-2026-06-30-2142.json",
-      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-cmCU2qywGUubzxCh56KE8N",
       "mean_env_steps_per_sec": 15578.861179563328,
       "stdev_env_steps_per_sec": 476.39830746456073,
       "best_env_steps_per_sec": 16019.593596967652,
       "gain_pct_vs_previous_baseline": 16.928229687610163,
       "speedup_vs_previous_baseline": 1.1692822968761016,
-      "reason": "Parallel group leaders preserved Modal CPU parallelism while avoiding duplicate emulator work for repeated saved-state lanes."
+      "reason": "Parallel group leaders preserved CPU parallelism while avoiding duplicate emulator work for repeated saved-state lanes."
     }
   ],
   "discarded_commits": [
@@ -40,25 +40,23 @@
       "commit": "c75909ea8294d1aa48be7f36bc182bbb898a5c2a",
       "description": "Share repeated state groups in vec env",
       "artifact": "artifacts/benchmarks/grouped-synced-state-lanes-2026-06-30-2135.json",
-      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-nBBhJlU3gUz2kQPSaCfJjd",
       "mean_env_steps_per_sec": 10110.454769306416,
       "stdev_env_steps_per_sec": 18.15000183245132,
       "best_env_steps_per_sec": 10130.11208397936,
       "gain_pct": -24.115276213996594,
-      "reason": "Modal benchmark was substantially slower despite local diagnostic speedup."
+      "reason": "Benchmark was substantially slower despite local diagnostic speedup."
     },
     {
       "commit": "40089b0a771f44abfd9c0585451147293ff04be5",
       "description": "Reuse synced group action mask",
       "artifact": "artifacts/benchmarks/reuse-synced-group-action-mask-2026-06-30-2147.json",
-      "modal_run_url": "https://modal.com/apps/eng-tiago-silva/main/ap-WFKfAF0NwTU0TGoDlRh9lR",
       "mean_env_steps_per_sec": 11788.82555283185,
       "stdev_env_steps_per_sec": 679.4459538515811,
       "best_env_steps_per_sec": 12572.927458363924,
       "gain_pct": -24.328065980222767,
-      "reason": "Clean Modal run was substantially slower than the accepted parallel grouped-state baseline."
+      "reason": "Clean benchmark was substantially slower than the accepted parallel grouped-state baseline."
     }
   ],
   "current_experiment": null,
-  "stop_reason": "Paused after one accepted commit and two discarded grouped-lane follow-ups; next step is profiling the accepted path before another Modal candidate."
+  "stop_reason": "Run a fresh /host-benchmark single-ref baseline before the next fixed-host candidate."
 }

@@ -92,8 +92,6 @@ uv run python scripts/benchmark_sps.py --num-envs 16 --steps 500 --repeats 3
 uv run python scripts/play.py --mode external      # raw SDL2 play view
 uv run python scripts/play.py --mode external --view preprocessed --scale 4
 uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBros-NES_Level1
-
-modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/modal-baseline.json
 ```
 
 ## Notes
@@ -107,7 +105,6 @@ modal run scripts/modal_benchmark_sps.py --output-json artifacts/benchmarks/moda
 - For `SuperMarioBrosVecEnv`, `done_on_info` accepts named terminal rules like `{"life_loss": ("lives", "decrease")}`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired rules are reported in `info["done_on_info"]` with `op`, `keys`, `prev`, and `next`.
 - Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.0.post23` and constructs `RetroVecEnv` with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
-- The Modal benchmark path expects `modal` to be installed and authenticated outside this package. It sends the local ROM and state bytes to the remote container at run time and defaults to one 16-env mixed-lane benchmark with `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated across lanes.
 - Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
 - ROM files are not included in the repository; use the SHA-256 digest above to confirm you are testing with the expected ROM.
 
