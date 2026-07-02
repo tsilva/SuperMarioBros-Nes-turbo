@@ -29,28 +29,17 @@ def require_stable_retro_oracle() -> None:
 
 
 def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> None:
-    stable_retro = pytest.importorskip("stable_retro")
-
     native_signature = inspect.signature(RetroVecEnv)
-    stable_signature = inspect.signature(stable_retro.RetroVecEnv)
-    assert list(native_signature.parameters) == list(stable_signature.parameters)
-
-    native_defaults = {
-        name: parameter.default
-        for name, parameter in native_signature.parameters.items()
-        if parameter.default is not inspect.Parameter.empty
-    }
-    stable_defaults = {
-        name: parameter.default
-        for name, parameter in stable_signature.parameters.items()
-        if parameter.default is not inspect.Parameter.empty
-    }
-
-    literal_defaults = (
+    assert list(native_signature.parameters) == [
+        "game",
+        "state",
         "scenario",
         "info",
+        "use_restricted_actions",
         "record",
         "players",
+        "inttype",
+        "obs_type",
         "render_mode",
         "num_envs",
         "num_threads",
@@ -63,34 +52,63 @@ def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         "obs_layout",
         "frame_skip",
         "frame_stack",
-        "frame_maxpool",
-        "reset_noops",
-        "action_sticky_prob",
-        "reward_clip",
-        "info_filter",
-        "done_on",
-    )
-    for name in literal_defaults:
-        assert native_defaults[name] == stable_defaults[name]
-
-    assert native_defaults["state"] is State.DEFAULT
-    assert native_defaults["state"].name == stable_defaults["state"].name == "DEFAULT"
-    assert native_defaults["state"].value == stable_defaults["state"].value
-    assert native_defaults["use_restricted_actions"] is Actions.FILTERED
-    assert native_defaults["use_restricted_actions"].name == stable_defaults["use_restricted_actions"].name == "FILTERED"
-    assert native_defaults["use_restricted_actions"].value == stable_defaults["use_restricted_actions"].value
-    assert native_defaults["inttype"] is Integrations.STABLE
-    assert native_defaults["inttype"].name == stable_defaults["inttype"].name == "STABLE"
-    assert native_defaults["inttype"].value == stable_defaults["inttype"].value
-    assert native_defaults["obs_type"] is Observations.IMAGE
-    assert native_defaults["obs_type"].name == stable_defaults["obs_type"].name == "IMAGE"
-    assert native_defaults["obs_type"].value == stable_defaults["obs_type"].value
-
-    sentinel_defaults = (
-        "copy_observations",
         "maxpool_last_two",
         "noop_reset_max",
         "sticky_action_prob",
+        "reward_clip",
+        "info_filter",
+        "done_on",
+        "copy_observations",
+        "info_mode",
+        "info_keys",
+        "done_on_info",
+        "unsafe_zero_copy",
+    ]
+
+    native_defaults = {
+        name: parameter.default
+        for name, parameter in native_signature.parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
+
+    assert native_defaults["scenario"] is None
+    assert native_defaults["info"] is None
+    assert native_defaults["record"] is False
+    assert native_defaults["players"] == 1
+    assert native_defaults["render_mode"] == "human"
+    assert native_defaults["num_envs"] == 1
+    assert native_defaults["num_threads"] is None
+    assert native_defaults["rom_path"] is None
+    assert native_defaults["obs_copy"] == "copy"
+    assert native_defaults["obs_resize"] is None
+    assert native_defaults["obs_crop"] is None
+    assert native_defaults["obs_grayscale"] is False
+    assert native_defaults["obs_resize_algorithm"] == "nearest"
+    assert native_defaults["obs_layout"] == "hwc"
+    assert native_defaults["frame_skip"] == 1
+    assert native_defaults["frame_stack"] == 1
+    assert native_defaults["maxpool_last_two"] is False
+    assert native_defaults["noop_reset_max"] == 0
+    assert native_defaults["sticky_action_prob"] == 0.0
+    assert native_defaults["reward_clip"] is False
+    assert native_defaults["info_filter"] == "all"
+    assert native_defaults["done_on"] is None
+
+    assert native_defaults["state"] is State.DEFAULT
+    assert native_defaults["state"].name == "DEFAULT"
+    assert native_defaults["state"].value == -1
+    assert native_defaults["use_restricted_actions"] is Actions.FILTERED
+    assert native_defaults["use_restricted_actions"].name == "FILTERED"
+    assert native_defaults["use_restricted_actions"].value == 1
+    assert native_defaults["inttype"] is Integrations.STABLE
+    assert native_defaults["inttype"].name == "STABLE"
+    assert native_defaults["inttype"].value == 1
+    assert native_defaults["obs_type"] is Observations.IMAGE
+    assert native_defaults["obs_type"].name == "IMAGE"
+    assert native_defaults["obs_type"].value == 0
+
+    sentinel_defaults = (
+        "copy_observations",
         "info_mode",
         "info_keys",
         "done_on_info",
@@ -98,7 +116,15 @@ def test_native_retro_vec_env_defaults_match_stable_retro_turbo_signature() -> N
     )
     for name in sentinel_defaults:
         assert type(native_defaults[name]) is object
-        assert type(stable_defaults[name]) is object
+
+
+def test_native_retro_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
+    with pytest.raises(TypeError, match="frame_maxpool"):
+        RetroVecEnv("SuperMarioBros-Nes-v0", frame_maxpool=False)
+    with pytest.raises(TypeError, match="reset_noops"):
+        RetroVecEnv("SuperMarioBros-Nes-v0", reset_noops=0)
+    with pytest.raises(TypeError, match="action_sticky_prob"):
+        RetroVecEnv("SuperMarioBros-Nes-v0", action_sticky_prob=0.0)
 
 
 @pytest.mark.retro_oracle

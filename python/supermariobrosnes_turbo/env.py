@@ -318,14 +318,6 @@ def _normalize_action_mode(value: Any) -> str:
     return text
 
 
-def _resolve_legacy_alias(new_name: str, new_value: Any, old_name: str, old_value: Any, default: Any) -> Any:
-    if old_value is _UNSET:
-        return new_value
-    if new_value != default:
-        raise ValueError(f"cannot pass both {new_name} and {old_name}")
-    return old_value
-
-
 def _normalize_obs_copy(
     obs_copy: str,
     copy_observations: Any = _UNSET,
@@ -1222,16 +1214,13 @@ class RetroVecEnv(SuperMarioBrosVecEnv):
         obs_layout: str = "hwc",
         frame_skip: int = 1,
         frame_stack: int = 1,
-        frame_maxpool: bool = False,
-        reset_noops: int = 0,
-        action_sticky_prob: float = 0.0,
+        maxpool_last_two: bool = False,
+        noop_reset_max: int = 0,
+        sticky_action_prob: float = 0.0,
         reward_clip: bool | Sequence[float] = False,
         info_filter: Any = "all",
         done_on: Any = None,
         copy_observations: Any = _UNSET,
-        maxpool_last_two: Any = _UNSET,
-        noop_reset_max: Any = _UNSET,
-        sticky_action_prob: Any = _UNSET,
         info_mode: Any = _UNSET,
         info_keys: Any = _UNSET,
         done_on_info: Any = _UNSET,
@@ -1256,27 +1245,6 @@ class RetroVecEnv(SuperMarioBrosVecEnv):
         source_height = VISIBLE_HEIGHT - crop_top - crop_bottom
         resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
         action_mode = _normalize_action_mode(use_restricted_actions)
-        frame_maxpool = _resolve_legacy_alias(
-            "frame_maxpool",
-            frame_maxpool,
-            "maxpool_last_two",
-            maxpool_last_two,
-            False,
-        )
-        reset_noops = _resolve_legacy_alias(
-            "reset_noops",
-            reset_noops,
-            "noop_reset_max",
-            noop_reset_max,
-            0,
-        )
-        action_sticky_prob = _resolve_legacy_alias(
-            "action_sticky_prob",
-            action_sticky_prob,
-            "sticky_action_prob",
-            sticky_action_prob,
-            0.0,
-        )
         resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
         if done_on is not None:
             if resolved_done_on is not _UNSET:
@@ -1289,7 +1257,7 @@ class RetroVecEnv(SuperMarioBrosVecEnv):
             frame_skip=frame_skip,
             grayscale=bool(obs_grayscale),
             frame_stack=frame_stack,
-            frame_maxpool=bool(frame_maxpool),
+            frame_maxpool=bool(maxpool_last_two),
             terminate_on_flag=False,
             crop_top=crop_top,
             crop_bottom=crop_bottom,
@@ -1300,8 +1268,8 @@ class RetroVecEnv(SuperMarioBrosVecEnv):
             state=_normalize_retro_state(state),
             action_set="full",
             done_on=None if resolved_done_on is _UNSET else resolved_done_on,
-            noop_reset_max=reset_noops,
-            sticky_action_prob=action_sticky_prob,
+            noop_reset_max=noop_reset_max,
+            sticky_action_prob=sticky_action_prob,
             obs_layout=obs_layout,
             obs_copy=obs_copy,
             reward_clip=reward_clip,
