@@ -94,6 +94,20 @@ uv run python scripts/play.py --mode external --view preprocessed --scale 4
 uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBros-NES_Level1
 ```
 
+## Fixed-host benchmark
+
+On the fixed `beast-3` CPU host, using the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs, this specialized environment is about `6.40x` faster than the latest published `stable-retro-turbo` PyPI oracle baseline.
+
+| Environment | Version / Ref | Official median env steps/sec | Mean invocation-median env steps/sec | Run-median CV | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `SuperMarioBros-Nes-turbo` | `main` | `47,611.14` | `47,605.89` | `0.28%` | Full official fixed-host run; all validity gates passed. |
+| `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Full official fixed-host run; statistical gates passed, but the post-run host-load gate failed because the 1-minute load was sampled immediately after the benchmark's own CPU-heavy timing. |
+
+Artifacts:
+
+- [`SuperMarioBros-Nes-turbo` fixed-host aggregate](./artifacts/benchmarks/host-results/host-single-2026-07-02-123806-R17c60e1eb88e/aggregate.json)
+- [`stable-retro-turbo==1.0.0.post23` PyPI oracle aggregate](./artifacts/benchmarks/host-results/pypi-stable-retro-turbo/1.0.0.post23/0bcebd32669e8e46/aggregate.json)
+
 ## Notes
 
 - Python `>=3.9` and a Rust toolchain are required to build the Maturin extension.
