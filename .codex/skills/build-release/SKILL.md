@@ -1,194 +1,169 @@
 ---
 name: build-release
-description: Build, validate, and prepare SuperMarioBros-Nes-turbo PyPI release wheels. Use when the user says /build-release, asks to build release wheels, asks to tag a version, asks to upload a prepared release, or asks for macOS and Linux supermariobrosnes-turbo wheels.
+description: Launch and monitor a SuperMarioBros-Nes-turbo PyPI release. Use when the user says /build-release, asks to cut a release, asks to tag/publish a version, asks whether a release made it to PyPI, or asks for macOS and Linux supermariobrosnes-turbo wheels.
 ---
 
 # Build Release
 
-Use this skill to cut a `supermariobrosnes-turbo` release tag and build
-publish-ready wheels for macOS arm64 and Linux x86_64. This repo is not a fork,
-so versioning is owned here: use normal project versions from `pyproject.toml`
-and `Cargo.toml`, not upstream-aligned `.postN` versions unless the user
-explicitly asks for one.
+Use this skill to launch the repo-owned `supermariobrosnes-turbo` release flow
+and monitor it until the package is visible on PyPI. The release implementation
+lives in `scripts/release.py` and the `Makefile` `release` target. Prefer that
+path over manually replaying version bumps, tags, wheel builds, validation, or
+uploads.
 
-Keep fragile release mechanics in `.codex/skills/build-release/scripts/release_build.py`.
-Run that helper instead of retyping long shell workflows. Do not upload to PyPI
-unless the user explicitly asks to publish/upload. When uploading, use the
-repo-local `.pypirc` with `twine upload --config-file .pypirc ...`; do not rely
-on global `TWINE_PASSWORD`/`TWINE_USERNAME`, because this machine also has
-project-scoped credentials for other packages. Never print or commit the token.
+This repo is not a fork, so versioning is owned here: use normal project
+versions from `pyproject.toml` and `Cargo.toml`, not upstream-aligned `.postN`
+versions unless the user explicitly asks for one.
 
-Do not run this skill unless the current branch is fully clean and synchronized:
-all changes committed, no untracked files, upstream configured, remote state
-fetched, and no commits ahead of or behind upstream. Stop before changing
-versions, creating tags, or running release-build commands if any part of this
-gate fails. Do not commit, push, pull, clean files, create branches, or switch
-branches unless the user explicitly asks for that.
+`make release` runs `uv sync --extra dev --group dev` and then
+`scripts/release.py`. The script enforces a clean tree, configured upstream,
+synced remote state, unused PyPI version, version consistency, lock refresh,
+local checks, release commit, tag creation, and atomic push. The pushed tag
+triggers `.github/workflows/release.yml`, which builds/audits the macOS and
+Linux wheels and publishes via PyPI trusted publishing.
+
+Do not upload to PyPI manually unless the user explicitly asks for a manual
+recovery path after the GitHub Actions publish path fails. Never print or commit
+PyPI tokens. Do not create or switch branches unless the user explicitly asks.
 
 ## Flow
 
-1. Verify the release gate:
+1. Launch the release command from the repo root:
 
 ```bash
-git status --short --branch
+make release
 ```
 
-The output must contain only the branch line. If there are modified, deleted, or
-untracked files, stop and tell the user the tree must be committed or cleaned
-before building a release.
+If the user explicitly requested a non-default bump or exact version, run the
+script directly because the Make target does not pass arguments through. Choose
+exactly one `scripts/release.py` invocation:
 
 ```bash
-git rev-parse --abbrev-ref --symbolic-full-name @{u}
+UV_CACHE_DIR=.uv-cache uv sync --extra dev --group dev
+scripts/release.py --to <version>
 ```
-
-This must print an upstream branch. If it fails, stop and ask the user to set an
-upstream before building a release.
 
 ```bash
-git fetch --prune
-git rev-list --left-right --count HEAD...@{u}
+UV_CACHE_DIR=.uv-cache uv sync --extra dev --group dev
+scripts/release.py --part minor
 ```
-
-The rev-list output must be `0 0` (Git usually separates them with a tab). If
-the first number is nonzero, local commits have not been pushed; stop. If the
-second number is nonzero, the branch has not been pulled; stop. If both are
-nonzero, the branch has diverged; stop.
-
-2. Confirm package identity and version consistency:
 
 ```bash
-uv run python .codex/skills/build-release/scripts/release_build.py check-version
+UV_CACHE_DIR=.uv-cache uv sync --extra dev --group dev
+scripts/release.py --part major
 ```
 
-This must report package name `supermariobrosnes-turbo` and matching versions
-across `pyproject.toml`, `Cargo.toml`, and this repo's package entry in
-`Cargo.lock`.
+For "next version" or no version preference, use `make release`; it defaults to
+the next patch version. If the user typed `make releaes`, treat it as a typo and
+use the actual `release` target.
 
-3. Confirm release tooling before mutating versions:
+2. Let the release script own the release gates.
+
+Do not manually duplicate the old local wheel-building checklist. If
+`make release` fails, report the failing stage and exact relevant error, then
+stop. Common failures include a dirty worktree, unsynced upstream, an existing
+PyPI version, formatting/test failures, tag collisions, or push failures.
+
+3. Capture the released tag and version.
+
+The command should end with output like:
 
 ```bash
-uv run python .codex/skills/build-release/scripts/release_build.py check-tools
+Released v<version>: pushed <branch> and tag to <remote>.
+GitHub Actions will build and validate the release wheels from the pushed tag.
 ```
 
-This must find `maturin`, `cibuildwheel`, and `twine` in the release Python
-environment, plus `cargo` and `docker` for native and Linux builds. If tooling
-is missing, stop and ask whether to install or add release tooling to the repo's
-dev dependencies; do not fetch packages implicitly during a release.
-
-4. Choose the target version.
-
-If the user gave an exact version, use it. If the user said "next patch",
-"next minor", or "next major", compute it with:
+If needed, confirm the tag after the command succeeds:
 
 ```bash
-uv run python .codex/skills/build-release/scripts/release_build.py bump-version --part patch
-uv run python .codex/skills/build-release/scripts/release_build.py bump-version --part minor
-uv run python .codex/skills/build-release/scripts/release_build.py bump-version --part major
+git describe --tags --exact-match HEAD
 ```
 
-If the user only says "next version" and no project context resolves the
-ambiguity, default to the next patch version and state that choice before
-mutating files.
+4. Monitor the GitHub Actions release workflow for the pushed tag.
 
-5. Check PyPI has no existing file for the target version:
+Use `gh` if it is available:
 
 ```bash
-uv run python .codex/skills/build-release/scripts/release_build.py check-pypi --version <target-version>
+release_sha="$(git rev-list -n 1 v<version>)"
+gh run list --workflow release.yml --commit "$release_sha" --limit 5 \
+  --json databaseId,status,conclusion,event,headBranch,headSha,displayTitle,url
+gh run watch <run-id> --exit-status
 ```
 
-If the version already exists on PyPI, stop. PyPI files are immutable.
-
-6. Bump repo-local versions:
+If the commit-filtered query does not find the run, list recent release runs and
+pick the run whose event/ref corresponds to the pushed tag:
 
 ```bash
-uv run python .codex/skills/build-release/scripts/release_build.py bump-version --to <target-version> --write
-uv lock --offline
-cargo generate-lockfile
-uv run python .codex/skills/build-release/scripts/release_build.py check-version --version <target-version>
+gh run list --workflow release.yml --limit 10 \
+  --json databaseId,status,conclusion,event,headBranch,headSha,displayTitle,url
 ```
 
-This updates `pyproject.toml` and `Cargo.toml`; `uv lock --offline` and
-`cargo generate-lockfile` refresh generated lock metadata. If `uv lock
---offline` cannot refresh from local cache, stop and report it instead of
-fetching fresh packages without approval.
+The workflow publishes only for tag-push events. `workflow_dispatch` builds are
+validation builds and do not publish.
 
-7. Run focused release tests before tagging:
+5. After the workflow succeeds, poll PyPI until the released version appears.
 
 ```bash
-uv run maturin develop --release
-make test
-uv run python scripts/smoke_smb.py
+python - <<'PY'
+import json
+import time
+import urllib.request
+
+package = "supermariobrosnes-turbo"
+version = "<version>"
+url = f"https://pypi.org/pypi/{package}/json"
+
+for attempt in range(30):
+    with urllib.request.urlopen(url, timeout=20) as response:
+        data = json.load(response)
+    files = data.get("releases", {}).get(version, [])
+    if files:
+        print(f"https://pypi.org/project/{package}/{version}/")
+        print(f"https://pypi.org/project/{package}/")
+        for file in files:
+            print(file["filename"])
+        break
+    print(f"waiting for PyPI to show {package} {version} ({attempt + 1}/30)")
+    time.sleep(20)
+else:
+    raise SystemExit(f"{package} {version} did not appear on PyPI yet")
+PY
 ```
 
-If the ROM smoke cannot run because the local ROM is absent, say so explicitly
-and continue only if the user accepts that gap.
+6. If PyPI still does not show the version after a successful workflow, wait a
+little longer and retry before declaring failure. PyPI indexing can lag briefly.
+If the publish job failed, report the job URL and the failing step; do not try a
+manual Twine upload unless the user explicitly asks.
 
-8. Commit the version bump only if the user has asked to cut the release in the
-repo, then tag the version commit:
+## Useful Inspection Commands
 
 ```bash
-git add pyproject.toml Cargo.toml Cargo.lock uv.lock
-git commit -m "Release v<target-version>"
-git tag v<target-version> HEAD
-git rev-parse v<target-version>^{commit}
-git rev-parse HEAD
+gh run view <run-id> --web
+gh run view <run-id> --log-failed
+gh run view <run-id> --json url,status,conclusion,event,headBranch,headSha,displayTitle
 ```
 
-The two commit hashes must match. If the tag already exists, stop; never move or
-overwrite a release tag. If the user asked only to prepare a build plan, stop
-before this step.
+The final PyPI package URLs are:
 
-9. Create clean source copies under `/private/tmp`:
-
-```bash
-uv run python .codex/skills/build-release/scripts/release_build.py prepare-sources --version <target-version>
+```
+https://pypi.org/project/supermariobrosnes-turbo/<version>/
+https://pypi.org/project/supermariobrosnes-turbo/
 ```
 
-Use the JSON output paths for the platform builds. The helper excludes stale
-build outputs, local venv/cache state, wheelhouses, pycache files, benchmark
-artifacts, and compiled extension artifacts.
+The GitHub Actions workflow environment URL is:
 
-10. Print platform build commands:
-
-```bash
-uv run python .codex/skills/build-release/scripts/release_build.py build-commands \
-  --version <target-version> \
-  --macos-src /private/tmp/<build-root>/macos-src \
-  --linux-src /private/tmp/<build-root>/linux-src-clean
+```
+https://pypi.org/p/supermariobrosnes-turbo
 ```
 
-Run the macOS command locally. Run the Linux `cibuildwheel` command from the
-clean Linux source copy; Docker access may be required. The Rust extension uses
-`abi3-py39`, so expect one `cp39-abi3` wheel per platform rather than one wheel
-per Python minor version.
-
-11. Smoke-test each built wheel from outside the checkout:
-
-```bash
-uv run python .codex/skills/build-release/scripts/release_build.py smoke-wheel \
-  wheelhouse-v<version>-macos/<macos-wheel>.whl
-
-uv run python .codex/skills/build-release/scripts/release_build.py smoke-wheel \
-  wheelhouse-v<version>-linux/<linux-wheel>.whl
-```
-
-The smoke must import from a temp install target, not from the checkout, so the
-source tree cannot shadow the built wheel.
-
-12. Run final validation:
-
-```bash
-uv run python .codex/skills/build-release/scripts/release_build.py final-check --version <target-version>
-```
-
-This audits wheel contents, rejects pycache/source-tree artifacts and ROM
-payloads, runs `twine check`, prints SHA256 hashes, and prints the exact
-`twine upload --config-file .pypirc` command. Do not run the upload command
-unless the user explicitly asks for publishing. Before uploading, confirm
-`.pypirc` exists in the repo root and is ignored by git.
+Keep `.codex/skills/build-release/scripts/release_build.py` as the workflow's
+release helper and for narrow diagnostics. Use it directly only when inspecting
+versions, PyPI presence, or workflow build failures; do not re-create the
+release locally unless the user asks for manual recovery.
 
 ## Final Response
 
-Report the target version, release tag, wheel paths, SHA256 hashes, validation
-results, notable warnings or skipped checks, and the concrete upload command
-printed by `final-check`.
+When the release reaches PyPI, lead with the PyPI version URL. Also report the
+tag, GitHub Actions run URL, workflow conclusion, and published wheel filenames.
+If the release did not reach PyPI, report the exact failed command/job/step and
+the next recovery action.
