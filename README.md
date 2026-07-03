@@ -107,6 +107,21 @@ env.step_async(actions)
 obs, rewards, dones, infos = env.step_wait()
 ```
 
+`obs_crop` removes source pixels by default before resizing, matching Stable Retro's crop behavior and keeping the fastest training path for HUD removal. For finetuning-friendly crop masking, pass `obs_crop_mode="mask"` to keep the full source canvas geometry while filling the cropped regions with `obs_crop_fill` before resize, layout conversion, and frame stacking:
+
+```python
+env = SuperMarioBrosNesTurboVecEnv(
+    "SuperMarioBros-Nes-v0",
+    obs_crop=(32, 0, 0, 0),
+    obs_crop_mode="mask",
+    obs_crop_fill=0,
+    obs_resize=(84, 84),
+    obs_grayscale=True,
+)
+```
+
+Mask crop is useful for hiding HUD or other static regions during initial training while preserving spatial compatibility for later finetuning on full observations.
+
 `step_wait()` follows the Stable Baselines3 `VecEnv` contract: it calls the Rust `SuperMarioBrosNesTurboVecEnv` once for the whole batch and returns `(obs, rewards, dones, infos)` from reusable NumPy arrays. Use `step_fast()` when you do not need per-env `info` dictionaries, or `step_wait_gymnasium()` when you need separate `terminated` and `truncated` arrays.
 
 Initial states can be a single stable-retro state, one state per env slot, or a weighted mapping sampled independently for each lane on reset:

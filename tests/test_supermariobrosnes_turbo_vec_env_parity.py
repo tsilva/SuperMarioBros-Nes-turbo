@@ -8,6 +8,7 @@ import numpy as np
 from gymnasium import spaces
 
 from scripts import compare_supermariobrosnes_turbo_vec_env as compare
+from supermariobrosnes_turbo import env as env_module
 from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
 from supermariobrosnes_turbo import (
     Actions,
@@ -88,6 +89,8 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         "obs_copy",
         "obs_resize",
         "obs_crop",
+        "obs_crop_mode",
+        "obs_crop_fill",
         "obs_grayscale",
         "obs_resize_algorithm",
         "obs_layout",
@@ -123,6 +126,8 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
     assert native_defaults["obs_copy"] == "copy"
     assert native_defaults["obs_resize"] is None
     assert native_defaults["obs_crop"] is None
+    assert native_defaults["obs_crop_mode"] == "remove"
+    assert native_defaults["obs_crop_fill"] == 0
     assert native_defaults["obs_grayscale"] is False
     assert native_defaults["obs_resize_algorithm"] == "nearest"
     assert native_defaults["obs_layout"] == "hwc"
@@ -166,6 +171,104 @@ def test_native_turbo_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
         SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", reset_noops=0)
     with pytest.raises(TypeError, match="action_sticky_prob"):
         SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", action_sticky_prob=0.0)
+
+
+def test_native_turbo_vec_env_rejects_invalid_crop_mode_and_fill() -> None:
+    with pytest.raises(ValueError, match="obs_crop_mode must be 'remove' or 'mask'"):
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_mode="zero")
+    with pytest.raises(ValueError, match=r"obs_crop_fill must be in \[0, 255\]"):
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_fill=-1)
+    with pytest.raises(ValueError, match=r"obs_crop_fill must be in \[0, 255\]"):
+        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_fill=256)
+
+
+def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypatch) -> None:
+    core_calls = []
+
+    class FakeCore:
+        def __init__(
+            self,
+            _rom_path,
+            num_envs,
+            frame_skip,
+            grayscale,
+            frame_stack,
+            _terminate_on_flag,
+            crop_top,
+            crop_bottom,
+            resize_width,
+            resize_height,
+            *_args,
+        ):
+            core_calls.append(
+                {
+                    "crop_top": crop_top,
+                    "crop_bottom": crop_bottom,
+                    "resize_width": resize_width,
+                    "resize_height": resize_height,
+                }
+            )
+            self.num_envs = num_envs
+            self.frame_skip = frame_skip
+            self.grayscale = grayscale
+            self.frame_stack = frame_stack
+            self.frame_maxpool = False
+            self.noop_reset_max = 0
+            self.sticky_action_prob = 0.0
+            self.crop_top = crop_top
+            self.crop_bottom = crop_bottom
+            self.resize_width = resize_width
+            self.resize_height = resize_height
+            self.initial_state_names = ()
+
+        def obs_shape(self):
+            channels = self.frame_stack if self.grayscale else self.frame_stack * 3
+            return self.num_envs, channels, self.resize_height, self.resize_width
+
+        def active_state_indices(self):
+            return [-1] * self.num_envs
+
+    monkeypatch.setattr(env_module, "_resolve_rom_path", lambda _game, _rom_path: "/tmp/fake.nes")
+    monkeypatch.setattr(env_module, "_CoreSuperMarioBrosNesTurboVecEnv", FakeCore)
+
+    remove_env = SuperMarioBrosNesTurboVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        obs_crop=(32, 0, 10, 0),
+        obs_crop_mode="remove",
+        obs_resize=None,
+        obs_grayscale=True,
+        obs_layout="chw",
+    )
+    mask_env = SuperMarioBrosNesTurboVecEnv(
+        compare.DEFAULT_STABLE_RETRO_GAME,
+        obs_crop=(32, 0, 10, 0),
+        obs_crop_mode="mask",
+        obs_crop_fill=7,
+        obs_resize=None,
+        obs_grayscale=True,
+        obs_layout="chw",
+    )
+    try:
+        assert core_calls == [
+            {"crop_top": 32, "crop_bottom": 0, "resize_width": 240, "resize_height": 192},
+            {"crop_top": 0, "crop_bottom": 0, "resize_width": 240, "resize_height": 224},
+        ]
+        assert remove_env.observation_space.shape == (1, 192, 230)
+        assert mask_env.observation_space.shape == (1, 224, 240)
+
+        remove_env._obs = np.arange(np.prod(remove_env._obs.shape), dtype=np.uint8).reshape(remove_env._obs.shape)
+        mask_env._obs = np.arange(np.prod(mask_env._obs.shape), dtype=np.uint8).reshape(mask_env._obs.shape)
+
+        remove_obs = remove_env._return_obs()
+        mask_obs = mask_env._return_obs()
+
+        np.testing.assert_array_equal(remove_obs, remove_env._obs[:, :, :, 10:])
+        assert np.all(mask_obs[:, :, :32, :] == 7)
+        assert np.all(mask_obs[:, :, :, :10] == 7)
+        np.testing.assert_array_equal(mask_obs[:, :, 32:, 10:], mask_env._obs[:, :, 32:, 10:])
+    finally:
+        remove_env.close()
+        mask_env.close()
 
 
 @pytest.mark.retro_oracle
@@ -249,6 +352,138 @@ def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
         assert rewards.shape == (1,)
         assert dones.shape == (1,)
         assert infos == [{}]
+    finally:
+        env.close()
+
+
+def _make_level1_1_obs_env(rom_path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:
+    options = {
+        "state": "Level1-1",
+        "num_envs": 1,
+        "num_threads": 1,
+        "rom_path": str(rom_path),
+        "render_mode": "rgb_array",
+        "use_restricted_actions": Actions.ALL,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": "area",
+        "obs_layout": "chw",
+        "obs_copy": "copy",
+        "frame_skip": 1,
+        "frame_stack": 1,
+        "info_filter": "none",
+    }
+    options.update(kwargs)
+    return SuperMarioBrosNesTurboVecEnv(compare.DEFAULT_STABLE_RETRO_GAME, **options)
+
+
+def test_native_turbo_vec_env_mask_crop_preserves_full_canvas_shape_and_masks_before_resize() -> None:
+    rom_path = require_rom()
+    crop = (32, 0, 0, 0)
+
+    full_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=None,
+        obs_resize=(84, 84),
+    )
+    full_source_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=None,
+        obs_resize=None,
+    )
+    mask_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=crop,
+        obs_crop_mode="mask",
+        obs_crop_fill=0,
+        obs_resize=(84, 84),
+    )
+    try:
+        full_obs = full_env.reset()
+        full_source = full_source_env.reset()
+        mask_obs = mask_env.reset()
+
+        assert mask_env.observation_space.shape == full_env.observation_space.shape
+        assert mask_obs.shape == full_obs.shape == (1, 1, 84, 84)
+        assert full_source.shape == (1, 1, 224, 240)
+
+        expected_source = full_source.copy()
+        expected_source[:, :, : crop[0], :] = 0
+        expected_mask = env_module._resize_chw_batch(expected_source, 84, 84, "area")
+        np.testing.assert_array_equal(mask_obs, expected_mask)
+        assert np.any(mask_obs != full_obs)
+    finally:
+        full_env.close()
+        full_source_env.close()
+        mask_env.close()
+
+
+def test_native_turbo_vec_env_remove_crop_matches_default_cropped_behavior() -> None:
+    rom_path = require_rom()
+    crop = (32, 0, 0, 0)
+
+    default_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=crop,
+        obs_resize=(84, 84),
+    )
+    remove_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=crop,
+        obs_crop_mode="remove",
+        obs_resize=(84, 84),
+    )
+    full_env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=None,
+        obs_resize=(84, 84),
+    )
+    try:
+        default_obs = default_env.reset()
+        remove_obs = remove_env.reset()
+        full_obs = full_env.reset()
+
+        assert remove_env.observation_space.shape == default_env.observation_space.shape
+        assert remove_obs.shape == default_obs.shape == (1, 1, 84, 84)
+        np.testing.assert_array_equal(remove_obs, default_obs)
+        assert np.any(remove_obs != full_obs)
+    finally:
+        default_env.close()
+        remove_env.close()
+        full_env.close()
+
+
+@pytest.mark.parametrize("obs_copy", ["copy", "safe_view", "unsafe_view"])
+@pytest.mark.parametrize("obs_layout", ["chw", "hwc"])
+def test_native_turbo_vec_env_mask_crop_terminal_observation_matches_public_layout(
+    obs_copy: str,
+    obs_layout: str,
+) -> None:
+    rom_path = require_rom()
+    env = _make_level1_1_obs_env(
+        rom_path,
+        obs_crop=(32, 0, 0, 0),
+        obs_crop_mode="mask",
+        obs_resize=(84, 84),
+        obs_layout=obs_layout,
+        obs_copy=obs_copy,
+        frame_skip=4,
+        frame_stack=4,
+        done_on=["life_loss"],
+        info_filter="all",
+    )
+    try:
+        obs = env.reset()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+        for _step in range(1, 3000):
+            obs, _rewards, dones, infos = env.step(masks)
+            if bool(dones[0]):
+                terminal_observation = infos[0]["terminal_observation"]
+                assert terminal_observation.shape == obs.shape[1:]
+                assert terminal_observation.dtype == obs.dtype
+                assert terminal_observation.shape == env.observation_space.shape
+                break
+        else:
+            pytest.fail("life_loss done_on rule did not fire before step 3000")
     finally:
         env.close()
 

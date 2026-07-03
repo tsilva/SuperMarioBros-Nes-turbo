@@ -8,7 +8,7 @@ from importlib import resources
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from gymnasium import spaces
@@ -438,6 +438,23 @@ def _normalize_resize_algorithm(obs_resize_algorithm: str) -> str:
     return algorithm
 
 
+def _normalize_obs_crop_mode(obs_crop_mode: str) -> Literal["remove", "mask"]:
+    mode = str(obs_crop_mode).lower()
+    if mode not in {"remove", "mask"}:
+        raise ValueError("obs_crop_mode must be 'remove' or 'mask'")
+    return mode  # type: ignore[return-value]
+
+
+def _normalize_obs_crop_fill(obs_crop_fill: int) -> int:
+    try:
+        fill = int(obs_crop_fill)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("obs_crop_fill must be in [0, 255]") from exc
+    if fill < 0 or fill > 255:
+        raise ValueError("obs_crop_fill must be in [0, 255]")
+    return fill
+
+
 def _normalize_done_on_alias(done_on: Any) -> DoneOnInfoSpec | None:
     if done_on is None:
         return None
@@ -633,6 +650,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         obs_copy: str = "copy",
         obs_resize: Sequence[int] | None = None,
         obs_crop: Sequence[int] | None = None,
+        obs_crop_mode: Literal["remove", "mask"] = "remove",
+        obs_crop_fill: int = 0,
         obs_grayscale: bool = False,
         obs_resize_algorithm: str = "nearest",
         obs_layout: str = "hwc",
@@ -671,8 +690,12 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         if not 0.0 <= sticky_action_prob <= 1.0:
             raise ValueError("sticky_action_prob must be between 0.0 and 1.0")
         crop_top, crop_bottom, crop_left, crop_right = _normalize_retro_crop(obs_crop)
-        source_width = VISIBLE_WIDTH - crop_left - crop_right
-        source_height = VISIBLE_HEIGHT - crop_top - crop_bottom
+        normalized_crop_mode = _normalize_obs_crop_mode(obs_crop_mode)
+        normalized_crop_fill = _normalize_obs_crop_fill(obs_crop_fill)
+        has_crop = any((crop_top, crop_bottom, crop_left, crop_right))
+        mask_crop = normalized_crop_mode == "mask" and has_crop
+        source_width = VISIBLE_WIDTH if mask_crop else VISIBLE_WIDTH - crop_left - crop_right
+        source_height = VISIBLE_HEIGHT if mask_crop else VISIBLE_HEIGHT - crop_top - crop_bottom
         resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
         action_mode = _normalize_action_mode(use_restricted_actions)
         resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
@@ -714,6 +737,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self.info_mode, self.info_keys = _normalize_info_filter(info_filter, info_mode, info_keys)
         self.reward_clip, self.reward_clip_low, self.reward_clip_high = _normalize_reward_clip(reward_clip)
         self.obs_resize_algorithm = _normalize_resize_algorithm(obs_resize_algorithm)
+        self.obs_crop_mode = normalized_crop_mode
+        self.obs_crop_fill = normalized_crop_fill
         self.crop_left = crop_left
         self.crop_right = crop_right
         self._output_resize_width = int(resize_width)
@@ -721,12 +746,21 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         if self._output_resize_width <= 0 or self._output_resize_height <= 0:
             raise ValueError("resize_width and resize_height must be > 0")
         self._needs_python_postprocess = (
-            self.obs_resize_algorithm != "area"
+            mask_crop
+            or self.obs_resize_algorithm != "area"
             or crop_left != 0
             or crop_right != 0
         )
+        core_crop_top = 0 if mask_crop else crop_top
+        core_crop_bottom = 0 if mask_crop else crop_bottom
         core_resize_width = VISIBLE_WIDTH if self._needs_python_postprocess else self._output_resize_width
-        core_resize_height = source_height if self._needs_python_postprocess else self._output_resize_height
+        core_resize_height = (
+            VISIBLE_HEIGHT
+            if mask_crop
+            else source_height
+            if self._needs_python_postprocess
+            else self._output_resize_height
+        )
         self._core = _CoreSuperMarioBrosNesTurboVecEnv(
             _expand_rom_path(_resolve_rom_path(str(game), rom_path)),
             num_envs,
@@ -734,8 +768,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             bool(obs_grayscale),
             frame_stack,
             False,
-            crop_top,
-            crop_bottom,
+            core_crop_top,
+            core_crop_bottom,
             core_resize_width,
             core_resize_height,
             initial_states,
@@ -763,8 +797,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self.done_on_info_rules = done_on_info_rules
         self.noop_reset_max = self._core.noop_reset_max
         self.sticky_action_prob = self._core.sticky_action_prob
-        self.crop_top = self._core.crop_top
-        self.crop_bottom = self._core.crop_bottom
+        self.crop_top = crop_top
+        self.crop_bottom = crop_bottom
         self.resize_width = self._output_resize_width
         self.resize_height = self._output_resize_height
         self.single_action_space = spaces.Discrete(len(self.action_meanings))
@@ -1041,7 +1075,11 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
     def _public_obs_view(self) -> np.ndarray:
         chw = self._obs
         if self._needs_python_postprocess:
-            if self.crop_left or self.crop_right:
+            if self.obs_crop_mode == "mask" and any(
+                (self.crop_top, self.crop_bottom, self.crop_left, self.crop_right)
+            ):
+                chw = self._masked_chw(chw)
+            elif self.crop_left or self.crop_right:
                 right = VISIBLE_WIDTH - self.crop_right if self.crop_right else VISIBLE_WIDTH
                 chw = chw[:, :, :, self.crop_left:right]
             chw = _resize_chw_batch(
@@ -1054,6 +1092,19 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         if self.obs_layout == "chw":
             return chw
         return np.transpose(chw, (0, 2, 3, 1))
+
+    def _masked_chw(self, chw: np.ndarray) -> np.ndarray:
+        masked = chw.copy()
+        fill = self.obs_crop_fill
+        if self.crop_top:
+            masked[:, :, : self.crop_top, :] = fill
+        if self.crop_bottom:
+            masked[:, :, VISIBLE_HEIGHT - self.crop_bottom :, :] = fill
+        if self.crop_left:
+            masked[:, :, :, : self.crop_left] = fill
+        if self.crop_right:
+            masked[:, :, :, VISIBLE_WIDTH - self.crop_right :] = fill
+        return masked
 
     def _public_single_obs(self, obs: np.ndarray) -> np.ndarray:
         batch = obs.reshape((1, *obs.shape))
