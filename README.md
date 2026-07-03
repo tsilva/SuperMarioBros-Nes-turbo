@@ -143,14 +143,14 @@ uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBro
 ## Release
 
 Release tags drive the GitHub Actions wheel build. From a clean, synced branch
-with the release environment installed, create the next minor release with:
+with the release environment installed, create the next patch release with:
 
 ```bash
 uv sync --extra dev --group dev
 make release
 ```
 
-Use `scripts/release.py --part patch`, `--part major`, or `--to 0.2.0` for
+Use `scripts/release.py --part minor`, `--part major`, or `--to 0.3.0` for
 other release shapes. The script refuses to run unless the current branch is
 clean and synced with its upstream. It verifies the target version is not already
 on PyPI, bumps `pyproject.toml` and `Cargo.toml`, refreshes lockfiles, runs local

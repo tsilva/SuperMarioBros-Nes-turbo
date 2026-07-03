@@ -116,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     group.add_argument(
         "--part",
         choices=("patch", "minor", "major"),
-        default="minor",
+        default="patch",
         help="Version component to bump when --to is omitted",
     )
     parser.add_argument("--skip-checks", action="store_true", help="Skip local cargo/maturin/test gates")
