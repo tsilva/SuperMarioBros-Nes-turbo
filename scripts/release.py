@@ -74,7 +74,7 @@ def target_version(args: argparse.Namespace) -> str:
 def refresh_locks() -> None:
     env = os.environ.copy()
     env.setdefault("UV_CACHE_DIR", ".uv-cache")
-    run(["uv", "lock", "--offline"], env=env)
+    run(["uv", "lock"], env=env)
     run(["cargo", "generate-lockfile"])
 
 
