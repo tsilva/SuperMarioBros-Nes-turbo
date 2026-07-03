@@ -6,6 +6,62 @@
 
 `SuperMarioBros-Nes-turbo` is a blazing-fast vectorized Super Mario Bros NES environment for reinforcement-learning research. It uses a custom Rust NES emulator specialized for SuperMarioBros-Nes mapper 0/NROM, with vectorized stepping on the Rust side so Python crosses into Rust once per batched step. Game-specific preprocessing, including frame skip, grayscale or RGB rendering, cropping, resizing, frame stacking, reward extraction, termination checks, and observation-buffer writes, happens before data returns to Python. It follows the same throughput-first direction as [stable-retro-turbo](https://github.com/tsilva/stable-retro-turbo), but drops broad stable-retro compatibility so the emulator and batch API can specialize on Super Mario Bros NES.
 
+## Why it is fast
+
+Compared with upstream Stable Retro, this package does not run many Python
+`RetroEnv` instances through `SubprocVecEnv`, `DummyVecEnv`, or wrapper stacks
+for frame skip, resize, grayscale, frame stack, reward, and termination logic.
+Compared with `stable-retro-turbo`, it keeps the same native-vector philosophy
+but gives up the general Stable Retro compatibility layer, arbitrary game/core
+support, and generic emulator contracts. The speed comes from these current fast
+paths:
+
+- **SMB/NROM-only Rust emulator**: the core supports the Super Mario Bros NES
+  mapper 0/NROM shape directly instead of routing every access through a
+  general multi-console emulator interface.
+- **Fixed cartridge memory paths**: PRG/CHR reads use precomputed power-of-two
+  masks, direct PRG ROM instruction fetches, fixed nametable mirroring, and
+  direct CPU memory paths for RAM, PPU registers, controllers, and PRG ROM.
+- **One Python call per vector step**: `reset_into()`, `step_into()`, and
+  `info_into()` mutate caller-owned NumPy arrays, release the GIL, and avoid
+  creating new observations, rewards, done arrays, and scalar info arrays on
+  every step.
+- **Rust-side batch execution**: vector lanes step in Rust with Rayon when the
+  batch is large enough, so the Python side only submits action arrays and reads
+  already-filled result buffers.
+- **`step_fast()` info bypass**: training and benchmark loops can skip per-env
+  Python `info` dictionaries and keep x-position, score, lives, level,
+  timer, and scroll values in typed arrays.
+- **Fused RL preprocessing**: frame skip, optional max-pool, reward accumulation,
+  termination checks, grayscale/RGB rendering, crop, area resize, and frame-stack
+  writes happen in the native step loop before data returns to Python.
+- **Observation buffer as frame-stack state**: the returned observation buffer is
+  also the persistent stack buffer; old frames shift in place and only the newest
+  processed frame is written into the final stack slot.
+- **Direct grayscale renderer**: the common pixel path renders SMB background
+  tile rows and sprite overlays directly to grayscale from NES palette values,
+  instead of first materializing RGB and then converting it in Python.
+- **Precomputed area resize plan**: resize bins are built once per env
+  configuration, then reused for every frame and every lane.
+- **Deterministic lane sharing**: identical reset lanes, and repeated saved-state
+  groups such as the default `Level1-1` through `Level1-4` round-robin benchmark,
+  can share one emulator state while actions remain uniform; mixed actions
+  materialize independent lane states before stepping, preserving the public
+  vector-env contract.
+- **SMB routine fast-forwards**: the emulator recognizes exact Super Mario Bros
+  ROM byte signatures for the idle loop, sprite-0 polling loop, and OAM clear
+  helper, then advances equivalent CPU/PPU cycles without interpreting every
+  repeated 6502 instruction.
+- **Rust-side reward and terminal rules**: x-position reward, flag completion,
+  life-loss/level-change style `done_on_info` rules, terminal observation
+  capture, and autoreset bookkeeping stay in the Rust/Python fast-env boundary
+  rather than in wrapper chains.
+- **Scoped compatibility paths**: RGB, uncropped rendering, Gymnasium/SB3-style
+  `info` dictionaries, terminal observations, sticky actions, random no-op
+  starts, and multi-state curricula are still available, but the benchmark path
+  keeps them on explicit typed/native routes instead of paying broad Stable Retro
+  overhead unconditionally.
+
 ## Install
 
 ```bash

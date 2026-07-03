@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -49,6 +50,18 @@ IGNORED_ROOT_DIR_NAMES = {
 }
 IGNORED_FILE_SUFFIXES = {".o", ".a", ".so", ".dylib", ".d", ".pyc", ".pyo"}
 ROM_SUFFIXES = {".nes", ".sfc", ".smc", ".gb", ".gbc", ".gen", ".sms", ".bin"}
+
+
+def release_temp_dir() -> Path:
+    configured = os.environ.get("RELEASE_BUILD_TMPDIR")
+    if configured:
+        root = Path(configured)
+    else:
+        root = Path("/private/tmp")
+        if not root.exists():
+            root = Path(tempfile.gettempdir())
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def read_pyproject() -> dict[str, object]:
@@ -292,7 +305,10 @@ def prepare_sources(args: argparse.Namespace) -> None:
     version = args.version or pyproject_version()
     validate_version(version)
     root = args.root or Path(
-        tempfile.mkdtemp(prefix=f"supermariobrosnes-turbo-v{version}-builds.", dir="/private/tmp")
+        tempfile.mkdtemp(
+            prefix=f"supermariobrosnes-turbo-v{version}-builds.",
+            dir=release_temp_dir(),
+        )
     )
     root = root.resolve()
     macos_src = root / "macos-src"
@@ -348,6 +364,34 @@ def build_commands(args: argparse.Namespace) -> None:
         "CIBW_ENVIRONMENT_LINUX='PATH=\"$HOME/.cargo/bin:$PATH\" CARGO_NET_GIT_FETCH_WITH_CLI=true' "
         f"{shell_quote(PYTHON)} -m cibuildwheel --platform linux --output-dir {shell_quote(linux_out)}"
     )
+
+
+def build_platform(args: argparse.Namespace) -> None:
+    version = args.version or pyproject_version()
+    validate_version(version)
+    output_dir = wheelhouse(version, args.platform)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    if args.platform == "macos":
+        env.update(
+            {
+                "MACOSX_DEPLOYMENT_TARGET": "14.0",
+                "ARCHFLAGS": "-arch arm64",
+                "CARGO_TARGET_DIR": str(REPO_ROOT / "target-release"),
+            }
+        )
+        run([str(PYTHON), "-m", "maturin", "build", "--release", "--out", str(output_dir)], env=env)
+        return
+    env.update(
+        {
+            "CIBW_BUILD": "cp39-manylinux_x86_64",
+            "CIBW_ARCHS_LINUX": "x86_64",
+            "CIBW_SKIP": "*-musllinux_*",
+            "CIBW_BEFORE_ALL_LINUX": "curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal",
+            "CIBW_ENVIRONMENT_LINUX": 'PATH="$HOME/.cargo/bin:$PATH" CARGO_NET_GIT_FETCH_WITH_CLI=true',
+        }
+    )
+    run([str(PYTHON), "-m", "cibuildwheel", "--platform", "linux", "--output-dir", str(output_dir)], env=env)
 
 
 def wheel_names(wheel: Path) -> list[str]:
@@ -422,7 +466,7 @@ def run(args_list: list[str], **kwargs: object) -> None:
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = args.wheel.resolve()
     python = args.python.resolve()
-    with tempfile.TemporaryDirectory(prefix="supermariobrosnes-wheel-smoke.", dir="/private/tmp") as tmp:
+    with tempfile.TemporaryDirectory(prefix="supermariobrosnes-wheel-smoke.", dir=release_temp_dir()) as tmp:
         target = Path(tmp)
         run([str(python), "-m", "pip", "install", "--no-deps", "--target", str(target), str(wheel)])
         code = f"""
@@ -495,6 +539,11 @@ def main() -> None:
     commands.add_argument("--macos-src")
     commands.add_argument("--linux-src")
     commands.set_defaults(func=build_commands)
+
+    platform = subparsers.add_parser("build-platform", help="Build one release wheel platform")
+    platform.add_argument("--version")
+    platform.add_argument("--platform", choices=("macos", "linux"), required=True)
+    platform.set_defaults(func=build_platform)
 
     audit = subparsers.add_parser("audit-wheels", help="Audit wheel contents")
     audit.add_argument("--version")

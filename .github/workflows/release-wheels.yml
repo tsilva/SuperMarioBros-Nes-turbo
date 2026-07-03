@@ -1,0 +1,186 @@
+name: Build release wheels
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Optional git ref to build"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-wheels-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: .uv-cache
+
+jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install release environment
+        run: uv sync --frozen --extra dev --group dev
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_version" != "$version" ]]; then
+              echo "Tag $GITHUB_REF_NAME does not match project version $version" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check version consistency
+        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py check-version --version "${{ steps.version.outputs.version }}"
+
+      - name: Check PyPI version is unused
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py check-pypi --version "${{ steps.version.outputs.version }}"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check Rust release build
+        run: cargo check --release
+
+      - name: Build editable extension
+        run: .venv/bin/python -m maturin develop --release
+
+      - name: Run tests
+        run: make test PYTHON=.venv/bin/python
+
+  build:
+    name: Build ${{ matrix.platform }} wheel
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-15
+          - platform: linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install release environment
+        run: uv sync --frozen --extra dev --group dev
+
+      - name: Build wheel
+        run: |
+          .venv/bin/python .codex/skills/build-release/scripts/release_build.py build-platform \
+            --platform "${{ matrix.platform }}" \
+            --version "${{ needs.validate.outputs.version }}"
+
+      - name: Smoke built wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=(wheelhouse-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}/*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            printf 'expected one wheel, found %s\n' "${#wheels[@]}" >&2
+            printf '%s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+          .venv/bin/python .codex/skills/build-release/scripts/release_build.py smoke-wheel "${wheels[0]}"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-wheel-v${{ needs.validate.outputs.version }}
+          path: wheelhouse-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}/*.whl
+          if-no-files-found: error
+
+  final-check:
+    name: Audit release wheels
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install release environment
+        run: uv sync --frozen --extra dev --group dev
+
+      - name: Download macOS wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-wheel-v${{ needs.validate.outputs.version }}
+          path: wheelhouse-v${{ needs.validate.outputs.version }}-macos
+
+      - name: Download Linux wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-wheel-v${{ needs.validate.outputs.version }}
+          path: wheelhouse-v${{ needs.validate.outputs.version }}-linux
+
+      - name: Final audit
+        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py final-check --version "${{ needs.validate.outputs.version }}"
+
+      - name: Upload final wheel bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-wheels-v${{ needs.validate.outputs.version }}
+          path: |
+            wheelhouse-v${{ needs.validate.outputs.version }}-macos/*.whl
+            wheelhouse-v${{ needs.validate.outputs.version }}-linux/*.whl
+          if-no-files-found: error
