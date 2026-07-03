@@ -1,5 +1,6 @@
 .pypirc
 /target/
+/target-release/
 /artifacts/
 /wheelhouse*/
 /.venv/

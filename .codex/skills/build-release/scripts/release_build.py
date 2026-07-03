@@ -47,6 +47,7 @@ IGNORED_ROOT_DIR_NAMES = {
     "artifacts",
     "build",
     "dist",
+    "target-release",
 }
 IGNORED_FILE_SUFFIXES = {".o", ".a", ".so", ".dylib", ".d", ".pyc", ".pyo"}
 ROM_SUFFIXES = {".nes", ".sfc", ".smc", ".gb", ".gbc", ".gen", ".sms", ".bin"}
@@ -465,21 +466,21 @@ def run(args_list: list[str], **kwargs: object) -> None:
 
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = args.wheel.resolve()
-    python = args.python.resolve()
+    python = args.python
     with tempfile.TemporaryDirectory(prefix="supermariobrosnes-wheel-smoke.", dir=release_temp_dir()) as tmp:
         target = Path(tmp)
-        run([str(python), "-m", "pip", "install", "--no-deps", "--target", str(target), str(wheel)])
+        run(["uv", "pip", "install", "--python", str(python), "--no-deps", "--target", str(target), str(wheel)])
         code = f"""
 import {IMPORT_NAME}
 from {IMPORT_NAME} import {EXTENSION_NAME}
 print({IMPORT_NAME}.__file__)
 print({EXTENSION_NAME}.__file__)
 assert {IMPORT_NAME}.__file__.startswith({str(target)!r})
-assert hasattr({IMPORT_NAME}, "SuperMarioBrosVecEnv")
+assert hasattr({IMPORT_NAME}, "SuperMarioBrosNesTurboVecEnv")
 """
         env = os.environ.copy()
         env["PYTHONPATH"] = str(target)
-        run([str(python), "-c", code], cwd="/private/tmp", env=env)
+        run([str(python), "-c", code], cwd=release_temp_dir(), env=env)
 
 
 def sha256(path: Path) -> str:
