@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from enum import Enum, Flag
 import gzip
+from importlib import resources
 import json
 import os
 from pathlib import Path
@@ -171,6 +172,13 @@ def _stable_retro_state_dir() -> Path | None:
     return Path(state_path).parent
 
 
+def _packaged_state_dir() -> Path | None:
+    state_dir = resources.files(__package__).joinpath("data", DEFAULT_STABLE_RETRO_GAME)
+    if not state_dir.is_dir():
+        return None
+    return Path(str(state_dir))
+
+
 def _sibling_stable_retro_state_dir() -> Path | None:
     game_path = Path("stable_retro/data/stable") / DEFAULT_STABLE_RETRO_GAME
     for parent in Path(__file__).resolve().parents:
@@ -187,6 +195,7 @@ def _candidate_state_dirs(state_dir: str | Path | None = None) -> list[Path]:
     env_dir = os.environ.get("SUPERMARIOBROSNES_FASTENV_STATE_DIR")
     if env_dir:
         candidates.append(Path(env_dir).expanduser())
+    candidates.append(_packaged_state_dir())
     candidates.append(_stable_retro_state_dir())
     candidates.append(_sibling_stable_retro_state_dir())
 

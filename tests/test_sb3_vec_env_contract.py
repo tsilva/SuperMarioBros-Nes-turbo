@@ -8,7 +8,7 @@ import pytest
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 
-from supermariobrosnes_turbo import Actions, SuperMarioBrosNesTurboVecEnv
+from supermariobrosnes_turbo import Actions, SuperMarioBrosNesTurboVecEnv, list_available_states
 from rom_helpers import require_rom
 from supermariobrosnes_turbo.env import _normalize_initial_state_config, _resolve_state_path
 
@@ -18,6 +18,43 @@ BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name
 ACTION_BUTTONS = {
     "noop": (),
     "right": ("RIGHT",),
+}
+EXPECTED_PACKAGED_STATES = {
+    "Level1-1",
+    "Level1-1-99lives",
+    "Level1-2",
+    "Level1-3",
+    "Level1-4",
+    "Level2-1",
+    "Level2-1-clouds",
+    "Level2-1-clouds-easy",
+    "Level2-2",
+    "Level2-3",
+    "Level2-4",
+    "Level3-1",
+    "Level3-2",
+    "Level3-3",
+    "Level3-4",
+    "Level4-1",
+    "Level4-2",
+    "Level4-3",
+    "Level4-4",
+    "Level5-1",
+    "Level5-2",
+    "Level5-3",
+    "Level5-4",
+    "Level6-1",
+    "Level6-2",
+    "Level6-3",
+    "Level6-4",
+    "Level7-1",
+    "Level7-2",
+    "Level7-3",
+    "Level7-4",
+    "Level8-1",
+    "Level8-2",
+    "Level8-3",
+    "Level8-4",
 }
 
 
@@ -54,6 +91,15 @@ def make_env(rom_path: Path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:
 
 def test_super_mario_vec_env_is_sb3_vec_env_type() -> None:
     assert issubclass(SuperMarioBrosNesTurboVecEnv, VecEnv)
+
+
+def test_packaged_state_inventory_includes_all_levels() -> None:
+    states = set(list_available_states())
+
+    assert EXPECTED_PACKAGED_STATES <= states
+    assert "supermariobrosnes_turbo/data/SuperMarioBros-Nes-v0/Level8-4.state" in str(
+        _resolve_state_path("Level8-4")
+    )
 
 
 def test_state_dir_env_resolves_named_initial_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

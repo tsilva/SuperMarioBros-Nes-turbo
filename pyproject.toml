@@ -27,6 +27,7 @@ dev = [
 module-name = "supermariobrosnes_turbo._supermariobrosnes_turbo"
 python-source = "python"
 features = ["pyo3/extension-module"]
+include = ["python/supermariobrosnes_turbo/data/**/*.state"]
 
 [tool.uv]
 exclude-newer = "7 days"
