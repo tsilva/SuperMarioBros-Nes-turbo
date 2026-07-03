@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "supermariobrosnes-turbo"
 version = "0.2.4"
-description = "Blazing fast SuperMarioBros-Nes environment for RL research."
+description = "Blazing fast SuperMarioBros-Nes environment for Reinforcement Learning."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

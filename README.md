@@ -1,7 +1,11 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/tsilva/SuperMarioBros-Nes-turbo/main/logo.png" alt="SuperMarioBros-Nes-turbo logo" width="320" />
 
-  **🚀 Blazing fast SuperMarioBros-Nes environment for RL research 🍄**
+  **🚀 Blazing fast SuperMarioBros-Nes environment for Reinforcement Learning 🍄**
+
+  <p>
+    <a href="https://pypi.org/project/supermariobrosnes-turbo/"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpypi.org%2Fpypi%2Fsupermariobrosnes-turbo%2Fjson&amp;query=%24.info.version&amp;label=pypi&amp;prefix=v&amp;cacheSeconds=300" alt="PyPI version" /></a>
+  </p>
 </div>
 
 `SuperMarioBros-Nes-turbo` is a blazing-fast vectorized Super Mario Bros NES environment for reinforcement-learning research. It uses a custom Rust NES emulator specialized for SuperMarioBros-Nes mapper 0/NROM, with vectorized stepping on the Rust side so Python crosses into Rust once per batched step. Game-specific preprocessing, including frame skip, grayscale or RGB rendering, cropping, resizing, frame stacking, reward extraction, termination checks, and observation-buffer writes, happens before data returns to Python. It follows the same throughput-first direction as [stable-retro-turbo](https://github.com/tsilva/stable-retro-turbo), but drops broad stable-retro compatibility so the emulator and batch API can specialize on Super Mario Bros NES.

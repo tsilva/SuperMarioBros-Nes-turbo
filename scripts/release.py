@@ -93,7 +93,7 @@ def create_commit_and_tag(version: str) -> str:
     tag = f"v{version}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", tag], cwd=REPO_ROOT).returncode == 0:
         raise SystemExit(f"tag already exists locally: {tag}")
-    run(["git", "add", "pyproject.toml", "Cargo.toml", "Cargo.lock", "uv.lock"])
+    run(["git", "add", "VERSION.txt", "pyproject.toml", "Cargo.toml", "Cargo.lock", "uv.lock"])
     run(["git", "commit", "-m", f"Release {tag}"])
     run(["git", "tag", tag, "HEAD"])
     return tag

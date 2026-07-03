@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback.
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+VERSION_PATH = REPO_ROOT / "VERSION.txt"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CARGO_TOML = REPO_ROOT / "Cargo.toml"
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
@@ -72,6 +73,10 @@ def read_pyproject() -> dict[str, object]:
 
 def pyproject_name() -> str:
     return str(read_pyproject()["project"]["name"])  # type: ignore[index]
+
+
+def read_version() -> str:
+    return VERSION_PATH.read_text(encoding="utf-8").strip()
 
 
 def pyproject_version() -> str:
@@ -139,6 +144,15 @@ def next_version(version: str, part: str) -> str:
     raise ValueError(part)
 
 
+def version_sort_key(version: str) -> tuple[int, int, int, int]:
+    validate_version(version)
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.post(\d+))?$", version)
+    if match is None:
+        raise ValueError(f"cannot sort non-final release version: {version!r}")
+    major, minor, patch, post = match.groups()
+    return int(major), int(minor), int(patch), int(post or 0)
+
+
 def replace_section_version(path: Path, section: str, version: str) -> None:
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     current_section: str | None = None
@@ -158,8 +172,13 @@ def replace_section_version(path: Path, section: str, version: str) -> None:
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def write_version(version: str) -> None:
+    VERSION_PATH.write_text(f"{version}\n", encoding="utf-8")
+
+
 def check_version(args: argparse.Namespace) -> None:
     versions = {
+        "version_txt": read_version(),
         "pyproject": pyproject_version(),
         "cargo_toml": cargo_version(),
         "cargo_lock": cargo_lock_version(),
@@ -217,20 +236,55 @@ def check_tools(args: argparse.Namespace) -> None:
 
 
 def bump_version(args: argparse.Namespace) -> None:
-    target = args.to or next_version(pyproject_version(), args.part)
+    target = args.to or next_version(read_version(), args.part)
     validate_version(target)
     if args.write:
+        write_version(target)
         replace_section_version(PYPROJECT, "project", target)
         replace_section_version(CARGO_TOML, "package", target)
     print(target)
 
 
+def sync_version(args: argparse.Namespace) -> None:
+    version = read_version()
+    validate_version(version)
+    replace_section_version(PYPROJECT, "project", version)
+    replace_section_version(CARGO_TOML, "package", version)
+    print(version)
+
+
+def fetch_pypi_project() -> dict[str, object]:
+    url = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
+    with urllib.request.urlopen(url, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def release_has_non_yanked_file(files: object) -> bool:
+    if not isinstance(files, list):
+        return False
+    return any(isinstance(file, dict) and not file.get("yanked", False) for file in files)
+
+
+def latest_non_yanked_pypi_version(releases: object) -> str | None:
+    if not isinstance(releases, dict):
+        return None
+    candidates: list[tuple[tuple[int, int, int, int], str]] = []
+    for version, files in releases.items():
+        if not isinstance(version, str) or not release_has_non_yanked_file(files):
+            continue
+        try:
+            candidates.append((version_sort_key(version), version))
+        except ValueError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
 def check_pypi(args: argparse.Namespace) -> None:
     validate_version(args.version)
-    url = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
     try:
-        with urllib.request.urlopen(url, timeout=20) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = fetch_pypi_project()
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             print(json.dumps({"package": PACKAGE_NAME, "exists": False, "version_exists": False}, indent=2))
@@ -241,6 +295,28 @@ def check_pypi(args: argparse.Namespace) -> None:
     print(json.dumps({"package": PACKAGE_NAME, "version": args.version, "version_exists": exists}, indent=2))
     if exists:
         raise SystemExit(f"{PACKAGE_NAME} {args.version} already exists on PyPI")
+
+
+def latest_pypi(args: argparse.Namespace) -> None:
+    try:
+        data = fetch_pypi_project()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(json.dumps({"package": PACKAGE_NAME, "exists": False, "latest_non_yanked": None}, indent=2))
+            return
+        raise
+    latest = latest_non_yanked_pypi_version(data.get("releases"))
+    info = data.get("info", {})
+    info_version = info.get("version") if isinstance(info, dict) else None
+    result = {
+        "package": PACKAGE_NAME,
+        "exists": True,
+        "latest_non_yanked": latest,
+        "pypi_info_version": info_version,
+    }
+    print(json.dumps(result, indent=2))
+    if args.fail_if_mismatch and latest != info_version:
+        raise SystemExit(f"PyPI info.version {info_version!r} does not match latest non-yanked {latest!r}")
 
 
 def should_ignore(rel: Path) -> bool:
@@ -303,7 +379,7 @@ def wheelhouse(version: str, platform_name: str) -> Path:
 
 
 def prepare_sources(args: argparse.Namespace) -> None:
-    version = args.version or pyproject_version()
+    version = args.version or read_version()
     validate_version(version)
     root = args.root or Path(
         tempfile.mkdtemp(
@@ -340,7 +416,7 @@ def shell_quote(value: str | Path) -> str:
 
 
 def build_commands(args: argparse.Namespace) -> None:
-    version = args.version or pyproject_version()
+    version = args.version or read_version()
     validate_version(version)
     macos_src = Path(args.macos_src) if args.macos_src else Path("<macos-src>")
     linux_src = Path(args.linux_src) if args.linux_src else Path("<linux-src-clean>")
@@ -368,7 +444,7 @@ def build_commands(args: argparse.Namespace) -> None:
 
 
 def build_platform(args: argparse.Namespace) -> None:
-    version = args.version or pyproject_version()
+    version = args.version or read_version()
     validate_version(version)
     output_dir = wheelhouse(version, args.platform)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -450,7 +526,7 @@ def find_wheels(version: str) -> list[Path]:
 
 
 def audit_wheels(args: argparse.Namespace) -> None:
-    version = args.version or pyproject_version()
+    version = args.version or read_version()
     wheels = [Path(wheel) for wheel in args.wheels] if args.wheels else find_wheels(version)
     if len(wheels) < 2:
         raise SystemExit(f"expected macOS and Linux wheels for {version}, found {wheels}")
@@ -492,7 +568,7 @@ def sha256(path: Path) -> str:
 
 
 def final_check(args: argparse.Namespace) -> None:
-    version = args.version or pyproject_version()
+    version = args.version or read_version()
     wheels = find_wheels(version)
     if len(wheels) < 2:
         raise SystemExit(f"expected macOS and Linux wheels for {version}, found {wheels}")
@@ -525,9 +601,20 @@ def main() -> None:
     bump.add_argument("--write", action="store_true")
     bump.set_defaults(func=bump_version)
 
+    sync = subparsers.add_parser("sync-version", help="Write pyproject.toml and Cargo.toml from VERSION.txt")
+    sync.set_defaults(func=sync_version)
+
     pypi = subparsers.add_parser("check-pypi", help="Fail if the target version exists on PyPI")
     pypi.add_argument("--version", required=True)
     pypi.set_defaults(func=check_pypi)
+
+    latest = subparsers.add_parser("latest-pypi", help="Print the latest non-yanked PyPI version")
+    latest.add_argument(
+        "--fail-if-mismatch",
+        action="store_true",
+        help="Fail if PyPI info.version differs from the computed latest non-yanked release",
+    )
+    latest.set_defaults(func=latest_pypi)
 
     prepare = subparsers.add_parser("prepare-sources", help="Create clean macOS/Linux source copies")
     prepare.add_argument("--version")

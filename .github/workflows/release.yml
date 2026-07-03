@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          version="$(tr -d '[:space:]' < VERSION.txt)"
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             tag_version="${GITHUB_REF_NAME#v}"
             if [[ "$tag_version" != "$version" ]]; then
