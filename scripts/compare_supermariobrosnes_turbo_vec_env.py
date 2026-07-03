@@ -23,7 +23,7 @@ from supermariobrosnes_turbo.env import DEFAULT_STABLE_RETRO_GAME
 
 
 DEFAULT_ROM = default_rom_path()
-EXPECTED_STABLE_RETRO_VERSION = "1.0.0.post23"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post2"
 STABLE_VISIBLE_WIDTH = 240
 STABLE_VISIBLE_HEIGHT = 224
 INFO_KEY_MAP = {
@@ -299,7 +299,7 @@ def check_stable_retro_version(path: Path | None, allow_mismatch: bool) -> str:
         raise SystemExit(
             "Expected stable-retro-turbo=="
             f"{EXPECTED_STABLE_RETRO_VERSION}, found {version}. "
-            "Install post23 or pass --allow-version-mismatch for checkout diagnostics."
+            "Install the expected version or pass --allow-version-mismatch for checkout diagnostics."
         )
     return version
 

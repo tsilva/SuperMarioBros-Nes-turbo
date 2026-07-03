@@ -15,7 +15,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-stable-retro-turbo = "2026-07-01T00:00:00Z"
+stable-retro-turbo = "2026-07-04T00:00:00Z"
 
 [manifest]
 constraints = [
@@ -2748,7 +2748,7 @@ wheels = [
 
 [[package]]
 name = "stable-retro-turbo"
-version = "1.0.0.post23"
+version = "1.0.1.post2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "python_full_version == '3.14.*'" },
@@ -2756,8 +2756,8 @@ dependencies = [
     { name = "pyglet", marker = "python_full_version == '3.14.*'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/79/616861c76c66ca8017bf902ac40abd4a1b82a2590279e82a06651f4f5ea0/stable_retro_turbo-1.0.0.post23-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:fb60631993e5e214b84ab3aaffda4a94ff0fa8ffa74d5a8cb0c9a964612526dd", size = 81485614, upload-time = "2026-06-30T13:39:23.653Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/1c/0e755e583678637203ee6a5461e18c9230b1f01d7f1b9a8712a235b701d1/stable_retro_turbo-1.0.0.post23-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2ec44f1ea86a089cb33ad26c0a58169a80c538f8b83d1ff8fadfaf61a3fbec21", size = 84422158, upload-time = "2026-06-30T13:39:35.247Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/91/cfd9e730a9f3a48f0beb50fe5f0416bf8c1fe6c57da4f476173549516e8b/stable_retro_turbo-1.0.1.post2-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:9008c0179ada9b60aa12c8b50a16bd7ce5d08028b2de0a1fa969b5934d15084c", size = 81537340, upload-time = "2026-07-03T14:39:12.76Z" },
+    { url = "https://files.pythonhosted.org/packages/40/08/680d58494514db32b60ea2c6523ff1e79161d0f68ebc220269e1547b2a93/stable_retro_turbo-1.0.1.post2-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1c5fb19174d5ca795a6458998d42c320edb76865ba022f844e710747b1de1b59", size = 84473686, upload-time = "2026-07-03T14:39:19.693Z" },
 ]
 
 [[package]]
@@ -2803,7 +2803,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "stable-baselines3", marker = "extra == 'dev'", specifier = ">=2.7.1" },
-    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.0.post23" },
+    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.1.post2" },
 ]
 provides-extras = ["dev"]
 
