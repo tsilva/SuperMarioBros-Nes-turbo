@@ -245,24 +245,27 @@ def parse_load1(uptime_text: str) -> float | None:
         return None
 
 
-def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> tuple[float | None, str]:
-    raw_path = f"{plan.run_dir}/raw/load-{label}.txt"
-    if plan.target == "remote":
-        shell = (
+def load_snapshot_shell(raw_path: str, *, remote: bool) -> str:
+    if remote:
+        return (
             "set -e; "
             f"{{ hostname; uptime; nproc; lscpu | sed -n '1,40p'; "
-            "ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -20; }} "
+            "ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -20; } "
             f"> {quote(raw_path)}"
         )
-    else:
-        shell = (
-            "set -e; "
-            f"{{ hostname; uptime; "
-            "sysctl -n hw.ncpu 2>/dev/null || nproc; "
-            "sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu | sed -n '1,40p'; "
-            "ps -Ao pid,pcpu,pmem,comm,args | sort -k2 -nr | head -20; }} "
-            f"> {quote(raw_path)}"
-        )
+    return (
+        "set -e; "
+        f"{{ hostname; uptime; "
+        "sysctl -n hw.ncpu 2>/dev/null || nproc; "
+        "sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu | sed -n '1,40p'; "
+        "ps -Ao pid,pcpu,pmem,comm,args | sort -k2 -nr | head -20; } "
+        f"> {quote(raw_path)}"
+    )
+
+
+def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> tuple[float | None, str]:
+    raw_path = f"{plan.run_dir}/raw/load-{label}.txt"
+    shell = load_snapshot_shell(raw_path, remote=plan.target == "remote")
     target_run(args, plan, shell)
     text = target_read(args, plan, raw_path)
     return parse_load1(text), text
@@ -308,6 +311,10 @@ def create_archives(plan: BenchmarkPlan) -> list[BenchmarkRef]:
     return archived
 
 
+def uv_sync_command() -> str:
+    return 'env PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" uv sync --frozen --no-dev'
+
+
 def prepare_sources(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
     target_run(args, plan, f"mkdir -p {quote(plan.run_dir + '/archives')} {quote(plan.run_dir + '/raw')}")
     if plan.target == "remote":
@@ -333,7 +340,7 @@ def prepare_sources(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
         shell = (
             f"rm -rf {quote(source_dir)} && mkdir -p {quote(source_dir)} && "
             f"tar -xzf {quote(archive_path)} -C {quote(source_dir)} && "
-            f"cd {quote(source_dir)} && uv sync --frozen --no-dev"
+            f"cd {quote(source_dir)} && {uv_sync_command()}"
         )
         target_run_stream(args, plan, shell)
 

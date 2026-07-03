@@ -188,6 +188,60 @@ def test_sb3_helper_methods_respect_lane_indices() -> None:
         env.close()
 
 
+def test_rgb_array_rendering_keeps_policy_observation_preprocessed() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=1,
+        frame_stack=4,
+        render_mode="rgb_array",
+    )
+    try:
+        obs = env.reset()
+
+        assert obs.shape == (1, 4, 84, 84)
+        assert env.observation_space.shape == (4, 84, 84)
+
+        images = env.get_images()
+        assert len(images) == 1
+        frame = images[0]
+        assert frame is not None
+        assert frame.shape == (224, 240, 3)
+        assert frame.dtype == np.uint8
+
+        rendered = env.render()
+        assert rendered is not None
+        assert rendered.shape == (224, 240, 3)
+        assert rendered.dtype == np.uint8
+    finally:
+        env.close()
+
+
+def test_rgb_array_rendering_returns_one_image_per_lane() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=2,
+        frame_stack=4,
+        render_mode="rgb_array",
+    )
+    try:
+        obs = env.reset()
+
+        assert obs.shape == (2, 4, 84, 84)
+        images = env.get_images()
+        assert len(images) == 2
+        for frame in images:
+            assert frame is not None
+            assert frame.shape == (224, 240, 3)
+            assert frame.dtype == np.uint8
+
+        rendered = env.render()
+        assert rendered is not None
+        assert rendered.shape == (448, 240, 3)
+        assert rendered.dtype == np.uint8
+    finally:
+        env.close()
+
+
 def test_sb3_terminal_infos_include_terminal_observation_and_reset_info() -> None:
     env = make_env(
         require_rom(),

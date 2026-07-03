@@ -611,7 +611,7 @@ def _normalize_done_on_info(
 class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
     """SMB-only vector env with the `stable-retro-turbo` RetroVecEnv signature."""
 
-    metadata = {"render_modes": []}
+    metadata = {"render_modes": ["rgb_array"]}
     _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
 
     def __init__(
@@ -831,6 +831,11 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self._terminal_observations: list[np.ndarray | None] = [
             None for _ in range(self.num_envs)
         ]
+        self._rgb_frames: np.ndarray | None = (
+            np.empty(self._core.rgb_frame_shape(), dtype=np.uint8)
+            if render_mode == "rgb_array"
+            else None
+        )
         self._write_active_state_indices()
 
     def reset(
@@ -1210,7 +1215,12 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         return [False for _ in self._get_indices(indices)]
 
     def get_images(self) -> Sequence[np.ndarray | None]:
-        return [None for _ in range(self.num_envs)]
+        if self.render_mode != "rgb_array":
+            return [None for _ in range(self.num_envs)]
+        if self._rgb_frames is None:
+            self._rgb_frames = np.empty(self._core.rgb_frame_shape(), dtype=np.uint8)
+        self._core.rgb_frames_into(self._rgb_frames)
+        return [self._rgb_frames[index].copy() for index in range(self.num_envs)]
 
     def _lane_attr_value(self, value: Any, index: int) -> Any:
         if isinstance(value, np.ndarray) and value.shape[:1] == (self.num_envs,):

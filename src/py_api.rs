@@ -4,7 +4,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use crate::cartridge::Cartridge;
-use crate::emulator::{NES_HEIGHT, NES_WIDTH, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH};
+use crate::emulator::{
+    NES_HEIGHT, NES_WIDTH, RGB_CHANNELS, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH,
+};
 use crate::vec_env::{
     DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, VecEnvConfig,
 };
@@ -207,6 +209,31 @@ impl SuperMarioBrosNesTurboVecEnv {
 
     pub fn terminal_observations(&self) -> Vec<Option<Vec<u8>>> {
         self.inner.terminal_observations().to_vec()
+    }
+
+    pub fn rgb_frame_shape(&self) -> (usize, usize, usize, usize) {
+        (
+            self.inner.config().num_envs,
+            VISIBLE_FRAME_HEIGHT,
+            VISIBLE_FRAME_WIDTH,
+            RGB_CHANNELS,
+        )
+    }
+
+    pub fn rgb_frames_into<'py>(
+        &self,
+        py: Python<'py>,
+        mut frames: PyReadwriteArray4<'py, u8>,
+    ) -> PyResult<()> {
+        self.validate_rgb_frame_shape(&frames)?;
+        let mut frames_rw = frames.as_array_mut();
+        let frames_slice = frames_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("frames must be C-contiguous"))?;
+        py.allow_threads(|| {
+            self.inner.rgb_frames_hwc_into(frames_slice);
+        });
+        Ok(())
     }
 
     pub fn seed(&mut self, seed: u64) {
@@ -486,6 +513,18 @@ impl SuperMarioBrosNesTurboVecEnv {
             return Err(PyValueError::new_err(format!(
                 "{name} length must be {}, got {len}",
                 self.inner.config().num_envs
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_rgb_frame_shape(&self, frames: &PyReadwriteArray4<'_, u8>) -> PyResult<()> {
+        let shape = frames.shape();
+        let expected = self.rgb_frame_shape();
+        if shape != [expected.0, expected.1, expected.2, expected.3] {
+            return Err(PyValueError::new_err(format!(
+                "frames shape must be {:?}, got {:?}",
+                expected, shape
             )));
         }
         Ok(())

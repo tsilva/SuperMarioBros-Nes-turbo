@@ -9,7 +9,9 @@ from scripts.run_git_ref_host_benchmark import (
     BenchmarkRef,
     aggregate_single,
     decide_mode,
+    load_snapshot_shell,
     parse_load1,
+    uv_sync_command,
 )
 
 
@@ -32,6 +34,24 @@ def test_parse_load1_extracts_unix_load_average() -> None:
     assert parse_load1("load average: 1.23, 4.56, 7.89") == 1.23
     assert parse_load1(" 15:41 up 10 days,  load average: 0.42, 0.50, 0.60") == 0.42
     assert parse_load1("no load here") is None
+
+
+def test_load_snapshot_shell_closes_group_once() -> None:
+    remote_shell = load_snapshot_shell("/tmp/load.txt", remote=True)
+    local_shell = load_snapshot_shell("/tmp/load.txt", remote=False)
+
+    assert "; } > /tmp/load.txt" in remote_shell
+    assert "; } > /tmp/load.txt" in local_shell
+    assert "}}" not in remote_shell
+    assert "}}" not in local_shell
+
+
+def test_uv_sync_command_includes_common_user_tool_paths() -> None:
+    command = uv_sync_command()
+
+    assert "$HOME/.local/bin" in command
+    assert "$HOME/.cargo/bin" in command
+    assert command.endswith("uv sync --frozen --no-dev")
 
 
 def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:

@@ -422,6 +422,47 @@ impl MarioVecEnv {
         &self.last_terminal_observations
     }
 
+    pub fn rgb_frames_hwc_into(&self, dst: &mut [u8]) {
+        let frame_stride = visual_rgb_frame_len();
+        debug_assert_eq!(dst.len(), self.config.num_envs * frame_stride);
+        let mut planar = vec![0; frame_stride];
+
+        if self.synced_lanes && self.config.num_envs > 1 {
+            write_visible_rgb_hwc(&self.envs[0], &mut planar, &mut dst[..frame_stride]);
+            for env_idx in 1..self.config.num_envs {
+                let start = env_idx * frame_stride;
+                dst.copy_within(0..frame_stride, start);
+            }
+            return;
+        }
+
+        if !self.synced_groups.is_empty() {
+            for group in &self.synced_groups {
+                let first = group[0];
+                let first_start = first * frame_stride;
+                write_visible_rgb_hwc(
+                    &self.envs[first],
+                    &mut planar,
+                    &mut dst[first_start..first_start + frame_stride],
+                );
+                for &lane in group.iter().skip(1) {
+                    let lane_start = lane * frame_stride;
+                    dst.copy_within(first_start..first_start + frame_stride, lane_start);
+                }
+            }
+            return;
+        }
+
+        for env_idx in 0..self.config.num_envs {
+            let start = env_idx * frame_stride;
+            write_visible_rgb_hwc(
+                &self.envs[env_idx],
+                &mut planar,
+                &mut dst[start..start + frame_stride],
+            );
+        }
+    }
+
     pub fn seed(&mut self, seed: u64) {
         self.rng = XorShift64::new(seed);
     }
@@ -1538,6 +1579,28 @@ fn copy_first_obs_to_remaining(obs: &mut [u8], obs_stride: usize) {
     for chunk in rest.chunks_exact_mut(obs_stride) {
         chunk.copy_from_slice(first);
     }
+}
+
+fn write_visible_rgb_hwc(env: &NesEmulator, planar: &mut [u8], dst: &mut [u8]) {
+    debug_assert_eq!(planar.len(), visual_rgb_frame_len());
+    debug_assert_eq!(dst.len(), visual_rgb_frame_len());
+    env.write_rgb_visible_frame_cropped(planar, 0, VISIBLE_FRAME_HEIGHT);
+    planar_rgb_to_hwc(planar, dst);
+}
+
+fn planar_rgb_to_hwc(src: &[u8], dst: &mut [u8]) {
+    let plane = VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT;
+    for idx in 0..plane {
+        let out = idx * RGB_CHANNELS;
+        dst[out] = src[idx];
+        dst[out + 1] = src[plane + idx];
+        dst[out + 2] = src[plane * 2 + idx];
+    }
+}
+
+#[inline]
+fn visual_rgb_frame_len() -> usize {
+    VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT * RGB_CHANNELS
 }
 
 fn copy_obs_lane(obs: &mut [u8], obs_stride: usize, src_lane: usize, dst_lane: usize) {
