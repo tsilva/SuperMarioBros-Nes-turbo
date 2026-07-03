@@ -1,4 +1,4 @@
-.PHONY: benchmark benchmark-local develop test test-python test-rust
+.PHONY: benchmark benchmark-local develop release test test-python test-rust
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -15,6 +15,9 @@ benchmark: benchmark-local
 
 benchmark-local:
 	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) $(BENCHMARK_ARGS)
+
+release:
+	scripts/release.py
 
 test-rust:
 	RUSTFLAGS="$(RUSTFLAGS_EXT)" cargo test --lib

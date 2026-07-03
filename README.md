@@ -140,6 +140,24 @@ uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode exte
 uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBros-NES_Level1 --rom-path /path/to/SuperMarioBros.nes
 ```
 
+## Release
+
+Release tags drive the GitHub Actions wheel build. From a clean, synced branch
+with the release environment installed, create the next minor release with:
+
+```bash
+uv sync --extra dev --group dev
+make release
+```
+
+Use `scripts/release.py --part patch`, `--part major`, or `--to 0.2.0` for
+other release shapes. The script refuses to run unless the current branch is
+clean and synced with its upstream. It verifies the target version is not already
+on PyPI, bumps `pyproject.toml` and `Cargo.toml`, refreshes lockfiles, runs local
+gates, commits `Release v<version>`, creates the matching tag, and pushes the
+branch plus tag. The pushed tag triggers the release wheel workflow; publishing
+to PyPI remains a separate manual step.
+
 ## Fixed-host benchmark target
 
 Use `stable-retro-turbo==1.0.1.post1` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the fixed `beast-3` CPU host.
