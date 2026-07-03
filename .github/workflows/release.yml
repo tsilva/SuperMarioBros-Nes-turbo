@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-wheels-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -179,7 +179,7 @@ jobs:
       - name: Upload final wheel bundle
         uses: actions/upload-artifact@v4
         with:
-          name: release-wheels-v${{ needs.validate.outputs.version }}
+          name: release-v${{ needs.validate.outputs.version }}
           path: |
             wheelhouse-v${{ needs.validate.outputs.version }}-macos/*.whl
             wheelhouse-v${{ needs.validate.outputs.version }}-linux/*.whl
