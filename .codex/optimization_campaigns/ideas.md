@@ -21,163 +21,6 @@ evidence, expected host benchmark signal, implementation size, correctness risk,
 and the existing reject/keep ledger. Local profiles rank candidates only; the
 fixed host benchmark is the acceptance source of truth.
 
-### IDEA-20260701-002: Fast-Forward SMB Sprite-0 Polling
-
-- Status: ready
-- Perspective: emulator-core
-- Estimated ROI: highest. Hot in both policy-completion and grouped-lane
-  profiles, narrow PC/routine target, and likely enough CPU-step removal to show
-  through fixed-host variance.
-- Hypothesis: SMB has a known sprite-0 wait loop that repeatedly reads
-  `PPUSTATUS` until the sprite-0 bit is set. The emulator already has a coarse
-  PPU event model and a committed SMB idle-jump fast-forward; a ROM-signature
-  guarded sprite-0 polling fast-forward could remove many interpreter dispatches
-  while preserving frame timing.
-- Target files: `src/emulator.rs`
-- Prior evidence: `src/emulator.rs` models `PPU_SPRITE0_DOT` and has
-  `SMB_IDLE_JMP_PC` fast-forward support, but no committed sprite-0 poll
-  fast-forward. Prior ROM analysis identified the loop around `$8150`. The
-  2026-07-01 profiler now makes this the highest-priority candidate: policy
-  completion top exact PCs were `$8150`, `$8153`, and `$8155`, and the hottest
-  16-byte range was `$8150-$815F`; the canonical local grouped-lane profile
-  showed the same hottest exact PCs and range.
-- Plan: Guard on exact PRG bytes and current PC. Only fast-forward when the
-  sprite-0 status bit is clear. Advance pending PPU cycles to the next event,
-  update CPU cycle guard, and preserve `PPUSTATUS` read side effects including
-  clearing vblank and resetting the first-write latch.
-- Contract risks: NMI timing drift, incorrect `A`/ZN flags after the skipped
-  reads, or missing `PPUSTATUS` side effects.
-- Required checks: Add a targeted regression for the guarded loop if practical,
-  then run `cargo fmt --check`, `cargo check --release`,
-  `.venv/bin/python -m maturin develop --release`, `make test`, and the
-  fixed-host paired benchmark before accepting.
-- Expected benchmark signal: Candidate should show a robust paired speedup if
-  this loop is hot in the first four level states; rough expectation `+3%` to
-  `+12%`.
-
-### IDEA-20260701-004: Specialize Controller Polling Loop Safely
-
-- Status: ready
-- Perspective: emulator-core
-- Estimated ROI: high. Smaller expected upside than sprite-0, but the hot
-  range is narrow and the emulator already stores controller state compactly.
-- Hypothesis: SMB polls controller state through repeated `$4016` reads in NMI.
-  For this emulator, controller state is already a compact byte. A guarded
-  routine-level specialization could materialize the same input result with far
-  fewer interpreted instructions.
-- Target files: `src/emulator.rs`
-- Prior evidence: The core already implements serial controller reads, and the
-  benchmark action set uses deterministic per-frame button bytes. Prior ROM
-  analysis identified controller polling around `$8E5C`. The 2026-07-01
-  profiler strengthens this: `$8E70-$8E7F` was the third-hottest 16-byte range
-  in the policy-completion profile and was also hot in the canonical local
-  grouped-lane profile.
-- Plan: Use profiling first. If the poll loop is hot, add a narrowly guarded
-  fast path for the standard SMB controller routine that preserves RAM outputs,
-  accumulator flags, X/Y effects, and strobe semantics. Avoid changing the
-  public action mapping.
-- Contract risks: Very high if edge-triggered button handling, two-player reads,
-  or A/B/start filtering differs from the ROM routine. Reject on any parity
-  mismatch.
-- Required checks: Add a focused controller-routine equivalence test or a
-  step-sequence parity check with `noop`, `right`, `right_a`, and `right_a_b`,
-  then run required checks and the fixed-host paired benchmark.
-- Expected benchmark signal: Rough expectation `+1%` to `+5%`; the value is
-  mainly compounding with other PC-specific fast-forwards.
-
-### IDEA-20260701-005: Cache Sprite Overlay Background Priority Data
-
-- Status: ready
-- Perspective: ppu-render
-- Estimated ROI: medium-high. Rendering/resize is a material bucket, but prior
-  broad resize rewrites were rejected, so keep this narrow and measurement-led.
-- Hypothesis: The default grayscale renderer writes a cropped native frame and
-  then area-resizes. Sprite priority handling can trigger repeated background
-  opacity/color lookups. A measured cache of background opacity/color for the
-  default crop may reduce sprite overlay work without revisiting previously
-  losing direct-resize experiments.
-- Target files: `src/emulator.rs`
-- Prior evidence: Prior fused/default-area and direct nametable variants were
-  discarded, so this should target sprite/background priority lookups rather
-  than another broad resize rewrite. The 2026-07-01 policy-completion profile
-  measured rendering/maxpool capture as the largest non-CPU bucket
-  (`396ms` rendering plus `55ms` resize over 481 env steps). The canonical
-  local grouped-lane validation profile also showed render and resize as
-  material buckets, so a narrow sprite/background priority cache is worth
-  measuring once CPU fast-forwards are tried.
-- Plan: Add or use profiler counters to isolate sprite overlay/background
-  priority work. If significant, prototype a default-path scratch representation
-  that records background gray and opacity once for the cropped region and lets
-  sprite overlay reuse it. Do not combine with resize or layout rewrites in the
-  same candidate.
-- Contract risks: Sprite priority, transparency, left-edge clipping, palette
-  mirroring, or scroll behavior can regress visually.
-- Required checks: Existing scratch-resize and stable-retro parity tests are
-  mandatory; add a targeted sprite-priority parity case if needed, then run the
-  required checks and the fixed-host paired benchmark.
-- Expected benchmark signal: Rough expectation `+3%` to `+8%` only if sprite
-  overlay is a measured hotspot; discard quickly if the extra cache hurts
-  locality.
-
-### IDEA-20260701-003: Profile-Guided Audio Routine Fast-Forward
-
-- Status: ready
-- Perspective: emulator-core
-- Estimated ROI: medium. The `$F200` page is hot, but the side-effect proof is
-  harder than sprite-0/controller polling and the safe skip boundary is less
-  obvious.
-- Hypothesis: The emulator ignores APU audio output, but the SMB sound engine
-  still burns CPU instructions and writes audio registers. If profiling shows a
-  hot, side-effect-limited audio routine, a ROM-signature guarded fast-forward
-  could preserve gameplay-facing RAM while skipping audio-only work.
-- Target files: `src/emulator.rs`
-- Prior evidence: The performance plan explicitly accepts no-audio scope. ROM
-  analysis found the NMI path calling the sound routine around `$F2D0`, while
-  `cpu_write` ignores most APU registers except controller/DMA surfaces. The
-  2026-07-01 policy-completion profile had `$F200-$F2FF` as the second-hottest
-  PC page, while the canonical local grouped-lane profile also kept `$F200`
-  hot. This should be investigated after the narrower `$8150` sprite-0 loop.
-- Plan: First use the prerequisite profiler to confirm hot PCs. If audio work
-  is hot, identify a narrow routine or loop whose only observable effects are
-  APU writes and internal sound RAM. Prototype a guarded fast-forward or no-op
-  return only for the expected SMB PRG signature.
-- Contract risks: SMB sound RAM may interact with timers, pause state, or other
-  gameplay flags. This should be abandoned unless the profiler and parity tests
-  make the side effects clear.
-- Required checks: Add a targeted smoke/parity check over Level1-1 through
-  Level1-4 startup and gameplay frames, then run the full required checks and
-  fixed-host paired benchmark.
-- Expected benchmark signal: Only worth keeping if robust paired speedup is
-  clearly positive; rough expectation `+2%` to `+8%` if audio is hot.
-
-### IDEA-20260701-007: Hot Basic-Block Interpreter Prototype
-
-- Status: ready
-- Perspective: emulator-core
-- Estimated ROI: medium-low. Possible high upside, but implementation cost and
-  silent-corruption risk are much higher than PC-specific fast-forwards.
-- Hypothesis: The CPU core is still a large opcode `match`. For a fixed SMB
-  NROM, hot side-effect-free basic blocks could be decoded once and executed
-  with fewer fetch/decode branches while preserving cycle counts and memory
-  side effects.
-- Target files: `src/emulator.rs`
-- Prior evidence: A broad "inline CPU step interpreter" candidate was already
-  discarded. This idea should only proceed after profiler data identifies a
-  small set of hot PCs that are stable across Level1-1 through Level1-4. The
-  2026-07-01 profiles show a concentrated hot set (`$8150-$815F`,
-  `$8220-$822F`, `$8E70-$8E7F`, `$F200-$F2FF`), but the safer first pass is
-  still PC-specific fast-forwarding before a general block-cache prototype.
-- Plan: Build a tiny, opt-in block cache for one or two hot blocks first.
-  Restrict blocks to instructions with well-understood RAM/PRG accesses, stop
-  at branches, JSR/RTS, PPU/controller reads, DMA, and interrupt boundaries.
-- Contract risks: High. Any incorrect cycle count, flag update, interrupt
-  boundary, or memory side effect can silently corrupt gameplay.
-- Required checks: Add targeted CPU-block equivalence tests if implemented,
-  run the full required checks, and require a strong fixed-host paired result before
-  accepting.
-- Expected benchmark signal: Unknown; possible `+5%` to `+15%` for a successful
-  very narrow block cache, but likely discard if complexity grows.
-
 ### IDEA-20260701-006: Tune Rayon Chunking For Group Leaders
 
 - Status: ready
@@ -209,9 +52,88 @@ fixed host benchmark is the acceptance source of truth.
 - Expected benchmark signal: Rough expectation `+1%` to `+4%`; discard quickly
   if host variance or scheduling overhead hides the signal.
 
-## In Progress
-
 ## Done
+
+### IDEA-20260701-007: Hot Basic-Block Interpreter Prototype
+
+- Status: keep-small-gain-combined
+- Perspective: emulator-core
+- Result: restored as commit `1c2178d` after combined validation versus `main`;
+  standalone trial commit `a262398`, artifact
+  `artifacts/benchmarks/host-results/host-compare-2026-07-02-220902-B702255342113-Ca262398ee7d6/aggregate.json`.
+- Reason: The bounded prototype specialized SMB's `$8223` OAM clear helper
+  rather than adding a broad block cache. It passed `cargo fmt --check`,
+  `cargo check --release`, `.venv/bin/python -m maturin develop --release`,
+  and `make test`, including an interpreted-routine equivalence test. Full
+  official beast-3 comparison versus `7022553` measured median pair ratio
+  `1.0352329816719152`, CI95 `[1.0306466330220425, 1.0369758374516294]`,
+  and `11/11` faster pairs. This was a real positive signal but below the
+  campaign's original per-candidate `>=5%` keep threshold. On 2026-07-03 the
+  change was restored on top of the kept sprite-0 polling optimization and
+  compared directly against `main` (`33c273d`) in a high-confidence beast-3
+  21-pair run. The combined branch measured median pair ratio
+  `1.0821469471532668`, CI95 `[1.080402979603871, 1.0859394974851821]`, and
+  `21/21` faster pairs at artifact
+  `artifacts/benchmarks/host-results/host-compare-2026-07-03-102429-B33c273d4ef30-C1c2178db0ca3/aggregate.json`.
+  The strict IQR outlier gate still flagged pair ratios 1 and 4, but all pair
+  ratios were positive (`1.069x` minimum), MAD outliers were empty, run-median
+  CV was below 1%, and the bootstrap lower bound stayed above `+8%`, so the
+  combined change was accepted for merge.
+
+### IDEA-20260701-003: Profile-Guided Audio Routine Fast-Forward
+
+- Status: discard
+- Perspective: emulator-core
+- Result: analysis-only discard, diagnostic artifact
+  `artifacts/benchmarks/local-profile-audio-candidate-baseline-20260702.json`.
+- Reason: A high-`top_n` local profiler pass on the accepted `7022553` baseline
+  showed the hot `$F200-$F2FF` page is mostly sprite/object helper code
+  (`$F1F6-$F2C9`) that writes gameplay-visible sprite RAM around `$0200`, not
+  a side-effect-limited audio loop. The likely audio entry at `$F2D0` and
+  immediate follow-up range `$F2D0-$F2EF` accounted for only about `310k` of
+  `108.5M` CPU steps in the diagnostic run. A narrow audio skip cannot plausibly
+  reach the `>=5%` keep threshold, while a broader `$F2xx` skip would be
+  correctness-risky, so no beast-3 benchmark was spent.
+
+### IDEA-20260701-005: Cache Sprite Overlay Background Priority Data
+
+- Status: discard
+- Perspective: ppu-render
+- Result: commit `ef959e1`, artifact
+  `artifacts/benchmarks/host-results/host-compare-2026-07-02-213419-B702255342113-Cef959e1f9b2d/aggregate.json`.
+- Reason: A narrow merge of background opacity/color lookup for behind-background
+  sprite priority paths passed the full local checks, including a targeted
+  sprite-priority regression test, but full official beast-3 comparison versus
+  `7022553` measured median pair ratio `0.993356136665428`, CI95
+  `[0.9910008932257317, 0.9986968827492797]`, and only `1/11` faster pairs.
+  The aggregate was valid and below both neutral and the `>=5%` keep threshold.
+
+### IDEA-20260701-002: Fast-Forward SMB Sprite-0 Polling
+
+- Status: keep
+- Perspective: emulator-core
+- Result: commit `7022553`, artifact
+  `artifacts/benchmarks/host-results/host-compare-2026-07-02-202650-B86a3a5f4602f-C702255342113/aggregate.json`.
+- Reason: Full official beast-3 paired comparison versus `86a3a5f` measured
+  median pair ratio `1.0525804254262712`, CI95
+  `[1.0487970667130555, 1.0600049333144261]`, and `11/11` faster pairs.
+  Required checks passed before benchmarking. The load snapshot peak was caused
+  by the benchmark itself on an otherwise calm 12-CPU host and is recorded in
+  the aggregate.
+
+### IDEA-20260701-004: Specialize Controller Polling Loop Safely
+
+- Status: discard
+- Perspective: emulator-core
+- Result: commit `d546564`, artifact
+  `artifacts/benchmarks/host-results/host-compare-2026-07-02-210407-B702255342113-Cd546564be8c5/aggregate.json`.
+- Reason: Whole-routine specialization passed `make test`, including a
+  controller routine equivalence test that caught and fixed the serial bit
+  reversal before benchmarking, but full official beast-3 comparison versus
+  `7022553` measured median pair ratio `0.9419859635865181`, CI95
+  `[0.9392962361088418, 0.9432440777348456]`, and `0/11` faster pairs. Host
+  load and run-median CV were clean; one pair-ratio IQR outlier was flagged but
+  the conclusion is still a clear discard.
 
 ### IDEA-20260630-D01: Group Repeated Saved-State Lanes
 
