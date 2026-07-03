@@ -241,9 +241,9 @@ Each experiment:
 5. Run required checks.
 6. Commit the candidate before benchmarking.
 7. Run exactly one `/host-benchmark` comparison from the current baseline commit
-   to that candidate commit. The host-benchmark skill may escalate from quick to
-   full official inside that single comparison according to its preregistered
-   gates.
+   to that candidate commit. The host-benchmark skill may continue through its
+   sequential convergence checkpoints inside that single comparison according to
+   its preregistered gates.
 8. Parse the copied local `aggregate.json` and append a result row with the host
    decision fields.
 9. Decide:

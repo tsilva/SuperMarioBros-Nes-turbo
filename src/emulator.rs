@@ -1576,6 +1576,9 @@ impl NesEmulator {
         let before = self.xscroll_lo;
         self.run_frame(action.buttons());
         self.refresh_smb_state();
+        if self.native_scenario_done() {
+            self.done = true;
+        }
         if self.terminate_on_flag && self.x_pos >= 3160 {
             self.done = true;
         }
@@ -1593,6 +1596,9 @@ impl NesEmulator {
         self.run_frame_profiled(action.buttons(), profiler);
         profiler.record_frame_step(start.elapsed());
         self.refresh_smb_state();
+        if self.native_scenario_done() {
+            self.done = true;
+        }
         if self.terminate_on_flag && self.x_pos >= 3160 {
             self.done = true;
         }
@@ -1719,6 +1725,11 @@ impl NesEmulator {
     #[inline]
     pub fn is_done(&self) -> bool {
         self.done
+    }
+
+    #[inline]
+    fn native_scenario_done(&self) -> bool {
+        self.lives == -1
     }
 
     fn run_frame(&mut self, buttons: u8) {

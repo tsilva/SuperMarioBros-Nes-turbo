@@ -86,9 +86,11 @@ class ComparisonConfig:
     include_dones: bool
     include_infos: bool
     stop_on_done: bool
+    fixed_action: str | None
     output_json: Path | None
     allow_version_mismatch: bool
     preprocessing_matrix: bool
+    termination_matrix: bool
 
 
 class ComparisonFailure(AssertionError):
@@ -178,6 +180,11 @@ def parse_args() -> ComparisonConfig:
     parser.add_argument("--skip-rewards", action="store_true")
     parser.add_argument("--skip-dones", action="store_true")
     parser.add_argument("--skip-infos", action="store_true")
+    parser.add_argument(
+        "--action",
+        default=None,
+        help="Use one fixed action name from --action-set instead of a seeded random trace.",
+    )
     parser.set_defaults(stop_on_done=False)
     parser.add_argument(
         "--stop-on-done",
@@ -202,6 +209,14 @@ def parse_args() -> ComparisonConfig:
         action="store_true",
         help="Run obs-only comparisons for raw RGB, grayscale, cropped, and resized obs.",
     )
+    parser.add_argument(
+        "--termination-matrix",
+        action="store_true",
+        help=(
+            "Run no-op done-parity cases for native-only, level_change, life_loss, "
+            "and life_loss+level_change termination."
+        ),
+    )
     args = parser.parse_args()
 
     positive = {
@@ -222,6 +237,9 @@ def parse_args() -> ComparisonConfig:
         parser.error("--noop-reset-max must be non-negative")
     if not 0.0 <= args.sticky_action_prob <= 1.0:
         parser.error("--sticky-action-prob must be between 0.0 and 1.0")
+    if args.action is not None and args.action not in ACTION_SETS[args.action_set]:
+        available = ", ".join(ACTION_SETS[args.action_set])
+        parser.error(f"--action must be one of --action-set {args.action_set}: {available}")
 
     return ComparisonConfig(
         rom_path=resolve_required_rom_path(args.rom_path),
@@ -254,9 +272,11 @@ def parse_args() -> ComparisonConfig:
         include_dones=not args.skip_dones,
         include_infos=not args.skip_infos,
         stop_on_done=args.stop_on_done,
+        fixed_action=args.action,
         output_json=args.output_json,
         allow_version_mismatch=args.allow_version_mismatch,
         preprocessing_matrix=args.preprocessing_matrix,
+        termination_matrix=args.termination_matrix,
     )
 
 
@@ -353,6 +373,7 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosNesTurboVecEnv:
         done_on["life_loss"] = ("lives", "decrease")
     if config.terminate_on_level_change:
         done_on["level_change"] = (("levelHi", "levelLo"), "change")
+    done_on_config = done_on if done_on else []
 
     env = SuperMarioBrosNesTurboVecEnv(
         config.game,
@@ -375,7 +396,7 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosNesTurboVecEnv:
         sticky_action_prob=config.sticky_action_prob,
         reward_clip=False,
         info_filter="all",
-        done_on=done_on or None,
+        done_on=done_on_config,
     )
     env.seed(config.seed)
     return env
@@ -412,7 +433,12 @@ def make_retro_env(config: ComparisonConfig):
         "obs_layout": "chw",
         "obs_copy": config.obs_copy,
     }
-    kwargs["done_on"] = SANDBOX_SB3_LEVEL1_1_DONE_ON
+    done_on = {}
+    if config.terminate_on_life_loss:
+        done_on["life_loss"] = ("lives", "decrease")
+    if config.terminate_on_level_change:
+        done_on["level_change"] = (("levelHi", "levelLo"), "change")
+    kwargs["done_on"] = done_on
     env_class = getattr(retro, "Retro" "Vec" "Env")
     env = env_class(config.game, **kwargs)
     if hasattr(env, "seed"):
@@ -441,6 +467,13 @@ def stable_action_masks(action_names: tuple[str, ...], buttons: tuple[str | None
 
 
 def generate_action_trace(config: ComparisonConfig) -> np.ndarray:
+    if config.fixed_action is not None:
+        action_index = ACTION_SETS[config.action_set].index(config.fixed_action)
+        return np.full(
+            (config.steps, config.num_envs),
+            action_index,
+            dtype=np.uint8,
+        )
     rng = np.random.default_rng(config.seed)
     return rng.integers(
         0,
@@ -598,7 +631,7 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
             retro_actions = retro_masks_by_action[fast_actions]
 
             fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step_gymnasium(
-                fast_actions,
+                retro_actions,
             )
             retro_obs, retro_rewards, retro_dones, retro_infos = retro_env.step(retro_actions)
             fast_native_dones = np.asarray(fast_terminated | fast_truncated, dtype=np.bool_)
@@ -749,6 +782,92 @@ def run_preprocessing_matrix(config: ComparisonConfig) -> dict[str, Any]:
     }
 
 
+def termination_matrix_configs(config: ComparisonConfig) -> list[tuple[str, ComparisonConfig]]:
+    common = {
+        "num_envs": 1,
+        "env_threads": 1,
+        "steps": max(config.steps, 7600),
+        "include_obs": False,
+        "include_rewards": True,
+        "include_dones": True,
+        "include_infos": True,
+        "stop_on_done": True,
+        "fixed_action": "noop",
+    }
+    return [
+        (
+            "native_only",
+            replace(
+                config,
+                terminate_on_life_loss=False,
+                terminate_on_level_change=False,
+                **common,
+            ),
+        ),
+        (
+            "level_change",
+            replace(
+                config,
+                terminate_on_life_loss=False,
+                terminate_on_level_change=True,
+                **common,
+            ),
+        ),
+        (
+            "life_loss",
+            replace(
+                config,
+                terminate_on_life_loss=True,
+                terminate_on_level_change=False,
+                **common,
+            ),
+        ),
+        (
+            "life_loss_level_change",
+            replace(
+                config,
+                terminate_on_life_loss=True,
+                terminate_on_level_change=True,
+                **common,
+            ),
+        ),
+    ]
+
+
+def run_termination_matrix(config: ComparisonConfig) -> dict[str, Any]:
+    results = []
+    status = "ok"
+    for name, matrix_config in termination_matrix_configs(config):
+        try:
+            result = run_comparison(matrix_config)
+            results.append(
+                {
+                    "name": name,
+                    "status": "ok",
+                    "compared_steps": result["compared_steps"],
+                    "config": result["config"],
+                    "final_fast_obs": result["final_fast_obs"],
+                    "final_retro_obs": result["final_retro_obs"],
+                },
+            )
+        except ComparisonFailure as exc:
+            status = "mismatch"
+            results.append(
+                {
+                    "name": name,
+                    "status": "mismatch",
+                    "config": config_json(matrix_config),
+                    "failure": exc.payload,
+                },
+            )
+    return {
+        "status": status,
+        "mode": "termination_matrix",
+        "config": config_json(config),
+        "results": results,
+    }
+
+
 def config_json(config: ComparisonConfig) -> dict[str, Any]:
     return {
         "rom_path": str(config.rom_path),
@@ -805,8 +924,10 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "include_dones": config.include_dones,
         "include_infos": config.include_infos,
         "stop_on_done": config.stop_on_done,
+        "fixed_action": config.fixed_action,
         "allow_version_mismatch": config.allow_version_mismatch,
         "preprocessing_matrix": config.preprocessing_matrix,
+        "termination_matrix": config.termination_matrix,
     }
 
 
@@ -816,12 +937,13 @@ def emit_result(result: dict[str, Any], output_json: Path | None) -> None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(text + "\n", encoding="utf-8")
     if result["status"] == "ok":
-        if result.get("mode") == "preprocessing_matrix":
+        if result.get("mode") in {"preprocessing_matrix", "termination_matrix"}:
             steps = ",".join(
                 f"{item['name']}:{item['compared_steps']}" for item in result["results"]
             )
+            label = result["mode"]
             print(
-                "comparison_matrix=ok "
+                f"{label}=ok "
                 f"steps={steps} "
                 f"seed={result['config']['seed']}",
             )
@@ -840,6 +962,12 @@ def main() -> None:
     config = parse_args()
     if config.preprocessing_matrix:
         result = run_preprocessing_matrix(config)
+        emit_result(result, config.output_json)
+        if result["status"] != "ok":
+            raise SystemExit(1)
+        return
+    if config.termination_matrix:
+        result = run_termination_matrix(config)
         emit_result(result, config.output_json)
         if result["status"] != "ok":
             raise SystemExit(1)

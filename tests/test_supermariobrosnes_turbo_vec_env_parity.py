@@ -34,6 +34,35 @@ def require_stable_retro_oracle() -> None:
     assert version == compare.EXPECTED_STABLE_RETRO_VERSION
 
 
+def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
+    try:
+        return SuperMarioBrosNesTurboVecEnv(
+            compare.DEFAULT_STABLE_RETRO_GAME,
+            state="Level1-1",
+            num_envs=1,
+            num_threads=1,
+            render_mode="rgb_array",
+            use_restricted_actions=Actions.ALL,
+            obs_crop=(32, 0, 0, 0),
+            obs_resize=(84, 84),
+            obs_grayscale=True,
+            obs_resize_algorithm="area",
+            obs_layout="chw",
+            frame_skip=4,
+            frame_stack=4,
+            maxpool_last_two=False,
+            noop_reset_max=0,
+            sticky_action_prob=0.0,
+            reward_clip=False,
+            info_filter="all",
+            done_on=done_on,
+        )
+    except ValueError as exc:
+        if "ROM path required" in str(exc):
+            pytest.skip(str(exc))
+        raise
+
+
 def test_native_vec_env_name_is_public() -> None:
     assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
     assert native.SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
@@ -220,6 +249,60 @@ def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
         assert rewards.shape == (1,)
         assert dones.shape == (1,)
         assert infos == [{}]
+    finally:
+        env.close()
+
+
+def test_native_turbo_vec_env_empty_done_on_keeps_native_game_over_done() -> None:
+    env = make_level1_1_noop_probe(done_on=[])
+    try:
+        env.reset()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+
+        first_life_loss = second_life_loss = None
+        for step in range(1, 7600):
+            _obs, _rewards, dones, infos = env.step(masks)
+            done = bool(dones[0])
+            lives = int(infos[0]["lives"])
+            if lives == 1 and first_life_loss is None:
+                first_life_loss = (step, done)
+            if lives == 0 and second_life_loss is None:
+                second_life_loss = (step, done)
+            if done:
+                assert first_life_loss == (2456, False)
+                assert second_life_loss == (4991, False)
+                assert step == 7527
+                assert lives == 2
+                assert "done_on_info" not in infos[0]
+                break
+        else:
+            pytest.fail("native game-over scenario done did not fire by step 7599")
+    finally:
+        env.close()
+
+
+def test_native_turbo_vec_env_life_loss_done_on_is_additive_and_earlier() -> None:
+    env = make_level1_1_noop_probe(done_on=["life_loss"])
+    try:
+        env.reset()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+
+        for step in range(1, 3000):
+            _obs, _rewards, dones, infos = env.step(masks)
+            if not bool(dones[0]):
+                continue
+            assert step == 2456
+            assert infos[0]["done_on_info"] == {
+                "life_loss": {
+                    "op": "decrease",
+                    "keys": ["lives"],
+                    "prev": [2],
+                    "next": [1],
+                },
+            }
+            break
+        else:
+            pytest.fail("life_loss done_on rule did not fire before game-over")
     finally:
         env.close()
 
