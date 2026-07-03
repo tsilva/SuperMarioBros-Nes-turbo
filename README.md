@@ -155,8 +155,8 @@ other release shapes. The script refuses to run unless the current branch is
 clean and synced with its upstream. It verifies the target version is not already
 on PyPI, bumps `pyproject.toml` and `Cargo.toml`, refreshes lockfiles, runs local
 gates, commits `Release v<version>`, creates the matching tag, and pushes the
-branch plus tag. The pushed tag triggers the release wheel workflow; publishing
-to PyPI remains a separate manual step.
+branch plus tag. The pushed tag triggers the release workflow, which builds,
+audits, and publishes the wheels to PyPI via trusted publishing.
 
 ## Fixed-host benchmark target
 
