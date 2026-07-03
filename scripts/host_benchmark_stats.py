@@ -153,11 +153,21 @@ def single_ref_convergence(
         "no_iqr_mad_outliers": no_outlier_flags(diagnostics),
         "host_load_ok": host_load_ok,
     }
+    stop_gates = {
+        "checkpoint_stability_window_met": gates["checkpoint_stability_window_met"],
+        "checkpoint_median_span_below_0_25_percent": gates[
+            "checkpoint_median_span_below_0_25_percent"
+        ],
+        "bootstrap_ci_width_below_0_5_percent": gates[
+            "bootstrap_ci_width_below_0_5_percent"
+        ],
+    }
     validity_passed = all(gates.values())
+    stable_enough_to_stop = all(stop_gates.values())
     max_samples_reached = len(invocation_medians) >= checkpoints[-1]
-    should_stop = validity_passed or max_samples_reached
+    should_stop = stable_enough_to_stop or max_samples_reached
 
-    if validity_passed:
+    if stable_enough_to_stop:
         decision = "converged"
     elif max_samples_reached:
         decision = "max_samples_no_convergence"
@@ -179,6 +189,8 @@ def single_ref_convergence(
         "checkpoint_stability_window": stability_window,
         "checkpoint_stability_relative_span": span,
         "outlier_diagnostics": diagnostics,
+        "stop_gates": stop_gates,
+        "stable_enough_to_stop": stable_enough_to_stop,
         "validity_gates": gates,
         "validity_passed": validity_passed,
         "should_stop": should_stop,

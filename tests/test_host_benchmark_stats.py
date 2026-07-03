@@ -58,6 +58,43 @@ def test_single_ref_convergence_continues_while_checkpoint_median_drifts() -> No
     assert result["validity_gates"]["checkpoint_median_span_below_0_25_percent"] is False
 
 
+def test_single_ref_convergence_stops_when_median_stable_despite_warning_gates() -> None:
+    medians = [
+        16160.52,
+        16129.77,
+        16079.20,
+        16494.38,
+        16162.69,
+        16434.90,
+        16132.28,
+        16146.40,
+        16147.74,
+        16140.30,
+        16402.33,
+        16109.06,
+        16135.47,
+        16138.91,
+        16140.30,
+    ]
+
+    result = single_ref_convergence(
+        medians,
+        samples_for(medians),
+        host_load_ok=False,
+    )
+
+    assert result["decision"] == "converged"
+    assert result["should_stop"] is True
+    assert result["stable_enough_to_stop"] is True
+    assert result["validity_passed"] is False
+    assert result["stop_gates"] == {
+        "checkpoint_stability_window_met": True,
+        "checkpoint_median_span_below_0_25_percent": True,
+        "bootstrap_ci_width_below_0_5_percent": True,
+    }
+    assert result["validity_gates"]["host_load_ok"] is False
+
+
 def test_comparison_convergence_uses_paired_ratio_checkpoints() -> None:
     pair_ratios = [
         1.052,
