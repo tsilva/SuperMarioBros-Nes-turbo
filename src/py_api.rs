@@ -11,13 +11,13 @@ use crate::vec_env::{
     DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, VecEnvConfig,
 };
 
-#[pyclass]
-pub struct SuperMarioBrosNesTurboVecEnv {
+#[pyclass(name = "_RetroVecEnv")]
+pub struct RetroVecEnv {
     inner: MarioVecEnv,
 }
 
 #[pymethods]
-impl SuperMarioBrosNesTurboVecEnv {
+impl RetroVecEnv {
     #[new]
     #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0))]
     pub fn new(
@@ -178,6 +178,33 @@ impl SuperMarioBrosNesTurboVecEnv {
     #[getter]
     pub fn initial_state_names(&self) -> Vec<String> {
         self.inner.initial_state_names()
+    }
+
+    pub fn initial_state_policy_names(&self) -> Vec<String> {
+        self.inner.initial_state_policy_names()
+    }
+
+    pub fn initial_state_weights(&self) -> Vec<f64> {
+        self.inner.initial_state_weights()
+    }
+
+    #[pyo3(signature = (initial_states, initial_state_names=None, initial_state_weights=None))]
+    pub fn set_initial_states(
+        &mut self,
+        initial_states: Vec<Vec<u8>>,
+        initial_state_names: Option<Vec<String>>,
+        initial_state_weights: Option<Vec<f64>>,
+    ) -> PyResult<()> {
+        let (initial_states, weighted_initial_states) = build_initial_states(
+            initial_states,
+            initial_state_names.unwrap_or_default(),
+            initial_state_weights,
+            self.inner.config().num_envs,
+        )?;
+        self.inner
+            .set_initial_states(initial_states, weighted_initial_states)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        Ok(())
     }
 
     pub fn active_state_indices(&self) -> Vec<i32> {
@@ -495,7 +522,7 @@ impl SuperMarioBrosNesTurboVecEnv {
     }
 }
 
-impl SuperMarioBrosNesTurboVecEnv {
+impl RetroVecEnv {
     fn validate_obs_shape(&self, obs: &PyReadwriteArray4<'_, u8>) -> PyResult<()> {
         let shape = obs.shape();
         let expected = self.obs_shape();
@@ -576,9 +603,9 @@ fn build_initial_states(
             ));
         }
         let total = weights.iter().try_fold(0.0, |acc, weight| {
-            if !weight.is_finite() || *weight <= 0.0 {
+            if !weight.is_finite() || *weight < 0.0 {
                 Err(PyValueError::new_err(
-                    "initial_state_weights must contain positive finite values",
+                    "initial_state_weights must contain non-negative finite values",
                 ))
             } else {
                 Ok(acc + *weight)
@@ -680,7 +707,7 @@ fn parse_done_on_info_rule(
 
 #[pymodule]
 fn _supermariobrosnes_turbo(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<SuperMarioBrosNesTurboVecEnv>()?;
+    m.add_class::<RetroVecEnv>()?;
     m.add("NES_WIDTH", NES_WIDTH)?;
     m.add("NES_HEIGHT", NES_HEIGHT)?;
     m.add("VISIBLE_FRAME_WIDTH", VISIBLE_FRAME_WIDTH)?;

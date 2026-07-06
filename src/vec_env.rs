@@ -209,6 +209,8 @@ pub struct MarioVecEnv {
     initial_states: Vec<InitialState>,
     weighted_initial_states: bool,
     active_state_indices: Vec<i32>,
+    active_initial_state_choices: Vec<i32>,
+    initial_state_names: Vec<String>,
     done_on_info_rules: Vec<DoneOnInfoRule>,
     done_on_info_baselines: Vec<InfoSnapshot>,
     last_done_on_info: Vec<Vec<FiredDoneOnInfoRule>>,
@@ -251,6 +253,8 @@ impl MarioVecEnv {
             initial_states,
             weighted_initial_states,
             active_state_indices: vec![-1; config.num_envs],
+            active_initial_state_choices: vec![-1; config.num_envs],
+            initial_state_names: Vec::new(),
             done_on_info_rules,
             done_on_info_baselines: vec![InfoSnapshot::default(); config.num_envs],
             last_done_on_info: vec![Vec::new(); config.num_envs],
@@ -263,8 +267,35 @@ impl MarioVecEnv {
             profiler: None,
             profile_shards: Vec::new(),
         };
+        env.intern_initial_state_names();
         env.reset_envs()?;
         Ok(env)
+    }
+
+    pub fn set_initial_states(
+        &mut self,
+        initial_states: Vec<InitialState>,
+        weighted_initial_states: bool,
+    ) -> Result<(), StateLoadError> {
+        self.initial_states = initial_states;
+        self.weighted_initial_states = weighted_initial_states;
+        self.intern_initial_state_names();
+        Ok(())
+    }
+
+    fn intern_initial_state_names(&mut self) {
+        for state in &mut self.initial_states {
+            if let Some(index) = self
+                .initial_state_names
+                .iter()
+                .position(|name| name == &state.name)
+            {
+                state.name_index = index as i32;
+            } else {
+                state.name_index = self.initial_state_names.len() as i32;
+                self.initial_state_names.push(state.name.clone());
+            }
+        }
     }
 
     fn reset_envs(&mut self) -> Result<(), StateLoadError> {
@@ -276,6 +307,7 @@ impl MarioVecEnv {
                 self.refresh_done_baseline(env_idx);
             }
             self.active_state_indices.fill(-1);
+            self.active_initial_state_choices.fill(-1);
             self.synced_lanes = !self.config.has_action_randomization();
             self.synced_groups.clear();
             return Ok(());
@@ -290,7 +322,8 @@ impl MarioVecEnv {
             } else {
                 first_state_index = Some(state_index);
             }
-            self.active_state_indices[env_idx] = state_index as i32;
+            self.active_state_indices[env_idx] = self.initial_states[state_index].name_index;
+            self.active_initial_state_choices[env_idx] = state_index as i32;
             self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
             self.last_actions[env_idx] = MarioAction::Noop as u8;
             self.apply_noop_reset(env_idx);
@@ -404,10 +437,30 @@ impl MarioVecEnv {
     }
 
     pub fn initial_state_names(&self) -> Vec<String> {
+        self.initial_state_names.clone()
+    }
+
+    pub fn initial_state_policy_names(&self) -> Vec<String> {
         self.initial_states
             .iter()
             .map(|state| state.name.clone())
             .collect()
+    }
+
+    pub fn initial_state_weights(&self) -> Vec<f64> {
+        if self.initial_states.is_empty() {
+            return Vec::new();
+        }
+        if !self.weighted_initial_states {
+            return vec![1.0 / self.initial_states.len() as f64; self.initial_states.len()];
+        }
+        let mut weights = Vec::with_capacity(self.initial_states.len());
+        let mut previous = 0.0;
+        for state in &self.initial_states {
+            weights.push((state.cumulative_weight - previous).max(0.0));
+            previous = state.cumulative_weight;
+        }
+        weights
     }
 
     pub fn active_state_indices(&self) -> &[i32] {
@@ -1025,6 +1078,9 @@ impl MarioVecEnv {
         }
         let active_state_index = self.active_state_indices[0];
         self.active_state_indices.fill(active_state_index);
+        let active_initial_state_choice = self.active_initial_state_choices[0];
+        self.active_initial_state_choices
+            .fill(active_initial_state_choice);
         let done_on_info_baseline = self.done_on_info_baselines[0];
         self.done_on_info_baselines.fill(done_on_info_baseline);
         self.synced_lanes = false;
@@ -1048,13 +1104,13 @@ impl MarioVecEnv {
 
         let mut groups: Vec<Vec<usize>> = Vec::new();
         'lanes: for lane in 0..self.config.num_envs {
-            let state_index = self.active_state_indices[lane];
+            let state_index = self.active_initial_state_choices[lane];
             if state_index < 0 {
                 continue;
             }
             let state_index = state_index as usize;
             for group in &mut groups {
-                let group_state_index = self.active_state_indices[group[0]] as usize;
+                let group_state_index = self.active_initial_state_choices[group[0]] as usize;
                 if self.initial_states[state_index].data
                     == self.initial_states[group_state_index].data
                 {
@@ -1433,6 +1489,7 @@ impl MarioVecEnv {
         if self.initial_states.is_empty() {
             self.envs[env_idx].reset();
             self.active_state_indices[env_idx] = -1;
+            self.active_initial_state_choices[env_idx] = -1;
             self.last_actions[env_idx] = MarioAction::Noop as u8;
             self.apply_noop_reset(env_idx);
             self.refresh_done_baseline(env_idx);
@@ -1440,7 +1497,8 @@ impl MarioVecEnv {
         }
 
         let state_index = self.initial_state_index_for_env(env_idx);
-        self.active_state_indices[env_idx] = state_index as i32;
+        self.active_state_indices[env_idx] = self.initial_states[state_index].name_index;
+        self.active_initial_state_choices[env_idx] = state_index as i32;
         self.envs[env_idx]
             .load_fceu_state(&self.initial_states[state_index].data)
             .expect("previously validated initial state failed to reload");
@@ -1520,6 +1578,7 @@ pub struct InitialState {
     name: String,
     data: Vec<u8>,
     cumulative_weight: f64,
+    name_index: i32,
 }
 
 impl InitialState {
@@ -1528,6 +1587,7 @@ impl InitialState {
             name,
             data,
             cumulative_weight,
+            name_index: -1,
         }
     }
 }

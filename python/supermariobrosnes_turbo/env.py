@@ -13,7 +13,7 @@ from typing import Any, Literal
 import numpy as np
 from gymnasium import spaces
 
-from ._supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv as _CoreSuperMarioBrosNesTurboVecEnv
+from ._supermariobrosnes_turbo import _RetroVecEnv as _CoreRetroVecEnv
 
 try:
     from stable_baselines3.common.vec_env import VecEnv as _SB3VecEnv
@@ -298,12 +298,14 @@ def _normalize_initial_state_config(
         state_weights: list[float] = []
         for index, (state_value, weight_value) in enumerate(state.items()):
             weight = float(weight_value)
-            if not np.isfinite(weight) or weight <= 0.0:
-                raise ValueError("weighted state values must be positive finite numbers")
+            if not np.isfinite(weight) or weight < 0.0:
+                raise ValueError("weighted state values must be non-negative finite numbers")
             initial_states.append(_load_initial_state(state_value, state_dir))
             state_names.append(_state_label(state_value, f"state-{index}"))
             state_weights.append(weight)
         total_weight = float(np.sum(state_weights))
+        if not np.isfinite(total_weight) or total_weight <= 0.0:
+            raise ValueError("weighted state values must sum to a positive finite number")
         return initial_states, tuple(state_names), [weight / total_weight for weight in state_weights]
 
     if isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview)):
@@ -785,7 +787,7 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             if self._needs_python_postprocess
             else self._output_resize_height
         )
-        self._core = _CoreSuperMarioBrosNesTurboVecEnv(
+        self._core = _CoreRetroVecEnv(
             _expand_rom_path(_resolve_rom_path(str(game), rom_path)),
             num_envs,
             frame_skip,
@@ -808,6 +810,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             sticky_action_prob,
         )
         self.initial_state_names = tuple(self._core.initial_state_names)
+        self._state_policy_names = tuple(self._core.initial_state_policy_names())
+        self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
         self.num_envs = self._core.num_envs
         self.num_threads = self.num_envs if num_threads is None else int(num_threads)
         self.num_buttons = len(NES_BUTTONS)
@@ -895,6 +899,39 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             else None
         )
         self._write_active_state_indices()
+
+    def set_state(self, state: Any) -> None:
+        """Update the state reset policy used by future resets and autoresets."""
+        state = _normalize_retro_state(state)
+        self._state_collection = isinstance(state, Mapping) or (
+            isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview))
+        )
+        initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
+            state,
+            None,
+            self.num_envs,
+        )
+        self._core.set_initial_states(
+            initial_states,
+            list(initial_state_names),
+            initial_state_weights,
+        )
+        self.initial_state_names = tuple(self._core.initial_state_names)
+        self._state_policy_names = tuple(self._core.initial_state_policy_names())
+        self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
+
+    def set_state_sampling_weights(self, weights: Mapping[str, float] | Sequence[float]) -> None:
+        if isinstance(weights, Mapping):
+            self.set_state(weights)
+            return
+        if isinstance(weights, (str, bytes, bytearray)) or not isinstance(weights, Sequence):
+            raise ValueError("state sampling weights must be a mapping or sequence")
+        if len(weights) != len(self._state_policy_names):
+            raise ValueError("state sampling weight sequence length must match current state policy")
+        self.set_state(dict(zip(self._state_policy_names, weights, strict=True)))
+
+    def state_sampling_weights(self) -> dict[str, float]:
+        return dict(zip(self._state_policy_names, self._state_sampling_weights, strict=True))
 
     def reset(
         self,
