@@ -1057,10 +1057,12 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             self._xscroll_hi,
             self._xscroll_lo,
         )
-        if np.any(self._terminated) or np.any(self._truncated):
+        has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
+        if has_terminal:
             self._write_active_state_indices()
-        self._write_done_on_info()
-        self._write_terminal_observations()
+            self._write_terminal_observations()
+        if self.done_on_info_rules:
+            self._write_done_on_info()
         return self._return_obs(), self._return_rewards(), self._terminated, self._truncated
 
     def _write_done_on_info(self) -> None:
