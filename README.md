@@ -75,7 +75,7 @@ uv sync --extra dev
 uv run maturin develop --release
 ```
 
-ROM files are not included in this repository. Pass `--rom-path` to scripts, set `SMB_ROM_PATH`, or provide `rom_path=` when constructing environments. Expected SHA-256 for the supported Super Mario Bros NES ROM:
+ROM files are not included in this repository. Pass `--rom-path` to scripts, set `SMB_ROM_PATH` in the environment or `.env`, or provide `rom_path=` when constructing environments. Expected SHA-256 for the supported Super Mario Bros NES ROM:
 
 ```text
 f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de

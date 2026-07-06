@@ -21,6 +21,9 @@ Run the checked-in deterministic runner from the repo root:
   --rom-path /path/to/SuperMarioBros.nes
 ```
 
+`--rom-path` may be omitted when `SMB_ROM_PATH` is set in the environment or in
+the repo-local `.env` file.
+
 The one-ref comparison form uses local `main` as baseline. Use `--dry-run` to
 inspect the exact run plan without creating archives or touching the benchmark
 run root.
@@ -135,6 +138,9 @@ Published SuperMarioBros-Nes-turbo:
 .venv/bin/python scripts/run_pypi_supermariobrosnes_turbo_benchmark.py \
   --rom-path /path/to/SuperMarioBros.nes
 ```
+
+Both PyPI baseline scripts also read `SMB_ROM_PATH` from the environment or
+repo-local `.env` when `--rom-path` is omitted.
 
 Use cached PyPI baselines until PyPI publishes a newer version or the workload
 hash changes.

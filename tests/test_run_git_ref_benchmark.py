@@ -4,12 +4,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.run_git_ref_benchmark import (
     BenchmarkPlan,
     BenchmarkRef,
     aggregate_single,
     decide_mode,
     load_snapshot_shell,
+    parse_args,
     parse_load1,
     uv_sync_command,
 )
@@ -28,6 +31,18 @@ def test_decide_mode_rejects_multi_ref_single() -> None:
         assert "--single requires exactly one ref" in str(exc)
     else:
         raise AssertionError("expected SystemExit")
+
+
+def test_parse_args_reads_rom_path_from_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SMB_ROM_PATH", raising=False)
+    (tmp_path / ".env").write_text("SMB_ROM_PATH=~/roms/SuperMarioBros.nes\n")
+
+    args = parse_args(["--single", "HEAD", "--dry-run"])
+
+    assert args.rom_path == str(Path("~/roms/SuperMarioBros.nes").expanduser())
 
 
 def test_parse_load1_extracts_unix_load_average() -> None:

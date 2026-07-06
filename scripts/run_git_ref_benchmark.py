@@ -27,6 +27,7 @@ try:
         single_ref_convergence,
         summary,
     )
+    from dotenv_utils import require_env_or_dotenv_path
 except ModuleNotFoundError:
     from scripts.benchmark_stats import (
         DEFAULT_COMPARISON_CHECKPOINTS,
@@ -36,6 +37,7 @@ except ModuleNotFoundError:
         single_ref_convergence,
         summary,
     )
+    from scripts.dotenv_utils import require_env_or_dotenv_path
 
 
 LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
@@ -705,7 +707,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("refs", nargs="+", help="single ref, candidate ref, or baseline candidate")
     parser.add_argument("--single", action="store_true", help="Benchmark one ref only.")
-    parser.add_argument("--rom-path", required=True)
+    parser.add_argument(
+        "--rom-path",
+        default=None,
+        help="ROM path on the benchmark machine. Defaults to SMB_ROM_PATH from the environment or .env.",
+    )
     parser.add_argument("--state-dir")
     parser.add_argument("--state-source", type=Path, default=DEFAULT_STATE_SOURCE)
     parser.add_argument("--run-root")
@@ -717,6 +723,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-finalize", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    args.rom_path = require_env_or_dotenv_path("SMB_ROM_PATH", "ROM path", args.rom_path)
 
     if args.run_root is None:
         args.run_root = str(LOCAL_ROOT)

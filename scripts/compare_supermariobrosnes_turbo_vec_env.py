@@ -110,7 +110,7 @@ def parse_args() -> ComparisonConfig:
         "--rom-path",
         type=Path,
         default=DEFAULT_ROM,
-        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH from the environment or .env.",
     )
     parser.add_argument(
         "--stable-retro-path",

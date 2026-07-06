@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from dotenv_utils import require_env_or_dotenv_path
+except ModuleNotFoundError:
+    from scripts.dotenv_utils import require_env_or_dotenv_path
+
 
 LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
@@ -285,7 +290,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=None, help="PyPI version; defaults to latest from PyPI JSON.")
     parser.add_argument("--python", default="3.14")
-    parser.add_argument("--rom-path", required=True, help="ROM path on the benchmark machine.")
+    parser.add_argument(
+        "--rom-path",
+        default=None,
+        help="ROM path on the benchmark machine. Defaults to SMB_ROM_PATH from the environment or .env.",
+    )
     parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/local-results/pypi-stable-retro-turbo"))
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)
@@ -296,7 +305,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--measured-invocations", type=int, default=11)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--keep-run-dir", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.rom_path = require_env_or_dotenv_path("SMB_ROM_PATH", "ROM path", args.rom_path)
+    return args
 
 
 def main(argv: list[str]) -> int:

@@ -137,15 +137,39 @@ class Integrations(Flag):
 
 
 def default_rom_path() -> Path | None:
-    value = os.environ.get(ROM_PATH_ENV_VAR)
+    value = os.environ.get(ROM_PATH_ENV_VAR) or _dotenv_value(ROM_PATH_ENV_VAR)
     return Path(value).expanduser() if value else None
+
+
+def _dotenv_value(name: str, dotenv_path: Path = Path(".env")) -> str | None:
+    try:
+        lines = dotenv_path.read_text().splitlines()
+    except FileNotFoundError:
+        return None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        key, separator, raw_value = stripped.partition("=")
+        if separator != "=" or key.strip() != name:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value or None
+    return None
 
 
 def resolve_required_rom_path(path: str | Path | None = None) -> Path:
     if path is None:
         path = default_rom_path()
     if path is None:
-        raise ValueError(f"ROM path required; pass rom_path or set {ROM_PATH_ENV_VAR}")
+        raise ValueError(
+            f"ROM path required; pass rom_path or set {ROM_PATH_ENV_VAR} in the environment or .env"
+        )
     return Path(path).expanduser()
 
 

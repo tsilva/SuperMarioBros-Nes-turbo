@@ -1,4 +1,5 @@
 .pypirc
+/.env
 /target/
 /target-release/
 /artifacts/

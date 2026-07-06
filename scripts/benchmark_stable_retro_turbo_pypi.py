@@ -40,8 +40,33 @@ ACTION_BUTTONS = {
 
 def resolve_required_rom_path(path: Path | None = None) -> Path:
     if path is None:
-        raise ValueError(f"ROM path required; pass --rom-path or set {ROM_PATH_ENV_VAR}")
+        path = dotenv_rom_path()
+    if path is None:
+        raise ValueError(
+            f"ROM path required; pass --rom-path or set {ROM_PATH_ENV_VAR} in the environment or .env"
+        )
     return path.expanduser()
+
+
+def dotenv_rom_path(dotenv_path: Path = Path(".env")) -> Path | None:
+    try:
+        lines = dotenv_path.read_text().splitlines()
+    except FileNotFoundError:
+        return None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        key, separator, raw_value = stripped.partition("=")
+        if separator != "=" or key.strip() != ROM_PATH_ENV_VAR:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return Path(value).expanduser() if value else None
+    return None
 
 
 def install_sb3_vecenv_shim_if_needed() -> None:
@@ -106,7 +131,7 @@ def parse_args() -> argparse.Namespace:
         "--rom-path",
         type=Path,
         default=DEFAULT_ROM,
-        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH when set.",
+        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
     parser.add_argument("--num-envs", type=int, default=16)
