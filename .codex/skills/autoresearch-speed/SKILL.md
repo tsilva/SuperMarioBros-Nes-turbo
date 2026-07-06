@@ -33,11 +33,13 @@ checks for the changed surface have passed. Local commands are for correctness,
 compilation, formatting, profiling, diagnosis, and triage; do not call a
 benchmark skill.
 
-Default campaign mode is phased dedicated-machine fast iteration: generate and
-code a small batch of candidate proposals, stop all agent activity, then
-benchmark and accept candidates serially. Reject bad ideas as soon as a cheap
-same-tier `make benchmark` screen shows they are not promising, and spend full
-acceptance time only on candidates that look likely to improve results.
+Default campaign mode is phased dedicated-machine fast iteration with `N`
+parallel implementation workers. When the user does not provide `N`, use
+`N=4`. Workers generate and implement candidate proposals only. The coordinator
+stops all worker activity, filters and replays candidates, then benchmarks and
+accepts candidates serially. Reject bad candidates as soon as coordinator-owned
+same-tier triage shows they are not promising, and spend full acceptance time
+only on candidates that look likely to improve results.
 
 ## Benchmark Access
 
@@ -64,22 +66,27 @@ time on obvious losers.
 
 ## Benchmark Tiers
 
-Use a funnel, not full timing for every idea:
+Use a funnel, not full timing for every candidate:
 
 1. `local_diagnosis`: uncommitted local profiling, smoke tests, and narrow
    checks for fast feedback. These results can guide edits only; they cannot
    reject or accept a committed candidate by themselves.
-2. `local_triage`: committed candidate on the local machine, using the public
-   Make target with shorter Make variables and comparing only against a fresh
-   same-tier baseline from the current accepted source baseline. Default command
-   shape:
+2. `local_triage`: coordinator-owned paired screening for a replayed committed
+   candidate. Run a fresh baseline triage and candidate triage back-to-back from
+   exact committed refs using the public Make target with identical shorter Make
+   variables, workload, ROM, state directory, and output metadata. Compare only
+   those paired artifacts; never compare against an older loose `make benchmark`
+   number. Run each side from a coordinator-controlled temporary worktree or
+   replay branch checked to the exact ref being measured, not from a dirty
+   worker branch. Default command shape for each side:
 
    ```bash
-   BENCHMARK_STEPS=5000 BENCHMARK_REPEATS=1 BENCHMARK_WARMUP=100 BENCHMARK_ARGS="--json --output-json artifacts/benchmarks/triage-<label>.json" make benchmark
+   BENCHMARK_STEPS=5000 BENCHMARK_REPEATS=1 BENCHMARK_WARMUP=100 BENCHMARK_ARGS="--json --output-json artifacts/benchmarks/triage-<role>-<label>.json" make benchmark
    ```
 
    Treat `local_triage` as screening only. It can justify `triage_discard`,
-   another focused edit, or escalation to acceptance. It cannot justify `keep`.
+   `skip`, one focused worker revision in a future batch, or escalation to
+   acceptance. It cannot justify `keep`.
 3. `local_acceptance`: the fixed-ref paired benchmark helper. Only this tier can
    justify `keep`, `keep_small_gain`, updating the active baseline, or reporting
    an accepted campaign speedup.
@@ -96,7 +103,8 @@ Triage interpretation:
 - If candidate triage SPS is at least `+3%`, the candidate is worth full
   checks and `local_acceptance` unless the change is risky or contract-sensitive.
 - If candidate triage SPS is `+1%` to `+3%`, escalate only for simple,
-  low-risk, compounding, or simplifying changes. Otherwise prefer the next idea.
+  low-risk, compounding, or simplifying changes. Otherwise prefer the next
+  candidate.
 - If triage is noisy, rerun triage once on a calmer machine or with `--steps 10000`;
   do not keep sampling until the result becomes favorable.
 - Never accept a candidate from triage evidence alone.
@@ -113,10 +121,13 @@ Triage interpretation:
 
 ## Branch And State
 
-Work on the current branch by default. Do not create branches, switch branches,
-create worker worktrees, create replay branches, merge, or delete branches
-unless the user explicitly approves that operation in the current turn. If the
-user approves a campaign branch, a conventional name is:
+Work on the current branch by default outside `/autoresearch-speed` campaigns.
+For an approved worker campaign, the coordinator may create campaign-scoped
+worker worktrees, worker branches, replay branches, and temporary triage
+worktrees from the recorded baseline ref. Do not switch to `main`, merge into
+`main`, push, or delete non-campaign branches unless the user explicitly
+approves that operation in the current turn. If the user approves a campaign
+branch, a conventional name is:
 
 ```text
 codex/autoresearch-continuous
@@ -129,8 +140,8 @@ Before work:
    switching to, or resuming a campaign branch.
 3. If creating an approved campaign branch, branch from local `main` unless the
    user explicitly approved starting from the current dirty tree.
-4. If resuming an approved campaign, read `.codex/optimization_campaigns/current.json` and
-   `.codex/optimization_campaigns/results.tsv`.
+4. If resuming an approved campaign, read `.codex/optimization_campaigns/current.json`,
+   `.codex/optimization_campaigns/results.tsv`, and durable candidate manifests.
 5. Verify every manifest ref needed for resuming exists locally:
    `branch`, `root_sha`, current baseline commit, accepted commits, and any
    candidate commit being compared. If the branch or required commits are
@@ -146,16 +157,16 @@ Track every trial, including crashes and rejects:
 
 - `.codex/optimization_campaigns/current.json` for resume state
 - `.codex/optimization_campaigns/results.tsv` for human scanning
-- `.codex/optimization_campaigns/ideas.md` for the live idea queue
-- `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md` for the
-  branch-independent durable idea queue
 - `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/candidates/` for
-  coordinator-imported implementation candidate manifests
+  coordinator-imported implementation candidate manifests and compact rejection
+  evidence
+- accepted benchmark aggregates and kept commit SHAs
 
-Keep `results.tsv` and the repo copy of `ideas.md` uncommitted unless the user
-asks to commit logs. Accepted source commits stay on the current approved work
-branch; rejected commits are reset away. The durable queue outside the repo must
-survive checkout, reset, branch switching, and rejected-candidate rewinds.
+Keep `results.tsv` and campaign metadata uncommitted unless the user asks to
+commit logs. Accepted source commits stay on the current approved work branch;
+rejected replay commits are reset away. Historical `ideas.md` files may exist,
+but they are not the active workflow source and must not be synced, refilled, or
+ranked during worker campaigns.
 
 `results.tsv` should stay human-scannable. Older campaigns may already have the
 legacy benchmark header:
@@ -172,145 +183,86 @@ epoch	commit	baseline_commit	official_median_sps	median_pair_ratio	ci95_low	ci95
 ```
 
 Statuses: `baseline`, `triage_discard`, `triage_promote`, `keep`,
-`keep_small_gain`, `discard`, `crash`, `regression_fixed_keep`,
+`keep_small_gain`, `discard`, `skip`, `crash`, `regression_fixed_keep`,
 `regression_unfixed_discard`, `inconclusive`.
 
-Manifest fields should include campaign id/mode, branch names, root SHA, epoch,
-benchmark command/output root, optional benchmark limits, benchmark runs used,
-triage benchmarks used, current baseline output and same-tier triage SPS, latest
-triage benchmark fields, latest official paired aggregate fields, accepted
-commits, discarded commits, current experiment, and stop reason.
+Campaign manifest fields should include campaign id/mode, branch names, root
+SHA, epoch, default worker count, benchmark command/output root, optional
+benchmark limits, current baseline commit, worker manifest paths, candidate
+states, triage benchmarks used, latest paired triage fields, latest official
+paired aggregate fields, accepted commits, discarded/skipped commits, cleanup
+state, and stop reason.
 
-## Ideas Queue
+## Worker Candidate Generation
 
-Use `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md` as
-the authoritative optimization backlog. Mirror it into
-`.codex/optimization_campaigns/ideas.md` for repo-local context when needed, but
-sync the durable copy before any reset, checkout, branch switch, or rejected
-candidate rewind. If the two copies conflict, preserve `Done` and rejection
-evidence from both, then use the durable queue's `Ready` ordering unless live
-results prove it stale.
+The active search unit is a worker-generated candidate, not an idea queue item.
+Use `N=4` workers by default unless the user provides a different `N`.
 
-Create the durable queue and repo mirror when missing. The queue is a Markdown
-document, not a table, so ideas may include rich rationale, links, checklists,
-code snippets, profiling notes, or benchmark hypotheses.
+Before launching workers:
 
-Use this shape:
+1. Record `baseline_ref` as the current accepted source baseline commit.
+2. Read `results.tsv`, `.codex/optimization_campaigns/current.json`, durable
+   candidate manifests, prior rejection evidence, relevant profiler artifacts,
+   and the current hot-path source.
+3. Create `N` isolated campaign worker worktrees and branches from
+   `baseline_ref`.
+4. Give each worker one lane, the benchmark contract, prior accepted/rejected
+   mechanisms, required non-benchmark checks, the manifest schema, and the rule
+   that workers must not benchmark.
 
-```markdown
-# Autoresearch Ideas Queue
+Each worker independently chooses one concrete optimization idea, implements it,
+runs non-benchmark checks, commits the final patch, writes a durable patch or
+bundle artifact, and returns one manifest. Workers must not run `make
+benchmark`, local triage, official acceptance, or mutate
+`.codex/optimization_campaigns/current.json`, `results.tsv`, candidate ledgers,
+`main`, or the coordinator branch. Worker-side timings, if any exist from
+accidental local diagnostics, are ignored and cannot justify `triage_promote`,
+`keep`, or `keep_small_gain`.
 
-## Ready
-
-### IDEA-YYYYMMDD-NNN: Short Title
-
-- Status: ready
-- Perspective: emulator-core | ppu-render | vec-env | python-boundary | tests | cleanup | other
-- Hypothesis: ...
-- Target files: ...
-- Prior evidence: ...
-- Plan: ...
-- Contract risks: ...
-- Required checks: ...
-- Expected benchmark signal: ...
-
-## In Progress
-
-## Done
-```
-
-Statuses are `ready`, `in_progress`, `keep`, `keep_small_gain`, `discard`,
-`crash`, `regression_unfixed_discard`, and `inconclusive`. Keep completed ideas
-in `Done` with the final result row status, benchmark artifact if any, commit if
-kept, and a short reason. Do not delete rejected ideas; they are part of the
-anti-repeat ledger.
-
-Before selecting an experiment:
-
-1. Sync the durable idea queue into the repo mirror, then read both queue copies,
-   `results.tsv`, `.codex/optimization_campaigns/current.json`,
-   `docs/PERFORMANCE_PLAN.md`, and the current hot-path source.
-2. Prefer the first high-quality `ready` idea that is not a duplicate of prior
-   rejected or accepted work.
-3. If selecting the last non-duplicate `ready` idea, immediately start the
-   background refill below before implementing that idea. Do not wait for the
-   queue to become empty if the refill can run while the last task is in
-   diagnosis, implementation, testing, or benchmarking.
-4. Move or mark the selected idea as `in_progress` in both durable and repo
-   copies, record the epoch/pre-experiment SHA, and set it as the current
-   experiment in `current.json`.
-5. After the experiment, move the idea to `Done` with the decision, result row,
-   artifact, and rationale in both queue copies before starting another idea.
-
-Keep flushing the queue. When there are zero non-duplicate `ready` ideas, or
-when the selected idea is the last one, use up to four idea-generation subagents
-in parallel when tools and user approval allow it. Otherwise refill the queue
-manually in the main thread. Give each idea lane a distinct perspective:
-
-- emulator CPU/interpreter specialization
-- PPU/render/preprocessing path
-- vector environment scheduling and lane semantics
-- Python/Rust boundary, buffer movement, tests, instrumentation, and cleanup
-
-Each idea subagent must return Markdown queue entries only. Instruct subagents
-to read the current source, `docs/PERFORMANCE_PLAN.md`, `results.tsv`, both
-queue copies, and `.codex/optimization_campaigns/current.json`; avoid
-already-tried ideas; preserve the benchmark contract; include expected ROI,
-contract risks, required checks, and prior evidence; and prefer concrete,
-implementable experiments over broad themes. Subagents must not edit files,
-commit, benchmark, reset, or mutate campaign state.
-
-When idea generation completes, aggregate entries, deduplicate by mechanism and
-target files, reject ideas that duplicate `Done`/discarded work, assign stable
-`IDEA-YYYYMMDD-NNN` IDs, rank by expected ROI, and write the ranked result to
-the durable queue first. Then mirror it into the repo queue. Expected ROI means
-biggest plausible benchmark impact for the least code/risk/checking cost, with
-compounding/simplifying ideas preferred over isolated complexity.
-
-Do not spend benchmark runs merely to generate ideas. Idea generation is
-analysis work; only concrete candidates selected from the queue go through
-diagnosis, triage, and possible fixed-ref paired acceptance.
+The coordinator waits for all workers to finish or hit the user-provided limit,
+then freezes all worker activity before timing. No worker builds, tests,
+profiling runs, local timings, edits, or background jobs may continue during
+coordinator triage, acceptance, merge verification, or cleanup.
 
 ## Trajectory Token Discipline
 
 Spend tokens on decisions and evidence, not narration. Treat
-`.codex/optimization_campaigns/current.json`, `results.tsv`, both ideas queues,
-candidate manifests, and benchmark aggregates as the source of truth. Do not
-restate campaign history in chat unless it changes the next decision.
+`.codex/optimization_campaigns/current.json`, `results.tsv`, candidate
+manifests, compact rejection evidence, and benchmark aggregates as the source of
+truth. Do not restate campaign history in chat unless it changes the next
+decision.
 
 Use compact phase reports:
 
 ```text
-phase: generate | code | freeze | benchmark | merge | next_batch | pause
+phase: launch_workers | freeze | filter | replay | triage | acceptance | cleanup | pause
 inputs: refs/artifacts read
 outputs: manifests/commits/results written
 decision: keep | keep_small_gain | discard | inconclusive | defer | pause
 next: one concrete next action
 ```
 
-Keep subagent prompts narrow:
+Keep worker prompts narrow:
 
-- Idea agents get one perspective, the current baseline SHA, known
-  Done/blocked mechanisms, max idea count, required queue fields, and
-  "Markdown queue entries only".
-- Implementation agents get one `idea_id`, target files, hypothesis, forbidden
-  mechanisms, required checks, manifest schema, and stop conditions.
+- Workers get one lane, `baseline_ref`, known accepted/rejected mechanisms,
+  allowed target areas, required non-benchmark checks, the manifest schema,
+  cleanup expectations, and stop conditions.
 - The benchmark coordinator gets imported manifests, current baseline,
   evaluation order, and acceptance gates.
 
 Output limits:
 
-- Idea agents return Markdown queue entries only; no commentary.
-- Implementation agents return one committed candidate, one manifest, and at
-  most five short notes.
-- Benchmark phase records one result row per candidate plus one decision:
+- Workers return one committed candidate, one manifest, one durable patch or
+  bundle artifact, and at most five short notes.
+- Coordinator benchmark phases record one result row per candidate plus one
+  decision:
   `keep`, `keep_small_gain`, `discard`, or `inconclusive`.
 - Final campaign reports are bounded to branch, baseline, accepted/rejected
   counts, checks, artifacts, cleanup, and next action.
 
 Early-kill rules:
 
-- Mark an implementation `incomplete` when it cannot produce a small committed
+- Mark a worker candidate `incomplete` when it cannot produce a small committed
   patch after focused attempts.
 - Workers record only the final blocker, failed check, and next recommended
   action; do not narrate full debugging history.
@@ -319,41 +271,38 @@ Early-kill rules:
 
 ## Phased Batch Mode
 
-Use phased batch mode when there are multiple independent, small, high-quality
-ready ideas. Use the serial single-candidate loop instead when there is one
-obvious best idea, when the change is contract-sensitive, or when benchmark
-feedback is needed before coding the next candidate.
+Use worker batch mode for autoresearch by default. Workers generate candidates
+in parallel; the coordinator evaluates them serially. There is no coordinator
+direct-implementation mode and no active idea queue mode.
 
 Phases:
 
-1. `generate`: fork idea agents, deduplicate their entries, and select a small
-   batch by expected SPS impact, simplicity, correctness risk, and mechanism
-   diversity. Preserve one lane for structural simplification ideas when the
-   profiler only points at local hotspots.
-2. `code`: if the user explicitly approves worker branches/worktrees, fork
-   implementation agents in isolated `git worktree` checkouts. Use two
-   implementation agents by default. Raise to three only when the selected
-   candidates are small, clearly independent, and unlikely to compete for the
-   same hot path. Each agent implements one candidate, runs targeted
-   non-official checks, creates a final commit, and returns a manifest. Without
-   approval, use the serial single-candidate loop on the current branch.
-3. `freeze`: stop all implementation and idea agents before any official
-   timing. No agent builds, tests, profiling runs, local timings, edits, or
-   background jobs may continue during `benchmark` or `merge`.
-4. `benchmark`: the main thread imports candidate manifests, chooses evaluation
-   order, and evaluates candidates one at a time on the quiet machine.
-5. `merge`: if the batch has accepted commits and the user explicitly asks to
-   merge, run merge verification against current `main` and merge only if the
-   accepted batch still shows a real win. If the batch has no kept candidates,
-   do not merge.
-6. `next_batch`: update the idea queue, rejection evidence, candidate manifests,
-   and campaign state, then start a new generate/code phase or pause.
+1. `launch_workers`: create `N` campaign worker worktrees from `baseline_ref`.
+   Each worker proposes and implements one candidate in its own branch.
+2. `freeze`: stop all workers and background activity before any coordinator
+   timing.
+3. `filter`: import manifests and discard unfit candidates before benchmarking:
+   incomplete, uncommitted, unrecoverable, duplicate, contract-weakening, too
+   broad, too risky, or missing required worker checks.
+4. `replay`: rank surviving candidates by expected speed mechanism, simplicity,
+   correctness risk, overlap, and check quality. Replay the highest-ranked
+   worker patch onto the current accepted baseline to create `candidate_ref`.
+5. `triage`: run fresh same-tier paired triage for `baseline_ref` and
+   `candidate_ref`; discard, skip, or promote based only on those paired
+   artifacts.
+6. `acceptance`: for promoted candidates, run full required checks and the
+   official fixed-ref paired benchmark. If accepted, update
+   `baseline_ref = candidate_ref`; then rerank and replay remaining candidates
+   onto the new baseline before evaluating them.
+7. `cleanup`: after each candidate decision, delete campaign-created worker
+   worktrees and branches whose manifests and patch artifacts are durable and
+   whose changes are kept, rejected, skipped, or inconclusive. Run `git worktree
+   prune` at campaign end.
 
-Implementation agents must not run official benchmarks, mutate
-`.codex/optimization_campaigns/current.json`, mutate `results.tsv`, edit either
-ideas queue copy, touch `main`, reset the coordinator branch, switch the main
-thread's branch, or continue after the freeze phase. Worker-side timings, if
-any, are diagnostic only and cannot justify `keep` or `keep_small_gain`.
+Workers must not run `make benchmark`, local triage, official benchmarks, mutate
+`.codex/optimization_campaigns/current.json`, mutate `results.tsv`, touch
+`main`, reset the coordinator branch, switch the main thread's branch, or
+continue after the freeze phase.
 
 Candidate manifests are proposals, not acceptance evidence. Each worker must
 commit its final patch before handoff and report a manifest with enough identity
@@ -363,7 +312,7 @@ branch/worktree path:
 ```json
 {
   "schema_version": 1,
-  "idea_id": "IDEA-YYYYMMDD-NNN",
+  "candidate_id": "CANDIDATE-YYYYMMDD-NNN",
   "worker_id": "worker-1",
   "repo_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo",
   "worktree_path": "/absolute/path/to/worktree",
@@ -371,11 +320,12 @@ branch/worktree path:
   "base_sha": "40-hex-sha",
   "candidate_sha": "40-hex-sha",
   "patch_id": "git patch-id --stable value if available",
-  "patch_artifact": "/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/candidates/IDEA-YYYYMMDD-NNN.patch",
+  "patch_artifact": "/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/candidates/CANDIDATE-YYYYMMDD-NNN.patch",
   "bundle_artifact": null,
   "changed_files": ["src/emulator.rs"],
   "checks_run": ["cargo fmt --check", "cargo check --release"],
   "risk_level": "low | medium | high",
+  "candidate_summary": "short concrete idea and implementation",
   "expected_speed_mechanism": "short concrete mechanism",
   "worker_verdict": "ready | incomplete | discard",
   "notes": "short handoff notes"
@@ -398,12 +348,10 @@ Coordinator candidate evaluation rules:
   overlap; do not use FIFO by default.
 - Treat every worker candidate as a proposal until it is replayed onto the
   current accepted campaign baseline and measured there.
-- Prefer creating a fresh replay branch from the current baseline and
-  cherry-picking the candidate commit(s) only when the user explicitly approved
-  replay branches/worktrees. Otherwise apply the candidate serially on the
-  current branch after recording the pre-experiment SHA. If replay or
-  cherry-pick is messy, either discard the candidate or return it to a worker in
-  a later code phase.
+- Create a fresh campaign replay branch or worktree from the current accepted
+  baseline and cherry-pick or apply the worker patch there. If replay is messy,
+  skip or discard the candidate rather than benchmarking the worker branch.
+- Never benchmark worker branches directly.
 - After accepting candidate A, candidate B must be replayed onto
   `baseline + A`, checked again, and benchmarked again before it can be kept.
 - Reject candidates that become redundant, conflict-heavy, contract-weakening,
@@ -423,14 +371,18 @@ make test
 ```
 
 `make test` is the mandatory regression gate. It runs the repo-approved Rust and
-Python tests, but ROM-dependent stable-retro-turbo oracle tests may skip when
-the ROM or oracle package is unavailable. Do not substitute `cargo test`,
-`cargo check`, smoke scripts, local throughput runs, or `local_triage` for
-`make test` before acceptance. For contract-sensitive changes to observations,
-rewards, termination, reset behavior, action mapping, info fields,
-preprocessing bytes, or state loading, require explicit evidence that the
-relevant oracle/parity tests actually ran without skips; otherwise pause or
-mark the trial blocked/inconclusive instead of accepting it.
+Python tests; do not run `make test-retro-oracle` as part of the normal
+autoresearch loop unless the user explicitly asks for oracle coverage. Do not
+substitute `cargo test`, `cargo check`, smoke scripts, local throughput runs, or
+`local_triage` for `make test` before acceptance. The SMB ROM is mandatory for
+ROM-dependent checks, smoke runs, and benchmarks: `SMB_ROM_PATH` must resolve
+from the environment or `.env` to an existing ROM path. A missing ROM is a
+blocker, not a reason to skip relevant non-oracle tests, triage, or acceptance.
+For contract-sensitive changes to observations, rewards, termination, reset
+behavior, action mapping, info fields, preprocessing bytes, or state loading,
+require explicit evidence that the relevant non-oracle parity or contract tests
+ran without skips; otherwise pause or mark the trial blocked/inconclusive
+instead of accepting it.
 
 Before `local_triage`, run the cheapest checks that match the changed surface.
 Default to `cargo fmt --check`, `cargo check --release`, and
@@ -455,43 +407,48 @@ required checks. If repair fails after a few focused attempts, log
 
 ## Loop
 
-Fresh campaign:
+Fresh worker campaign:
 
 1. If `.codex/optimization_campaigns/current.json` says
-   `requires_fresh_baseline`, satisfy that before selecting another idea.
-2. Run a fresh same-tier triage baseline for screening, and run official
-   fixed-ref paired acceptance only when a candidate survives triage.
-3. Record benchmark output, paired aggregate fields when available, load
-   metadata, baseline refs, and baseline status. Do not use older benchmark
-   outputs as the active baseline for new candidates.
+   `requires_fresh_baseline`, satisfy that before launching workers.
+2. Record `baseline_ref` as the current accepted source baseline commit.
+3. Launch `N` worker worktrees from `baseline_ref`, defaulting to `N=4`.
+4. Wait for workers to return committed candidate manifests or hit the
+   user-provided limit.
+5. Freeze all worker and background activity before coordinator timing.
+6. Filter imported manifests and skip unfit candidates before benchmarking:
+   incomplete, uncommitted, unrecoverable, duplicate, contract-weakening, too
+   broad, too risky, missing required worker checks, or missing durable
+   patch/bundle artifact.
+7. Rank surviving candidates by expected speed mechanism, simplicity, risk,
+   overlap, and check quality.
 
-Each experiment:
+Each coordinator evaluation:
 
-1. Record pre-experiment SHA.
-2. Choose one concrete optimization idea from
-   the durable idea queue, refilling in advance when it is empty or when the
-   selected item is the last ready idea.
-3. Edit directly on the current approved work branch.
-4. Run local diagnosis/build checks as needed.
-5. Run pre-triage checks appropriate to the changed surface.
-6. Commit the candidate before any benchmark timing.
-7. Run one `local_triage` benchmark with shorter Make variables and compare the
-   resulting SPS to a fresh same-tier baseline from the current accepted source
-   baseline.
-8. Parse the benchmark output and append a triage row. If triage is clearly
+1. Record `pre_replay_sha = baseline_ref`.
+2. Replay the highest-ranked worker patch onto `baseline_ref` in a fresh
+   campaign replay branch or worktree, producing `candidate_ref`.
+3. If replay conflicts, becomes redundant, or no longer fits the updated
+   baseline, mark `skip` or `discard`, clean up that worker worktree/branch when
+   safe, and continue with the next candidate.
+4. Run pre-triage checks appropriate to the changed surface.
+5. Run paired `local_triage`: fresh baseline triage from `baseline_ref`, then
+   fresh candidate triage from `candidate_ref`, with identical Make variables,
+   workload, ROM, state directory, machine/load policy, and output metadata.
+6. Parse the paired triage outputs and append a triage row. If triage is clearly
    slower, noisy without enough upside, contract-weakening, or below the
-   escalation bar, mark `triage_discard`, reset to the pre-experiment SHA, and
-   continue with the next idea.
-9. For triage survivors, run the full required checks.
-10. Run one `local_acceptance` fixed-ref paired timing pass:
+   escalation bar, mark `triage_discard`, reset the replay away, clean up that
+   worker worktree/branch when safe, and continue with the next candidate.
+7. For triage survivors, run the full required checks.
+8. Run one `local_acceptance` fixed-ref paired timing pass:
 
-    ```bash
-    .venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3
-    ```
+   ```bash
+   .venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3
+   ```
 
-11. Parse the aggregate output and append a result row with paired decision
-    fields.
-12. Decide:
+9. Parse the aggregate output and append a result row with paired decision
+   fields.
+10. Decide:
    - `keep`: required checks passed, the official paired aggregate has
      `decision=converged_candidate_win` and `validity_passed=true`, load gates
      passed, and contract checks passed.
@@ -502,21 +459,18 @@ Each experiment:
      compounding. A raw tiny speedup by itself is never enough.
    - `discard`: equal/slower/no meaningful win/noisy/too complex/contract
      weakening.
-   - `inconclusive`: malformed, load-failed, too noisy, skipped required oracle
-     coverage, or incomparable metadata.
-13. If kept, update baseline fields to the candidate commit and its latest
-    official paired aggregate metrics, then continue from the improved work
-    branch.
-14. If rejected, reset back to pre-experiment SHA and continue.
+   - `inconclusive`: malformed, load-failed, too noisy, skipped required
+     non-oracle parity/contract coverage, missing ROM, or incomparable metadata.
+11. If kept, update baseline fields to `candidate_ref`, set
+    `baseline_ref = candidate_ref`, clean up the worker worktree/branch when
+    safe, then rerank and replay remaining candidates onto the new baseline.
+12. If rejected or inconclusive, reset the replay away, keep
+    `baseline_ref = pre_replay_sha`, clean up the worker worktree/branch when
+    safe, and continue.
 
 Never assume independent gains add. Every accepted commit becomes the new source
-baseline and later candidates are judged against fresh same-tier triage
-baselines and fresh official paired acceptance results.
-
-For phased batches, this serial experiment loop runs inside the `benchmark`
-phase for each imported candidate. A candidate accepted during the batch updates
-the campaign baseline immediately. Every remaining candidate must then be
-replayed onto that updated baseline before any checks or timing.
+baseline and every remaining worker candidate must be replayed onto that
+baseline before checks or timing.
 
 ## Optimization Guidance
 
@@ -526,7 +480,8 @@ vector scheduling, CPU emulation, PPU/rendering, resize/preprocessing, stack
 movement, and output-buffer copying.
 
 Mario/NES-specific shortcuts are allowed only when they preserve observed SMB
-behavior. Document important shortcut assumptions in `docs/PERFORMANCE_PLAN.md`.
+behavior. Document important shortcut assumptions in the candidate manifest,
+campaign ledger, and accepted commit message.
 Removing code while preserving or improving speed is a strong keep signal.
 
 Accept documented scope limits: SMB mapper 0 / NROM only, no audio requirement,
@@ -552,12 +507,12 @@ passing required checks, an official fixed-ref paired benchmark aggregate
 recorded locally, valid benchmark gates for the decision tier, and an updated
 campaign ledger. Machine busy/unreachable states, missing fresh baseline, dirty
 branch ambiguity, failing tests, malformed aggregates, noisy CIs, skipped
-required oracle coverage, missing approved campaign branches, or missing
-manifest refs must end as `blocked`, `inconclusive`, `discard`, or a clear pause
-state, not as `keep`.
+required non-oracle parity/contract coverage, missing approved campaign
+branches, or missing manifest refs must end as `blocked`, `inconclusive`,
+`discard`, or a clear pause state, not as `keep`.
 
-Triage artifacts are useful evidence for why ideas were discarded, but they are
-not accepted commits and must not remain in history after rejection. Reset
+Triage artifacts are useful evidence for why candidates were discarded, but they
+are not accepted commits and must not remain in history after rejection. Reset
 triage rejects away promptly so the local machine keeps producing useful
 experiments instead of polishing losing candidates.
 
@@ -567,8 +522,7 @@ three to four hours of active campaign time without meaningful progress, or
 before touching benchmark semantics, public APIs, or major test contracts. If
 accepted commits exist and the user explicitly asks to merge, the checkpoint may
 become a merge verification. If no accepted commits exist, do not merge; update
-rejection evidence, refresh or re-rank ideas, and continue with a new batch or
-pause.
+rejection evidence, launch a new worker batch, or pause.
 
 Before merging accepted campaign work into `main`, first confirm the user
 explicitly asked for that merge. Ensure there are no active agents or background
@@ -590,17 +544,21 @@ Then run the final paired gate against current `main`:
 Merge only when the accepted batch shows a real measured win versus current
 `main`.
 
-After the merge phase completes, clean up deterministic temporary state:
+After each candidate decision and after the merge phase completes, clean up
+deterministic temporary state:
 
-- Delete campaign-created worker worktrees whose changes are merged, rejected,
-  or explicitly deferred.
+- Delete campaign-created worker worktrees whose changes are kept, rejected,
+  skipped, inconclusive, merged, or explicitly deferred once the manifest and
+  patch/bundle artifact are durable.
 - Prune campaign-created temporary worker and replay branches. Use `git branch
   -D` only for branches created by this campaign and no longer needed.
 - Purge temporary worker artifacts, scratch outputs, stale replay branches, and
   incomplete candidate handoff files.
-- Preserve audit and anti-repeat evidence: `current.json`, `results.tsv`, the
-  durable ideas queue, accepted benchmark aggregates, kept commit SHAs, and
-  final candidate manifests or compact archived summaries.
+- Preserve audit and anti-repeat evidence: `current.json`, `results.tsv`,
+  accepted benchmark aggregates, kept commit SHAs, final candidate manifests,
+  durable patch/bundle artifacts, and compact rejection summaries.
+- Run `git worktree prune` at campaign end after deleting campaign-created
+  worktrees.
 - Never delete a worktree containing unrecovered useful changes.
 
 On pause, leave accepted commits on the current approved work branch, rejected
