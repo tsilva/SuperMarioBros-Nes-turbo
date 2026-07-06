@@ -42,6 +42,7 @@ def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
             state="Level1-1",
             num_envs=1,
             num_threads=1,
+            rom_path=str(require_rom()),
             render_mode="rgb_array",
             use_restricted_actions=Actions.ALL,
             obs_crop=(32, 0, 0, 0),
@@ -64,9 +65,13 @@ def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
         raise
 
 
-def test_native_vec_env_name_is_public() -> None:
+def test_native_vec_env_binding_is_private_retro_vec_env() -> None:
     assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
-    assert native.SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
+    assert not hasattr(native, "SuperMarioBrosNesTurboVecEnv")
+    assert hasattr(native, "_RetroVecEnv")
+    assert native._RetroVecEnv.__name__ == "_RetroVecEnv"
+    assert hasattr(native._RetroVecEnv, "set_initial_states")
+    assert not hasattr(native, "NativeVectorEnv")
     assert not hasattr(native, "FastMarioVecEnv")
 
 
@@ -221,6 +226,12 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
             self.resize_height = resize_height
             self.initial_state_names = ()
 
+        def initial_state_policy_names(self):
+            return ()
+
+        def initial_state_weights(self):
+            return ()
+
         def obs_shape(self):
             channels = self.frame_stack if self.grayscale else self.frame_stack * 3
             return self.num_envs, channels, self.resize_height, self.resize_width
@@ -229,7 +240,7 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
             return [-1] * self.num_envs
 
     monkeypatch.setattr(env_module, "_resolve_rom_path", lambda _game, _rom_path: "/tmp/fake.nes")
-    monkeypatch.setattr(env_module, "_CoreSuperMarioBrosNesTurboVecEnv", FakeCore)
+    monkeypatch.setattr(env_module, "_CoreRetroVecEnv", FakeCore)
 
     remove_env = SuperMarioBrosNesTurboVecEnv(
         compare.DEFAULT_STABLE_RETRO_GAME,
