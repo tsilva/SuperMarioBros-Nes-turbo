@@ -1,4 +1,4 @@
-.PHONY: benchmark benchmark-local develop release test test-python test-rust
+.PHONY: benchmark benchmark-local develop release test test-python test-rust test-retro-oracle
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -13,6 +13,7 @@ BENCHMARK_STEPS ?= 5000
 BENCHMARK_REPEATS ?= 3
 BENCHMARK_WARMUP ?= 500
 BENCHMARK_ARGS ?=
+PYTEST_ARGS ?=
 
 develop:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) $(PYTHON) -m maturin develop
@@ -30,6 +31,9 @@ test-rust:
 	RUSTFLAGS="$(RUSTFLAGS_EXT)" cargo test --lib
 
 test-python:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest -m "not retro_oracle" $(PYTEST_ARGS)
+
+test-retro-oracle:
+	$(PYTHON) -m pytest -m retro_oracle $(PYTEST_ARGS)
 
 test: test-rust test-python
