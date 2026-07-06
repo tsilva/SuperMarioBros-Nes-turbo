@@ -1,9 +1,9 @@
 ---
-name: host-benchmark
-description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits with the fixed local-host protocol. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on the dedicated local host, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
+name: local-benchmark
+description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits with the fixed local protocol. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on the dedicated local machine, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
 ---
 
-# Host Benchmark
+# Local Benchmark
 
 ## Use The Runner
 
@@ -11,13 +11,13 @@ For local git refs, do not retype the benchmark protocol as shell heredocs.
 Run the checked-in deterministic runner from the repo root:
 
 ```bash
-.venv/bin/python scripts/run_git_ref_host_benchmark.py --single REF \
+.venv/bin/python scripts/run_git_ref_benchmark.py --single REF \
   --rom-path /path/to/SuperMarioBros.nes
 
-.venv/bin/python scripts/run_git_ref_host_benchmark.py BASELINE_REF CANDIDATE_REF \
+.venv/bin/python scripts/run_git_ref_benchmark.py BASELINE_REF CANDIDATE_REF \
   --rom-path /path/to/SuperMarioBros.nes
 
-.venv/bin/python scripts/run_git_ref_host_benchmark.py CANDIDATE_REF \
+.venv/bin/python scripts/run_git_ref_benchmark.py CANDIDATE_REF \
   --rom-path /path/to/SuperMarioBros.nes
 ```
 
@@ -104,7 +104,7 @@ median(candidate invocation median / baseline invocation median per pair)
 The convergence math lives in:
 
 ```bash
-.venv/bin/python scripts/host_benchmark_stats.py --help
+.venv/bin/python scripts/benchmark_stats.py --help
 ```
 
 ## Load Gate
@@ -113,8 +113,8 @@ The runner records load snapshots in `raw/load-*.txt`. By default it blocks
 when the initial 1-minute load is above roughly one-third of logical CPU count
 unless `--force-busy` is passed.
 
-Smoke checks are acceptable on a busy host, but official timing should use a
-calm host. If the host is busy and the user did not ask to force it, stop and
+Smoke checks are acceptable on a busy machine, but official timing should use a
+calm machine. If the machine is busy and the user did not ask to force it, stop and
 report the blocker.
 
 ## Published PyPI Baselines
@@ -125,14 +125,14 @@ PyPI artifacts and cache results by package version and workload hash.
 Stable Retro oracle:
 
 ```bash
-.venv/bin/python scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
+.venv/bin/python scripts/run_pypi_stable_retro_turbo_benchmark.py \
   --rom-path /path/to/SuperMarioBros.nes
 ```
 
 Published SuperMarioBros-Nes-turbo:
 
 ```bash
-.venv/bin/python scripts/run_pypi_supermariobrosnes_turbo_host_benchmark.py \
+.venv/bin/python scripts/run_pypi_supermariobrosnes_turbo_benchmark.py \
   --rom-path /path/to/SuperMarioBros.nes
 ```
 
@@ -144,7 +144,7 @@ hash changes.
 For single-ref baselines:
 
 - clean: checkpoint stability span below `0.25%`, run-median CV below `0.75%`,
-  CI width below `0.5%`, no outliers, host load clean
+  CI width below `0.5%`, no outliers, benchmark load clean
 - noisy/tentative: run-median CV above `1.5%`, flagged outliers, failed load
   gate, or `decision=max_samples_no_convergence`
 
@@ -153,10 +153,10 @@ For comparisons:
 - `median_pair_ratio < 1.01`: no meaningful win
 - `1.01 <= median_pair_ratio < 1.03`: accept only if CI lower bound is above
   `1.00` and pair direction is stable
-- `1.03 <= median_pair_ratio < 1.05`: small fixed-host win if faster-pair
+- `1.03 <= median_pair_ratio < 1.05`: small local win if faster-pair
   count, CV, outlier, and load gates are clean
-- `median_pair_ratio >= 1.05`: likely real if correctness checks pass and host
-  stayed calm
+- `median_pair_ratio >= 1.05`: likely real if correctness checks pass and the
+  machine stayed calm
 - `median_pair_ratio >= 1.10`: strong throughput result if correctness checks
   pass
 
@@ -166,7 +166,7 @@ Runner decisions:
 - `converged_candidate_win`: stable comparison win
 - `converged_no_meaningful_win`: stable reject, do not keep sampling for luck
 - `continue`: only appears in intermediate aggregate state
-- `max_samples_no_convergence`: noisy/tentative; rerun on calmer host before
+- `max_samples_no_convergence`: noisy/tentative; rerun on calmer machine before
   using as a merge/release baseline
 
 ## Reporting
@@ -179,7 +179,7 @@ git status --short
 
 Report:
 
-- whether the fixed-host protocol completed
+- whether the fixed local protocol completed
 - execution target and absolute run directory
 - local result bundle path, especially `aggregate.json`
 - refs and SHAs
@@ -189,7 +189,7 @@ Report:
   all-sample CV, decision, validity gates
 - for comparison: median pair ratio, mean pair ratio, CI, faster-pair count,
   paired gain percent, decision, validity gates
-- host load before/after and any obvious competing process
+- benchmark load before/after and any obvious competing process
 - whether cleanup/finalization ran
 
 Keep smoke results clearly labeled as setup validation, not official throughput.

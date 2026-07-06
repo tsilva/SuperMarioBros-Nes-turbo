@@ -2,11 +2,11 @@
 
 ## Autoresearch Speed Skill
 
-Use `/autoresearch-speed` for future throughput optimization rounds in this repo, especially work involving `scripts/benchmark_sps.py`, Super Mario Bros NES emulator hot paths, `env_steps_per_sec` targets, single-agent optimization tracks, or multi-agent fixed-host research campaigns. The skill lives at `.codex/skills/autoresearch-speed/SKILL.md`.
+Use `/autoresearch-speed` for future throughput optimization rounds in this repo, especially work involving `scripts/benchmark_sps.py`, Super Mario Bros NES emulator hot paths, `env_steps_per_sec` targets, single-agent optimization tracks, or multi-agent fixed local research campaigns. The skill lives at `.codex/skills/autoresearch-speed/SKILL.md`.
 
-## Host Benchmark Skill
+## Local Benchmark Skill
 
-Use `/host-benchmark` when the user wants a reliable fixed-host CPU throughput benchmark or comparison on the dedicated local benchmark host. The skill compares exact local git archives without switching branches, can benchmark cached latest PyPI release baselines, builds isolated per-run source/venv directories under `/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local`, and reports fixed-host variance. The skill lives at `.codex/skills/host-benchmark/SKILL.md`.
+Use `/local-benchmark` when the user wants a reliable fixed local CPU throughput benchmark or comparison on the dedicated local benchmark machine. The skill compares exact local git archives without switching branches, can benchmark cached latest PyPI release baselines, builds isolated per-run source/venv directories under `/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks`, and reports fixed local variance. The skill lives at `.codex/skills/local-benchmark/SKILL.md`.
 
 ## Build Release Skill
 

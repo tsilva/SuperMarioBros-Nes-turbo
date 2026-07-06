@@ -5,7 +5,7 @@
 - Build a low-overhead hot-path profiler before selecting another speed
   candidate. This is infrastructure for choosing ideas, not itself an
   optimization idea. The profiler should be disabled by default and should not
-  be judged by host benchmark speedup unless it accidentally changes the normal
+  be judged by local benchmark speedup unless it accidentally changes the normal
   hot path.
 - Profiler evidence now exists. Policy-completion profile:
   `artifacts/benchmarks/policy-profile-level1-1-native-maxpool-levelchange-strict-20260701-224421.json`.
@@ -17,9 +17,9 @@
 ## Ready
 
 Curated order: highest estimated ROI first. ROI is judged from local profiler
-evidence, expected host benchmark signal, implementation size, correctness risk,
+evidence, expected benchmark signal, implementation size, correctness risk,
 and the existing reject/keep ledger. Local profiles rank candidates only; the
-fixed host benchmark is the acceptance source of truth.
+local benchmark is the acceptance source of truth.
 
 ### IDEA-20260701-006: Tune Rayon Chunking For Group Leaders
 
@@ -48,9 +48,9 @@ fixed host benchmark is the acceptance source of truth.
 - Contract risks: Accidentally serializing too much work, changing reset/group
   materialization semantics, or repeating the discarded mask-reuse mechanism.
 - Required checks: `scripts/check_vec_env_equivalence.py`, full required checks,
-  and the fixed-host paired benchmark.
+  and the local paired benchmark.
 - Expected benchmark signal: Rough expectation `+1%` to `+4%`; discard quickly
-  if host variance or scheduling overhead hides the signal.
+  if machine variance or scheduling overhead hides the signal.
 
 ## Done
 
@@ -59,22 +59,22 @@ fixed host benchmark is the acceptance source of truth.
 - Status: keep-small-gain-combined
 - Perspective: emulator-core
 - Result: restored as commit `1c2178d` after combined validation versus `main`;
-  standalone trial commit `a262398`, artifact
-  `artifacts/benchmarks/host-results/host-compare-2026-07-02-220902-B702255342113-Ca262398ee7d6/aggregate.json`.
+  standalone trial commit `a262398`, archived aggregate
+  `2026-07-02-220902-B702255342113-Ca262398ee7d6`.
 - Reason: The bounded prototype specialized SMB's `$8223` OAM clear helper
   rather than adding a broad block cache. It passed `cargo fmt --check`,
   `cargo check --release`, `.venv/bin/python -m maturin develop --release`,
   and `make test`, including an interpreted-routine equivalence test. Full
-  official beast-3 comparison versus `7022553` measured median pair ratio
+  official dedicated-machine comparison versus `7022553` measured median pair ratio
   `1.0352329816719152`, CI95 `[1.0306466330220425, 1.0369758374516294]`,
   and `11/11` faster pairs. This was a real positive signal but below the
   campaign's original per-candidate `>=5%` keep threshold. On 2026-07-03 the
   change was restored on top of the kept sprite-0 polling optimization and
-  compared directly against `main` (`33c273d`) in a high-confidence beast-3
+  compared directly against `main` (`33c273d`) in a high-confidence dedicated-machine
   21-pair run. The combined branch measured median pair ratio
   `1.0821469471532668`, CI95 `[1.080402979603871, 1.0859394974851821]`, and
-  `21/21` faster pairs at artifact
-  `artifacts/benchmarks/host-results/host-compare-2026-07-03-102429-B33c273d4ef30-C1c2178db0ca3/aggregate.json`.
+  `21/21` faster pairs at archived aggregate
+  `2026-07-03-102429-B33c273d4ef30-C1c2178db0ca3`.
   The strict IQR outlier gate still flagged pair ratios 1 and 4, but all pair
   ratios were positive (`1.069x` minimum), MAD outliers were empty, run-median
   CV was below 1%, and the bootstrap lower bound stayed above `+8%`, so the
@@ -93,17 +93,17 @@ fixed host benchmark is the acceptance source of truth.
   immediate follow-up range `$F2D0-$F2EF` accounted for only about `310k` of
   `108.5M` CPU steps in the diagnostic run. A narrow audio skip cannot plausibly
   reach the `>=5%` keep threshold, while a broader `$F2xx` skip would be
-  correctness-risky, so no beast-3 benchmark was spent.
+  correctness-risky, so no dedicated-machine benchmark was spent.
 
 ### IDEA-20260701-005: Cache Sprite Overlay Background Priority Data
 
 - Status: discard
 - Perspective: ppu-render
-- Result: commit `ef959e1`, artifact
-  `artifacts/benchmarks/host-results/host-compare-2026-07-02-213419-B702255342113-Cef959e1f9b2d/aggregate.json`.
+- Result: commit `ef959e1`, archived aggregate
+  `2026-07-02-213419-B702255342113-Cef959e1f9b2d`.
 - Reason: A narrow merge of background opacity/color lookup for behind-background
   sprite priority paths passed the full local checks, including a targeted
-  sprite-priority regression test, but full official beast-3 comparison versus
+  sprite-priority regression test, but full official dedicated-machine comparison versus
   `7022553` measured median pair ratio `0.993356136665428`, CI95
   `[0.9910008932257317, 0.9986968827492797]`, and only `1/11` faster pairs.
   The aggregate was valid and below both neutral and the `>=5%` keep threshold.
@@ -112,26 +112,26 @@ fixed host benchmark is the acceptance source of truth.
 
 - Status: keep
 - Perspective: emulator-core
-- Result: commit `7022553`, artifact
-  `artifacts/benchmarks/host-results/host-compare-2026-07-02-202650-B86a3a5f4602f-C702255342113/aggregate.json`.
-- Reason: Full official beast-3 paired comparison versus `86a3a5f` measured
+- Result: commit `7022553`, archived aggregate
+  `2026-07-02-202650-B86a3a5f4602f-C702255342113`.
+- Reason: Full official dedicated-machine paired comparison versus `86a3a5f` measured
   median pair ratio `1.0525804254262712`, CI95
   `[1.0487970667130555, 1.0600049333144261]`, and `11/11` faster pairs.
   Required checks passed before benchmarking. The load snapshot peak was caused
-  by the benchmark itself on an otherwise calm 12-CPU host and is recorded in
+  by the benchmark itself on an otherwise calm 12-CPU machine and is recorded in
   the aggregate.
 
 ### IDEA-20260701-004: Specialize Controller Polling Loop Safely
 
 - Status: discard
 - Perspective: emulator-core
-- Result: commit `d546564`, artifact
-  `artifacts/benchmarks/host-results/host-compare-2026-07-02-210407-B702255342113-Cd546564be8c5/aggregate.json`.
+- Result: commit `d546564`, archived aggregate
+  `2026-07-02-210407-B702255342113-Cd546564be8c5`.
 - Reason: Whole-routine specialization passed `make test`, including a
   controller routine equivalence test that caught and fixed the serial bit
-  reversal before benchmarking, but full official beast-3 comparison versus
+  reversal before benchmarking, but full official dedicated-machine comparison versus
   `7022553` measured median pair ratio `0.9419859635865181`, CI95
-  `[0.9392962361088418, 0.9432440777348456]`, and `0/11` faster pairs. Host
+  `[0.9392962361088418, 0.9432440777348456]`, and `0/11` faster pairs. Machine
   load and run-median CV were clean; one pair-ratio IQR outlier was flagged but
   the conclusion is still a clear discard.
 

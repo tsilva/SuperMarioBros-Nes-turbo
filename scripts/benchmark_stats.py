@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sequential convergence helpers for fixed-host benchmark aggregates."""
+"""Sequential convergence helpers for fixed local benchmark aggregates."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def single_ref_convergence(
     invocation_medians: list[float],
     all_samples: list[float],
     *,
-    host_load_ok: bool = True,
+    load_ok: bool = True,
     checkpoints: tuple[int, ...] = DEFAULT_SINGLE_CHECKPOINTS,
     stability_window: int = DEFAULT_STABILITY_WINDOW,
     stability_rel_span: float = 0.0025,
@@ -151,7 +151,7 @@ def single_ref_convergence(
         "all_sample_cv_below_1_25_percent": all_summary["cv"] < all_sample_cv,
         "bootstrap_ci_width_below_0_5_percent": ci_width < ci_rel_width,
         "no_iqr_mad_outliers": no_outlier_flags(diagnostics),
-        "host_load_ok": host_load_ok,
+        "load_ok": load_ok,
     }
     stop_gates = {
         "checkpoint_stability_window_met": gates["checkpoint_stability_window_met"],
@@ -201,7 +201,7 @@ def single_ref_convergence(
 def comparison_convergence(
     pair_ratios: list[float],
     *,
-    host_load_ok: bool = True,
+    load_ok: bool = True,
     checkpoints: tuple[int, ...] = DEFAULT_COMPARISON_CHECKPOINTS,
     stability_window: int = DEFAULT_STABILITY_WINDOW,
     stability_rel_span: float = 0.0025,
@@ -233,7 +233,7 @@ def comparison_convergence(
         "pair_ratio_cv_below_1_5_percent": ratio_summary["cv"] < pair_ratio_cv,
         "bootstrap_ci_width_below_0_5_percent": ci_width < ci_rel_width,
         "no_iqr_mad_outliers": no_outlier_flags(diagnostics),
-        "host_load_ok": host_load_ok,
+        "load_ok": load_ok,
     }
     positive_decision_gates = {
         "median_pair_ratio_at_least_1_03": official_ratio >= win_ratio,
@@ -317,12 +317,12 @@ def parse_args() -> argparse.Namespace:
 
     single = subparsers.add_parser("single", help="Evaluate single-ref convergence.")
     single.add_argument("raw_json", nargs="*", type=Path)
-    single.add_argument("--host-load-ok", action=argparse.BooleanOptionalAction, default=True)
+    single.add_argument("--load-ok", action=argparse.BooleanOptionalAction, default=True)
     single.add_argument("--output-json", type=Path)
 
     compare = subparsers.add_parser("compare", help="Evaluate paired-ratio convergence.")
     compare.add_argument("--pair-ratios", required=True, type=parse_float_list)
-    compare.add_argument("--host-load-ok", action=argparse.BooleanOptionalAction, default=True)
+    compare.add_argument("--load-ok", action=argparse.BooleanOptionalAction, default=True)
     compare.add_argument("--output-json", type=Path)
 
     return parser.parse_args()
@@ -337,10 +337,10 @@ def main() -> int:
         result = single_ref_convergence(
             invocation_medians,
             all_samples,
-            host_load_ok=args.host_load_ok,
+            load_ok=args.load_ok,
         )
     else:
-        result = comparison_convergence(args.pair_ratios, host_load_ok=args.host_load_ok)
+        result = comparison_convergence(args.pair_ratios, load_ok=args.load_ok)
 
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output_json is not None:

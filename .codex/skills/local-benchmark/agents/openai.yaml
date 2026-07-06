@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local Benchmark"
+  short_description: "Fixed local commit throughput compares."
+  default_prompt: "Use $local-benchmark to compare two commits on the dedicated local machine and report fixed local throughput variance."

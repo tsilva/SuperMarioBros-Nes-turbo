@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts.host_benchmark_stats import comparison_convergence, single_ref_convergence
+from scripts.benchmark_stats import comparison_convergence, single_ref_convergence
 
 
 def samples_for(medians: list[float]) -> list[float]:
@@ -80,7 +80,7 @@ def test_single_ref_convergence_stops_when_median_stable_despite_warning_gates()
     result = single_ref_convergence(
         medians,
         samples_for(medians),
-        host_load_ok=False,
+        load_ok=False,
     )
 
     assert result["decision"] == "converged"
@@ -92,7 +92,7 @@ def test_single_ref_convergence_stops_when_median_stable_despite_warning_gates()
         "checkpoint_median_span_below_0_25_percent": True,
         "bootstrap_ci_width_below_0_5_percent": True,
     }
-    assert result["validity_gates"]["host_load_ok"] is False
+    assert result["validity_gates"]["load_ok"] is False
 
 
 def test_comparison_convergence_uses_paired_ratio_checkpoints() -> None:

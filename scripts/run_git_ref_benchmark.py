@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run fixed-host git-ref benchmarks with sequential convergence."""
+"""Run fixed local git-ref benchmarks with sequential convergence."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 try:
-    from host_benchmark_stats import (
+    from benchmark_stats import (
         DEFAULT_COMPARISON_CHECKPOINTS,
         DEFAULT_SINGLE_CHECKPOINTS,
         comparison_convergence,
@@ -28,7 +28,7 @@ try:
         summary,
     )
 except ModuleNotFoundError:
-    from scripts.host_benchmark_stats import (
+    from scripts.benchmark_stats import (
         DEFAULT_COMPARISON_CHECKPOINTS,
         DEFAULT_SINGLE_CHECKPOINTS,
         comparison_convergence,
@@ -38,15 +38,15 @@ except ModuleNotFoundError:
     )
 
 
-LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local")
+LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
 LOCAL_STATE_DIR = LOCAL_ROOT / "states" / "SuperMarioBros-Nes-v0"
 STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 DEFAULT_STATE_SOURCE = Path(
     "/Users/tsilva/repos/tsilva/stable-retro-turbo/"
     "stable_retro/data/stable/SuperMarioBros-Nes-v0"
 )
-ARCHIVE_DIR = Path("artifacts/benchmarks/host-archives")
-LOCAL_RESULTS_ROOT = Path("artifacts/benchmarks/host-results")
+ARCHIVE_DIR = Path("artifacts/benchmarks/local-archives")
+LOCAL_RESULTS_ROOT = Path("artifacts/benchmarks/local-results")
 
 Mode = Literal["single", "compare"]
 
@@ -146,10 +146,10 @@ def decide_mode(refs: list[str], *, single: bool) -> tuple[Mode, list[tuple[str,
 def make_run_name(mode: Mode, refs: list[BenchmarkRef]) -> str:
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     if mode == "single":
-        return f"host-single-{stamp}-R{refs[0].short_sha}"
+        return f"benchmark-single-{stamp}-R{refs[0].short_sha}"
     baseline = next(ref for ref in refs if ref.role == "baseline")
     candidate = next(ref for ref in refs if ref.role == "candidate")
-    return f"host-compare-{stamp}-B{baseline.short_sha}-C{candidate.short_sha}"
+    return f"benchmark-compare-{stamp}-B{baseline.short_sha}-C{candidate.short_sha}"
 
 
 def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
@@ -214,7 +214,7 @@ def parse_load1(uptime_text: str) -> float | None:
 def load_snapshot_shell(raw_path: str) -> str:
     return (
         "set -e; "
-        f"{{ hostname; uptime; "
+        f"{{ uname -n; uptime; "
         "sysctl -n hw.ncpu 2>/dev/null || nproc; "
         "sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu | sed -n '1,40p'; "
         "ps -Ao pid,pcpu,pmem,comm,args | sort -k2 -nr | head -20; } "
@@ -230,7 +230,7 @@ def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> t
     return parse_load1(text), text
 
 
-def host_load_ok(load_values: list[float | None], max_load: float) -> bool:
+def load_ok(load_values: list[float | None], max_load: float) -> bool:
     return all(value is not None and value <= max_load for value in load_values)
 
 
@@ -350,7 +350,7 @@ def aggregate_single(
     convergence = single_ref_convergence(
         medians,
         samples,
-        host_load_ok=host_load_ok(load_values, args.max_load),
+        load_ok=load_ok(load_values, args.max_load),
         checkpoints=plan.checkpoints,
     )
     measured = [
@@ -367,7 +367,7 @@ def aggregate_single(
     ref = plan.refs[0]
     return {
         **base_aggregate(args, plan, load_values),
-        "mode": "single_ref_fixed_host",
+        "mode": "single_ref_fixed_local",
         "refs": {"ref": ref.ref},
         "shas": {"ref": ref.sha},
         "measured_invocations": measured,
@@ -412,14 +412,14 @@ def aggregate_compare(
     pair_ratios = [pair["pair_ratio"] for pair in pairs]
     convergence = comparison_convergence(
         pair_ratios,
-        host_load_ok=host_load_ok(load_values, args.max_load),
+        load_ok=load_ok(load_values, args.max_load),
         checkpoints=plan.checkpoints,
     )
     baseline = next(ref for ref in plan.refs if ref.role == "baseline")
     candidate = next(ref for ref in plan.refs if ref.role == "candidate")
     return {
         **base_aggregate(args, plan, load_values),
-        "mode": "paired_compare_fixed_host",
+        "mode": "paired_compare_fixed_local",
         "refs": {"baseline": baseline.ref, "candidate": candidate.ref},
         "shas": {"baseline": baseline.sha, "candidate": candidate.sha},
         "measured_pair_details": pairs,
@@ -461,7 +461,7 @@ def base_aggregate(
     return {
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "execution_target": "local_dedicated_host",
+        "execution_target": "local_machine",
         "target_run_dir": plan.run_dir,
         "run_name": plan.run_name,
         "local_git_status_short": run(["git", "status", "--short"]).stdout.splitlines(),
@@ -491,7 +491,7 @@ def base_aggregate(
         "load_1min_values": load_values,
         "command": {
             "benchmark": "RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py ...",
-            "stats_helper": "scripts/host_benchmark_stats.py",
+            "stats_helper": "scripts/benchmark_stats.py",
         },
     }
 
@@ -674,7 +674,7 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     initial_load, _ = capture_load(args, plan, "before-setup")
     if initial_load is not None and initial_load > args.max_load and not args.force_busy:
         raise SystemExit(
-            f"host load {initial_load:.2f} exceeds max {args.max_load:.2f}; "
+            f"benchmark load {initial_load:.2f} exceeds max {args.max_load:.2f}; "
             "rerun with --force-busy to override"
         )
     prepare_sources(args, plan)

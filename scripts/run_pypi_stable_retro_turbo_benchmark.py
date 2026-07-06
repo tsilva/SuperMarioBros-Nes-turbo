@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and cache the PyPI stable-retro-turbo host baseline."""
+"""Run and cache the PyPI stable-retro-turbo local benchmark baseline."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local")
+LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE = "stable-retro-turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -133,7 +133,7 @@ def parse_load1(text: str | None) -> float | None:
 def make_local_run_name(version: str, workload_hash: str) -> str:
     safe_version = re.sub(r"[^A-Za-z0-9_.-]", "-", version)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    return f"host-pypi-stable-retro-turbo-{safe_version}-{stamp}-{workload_hash[:8]}"
+    return f"benchmark-pypi-stable-retro-turbo-{safe_version}-{stamp}-{workload_hash[:8]}"
 
 
 def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
@@ -204,14 +204,14 @@ def aggregate(args: argparse.Namespace, cache_dir: Path, run_dir: Path, version_
         "all_sample_cv_below_1_25_percent": all_sample_summary["cv"] < 0.0125,
         "bootstrap_ci_width_below_0_75_percent": (ci[1] - ci[0]) / median(medians) < 0.0075,
         "no_iqr_mad_outliers": not diagnostics["iqr_invocation_median_indices"] and not diagnostics["mad_invocation_median_indices"],
-        "host_load_below_4": all(value is not None and value < 4 for value in load_values.values()),
+        "load_below_4": all(value is not None and value < 4 for value in load_values.values()),
     }
     aggregate_payload = {
-        "mode": "pypi_stable_retro_turbo_fixed_host",
+        "mode": "pypi_stable_retro_turbo_fixed_local",
         "package": version_info,
         "workload": workload_payload,
         "workload_hash": stable_hash(workload_payload),
-        "execution_target": "local_dedicated_host",
+        "execution_target": "local_machine",
         "local_run_dir": str(run_dir),
         "measured_invocation_count": args.measured_invocations,
         "warmup_invocation_count": args.warmup_invocations,
@@ -285,8 +285,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=None, help="PyPI version; defaults to latest from PyPI JSON.")
     parser.add_argument("--python", default="3.14")
-    parser.add_argument("--rom-path", required=True, help="ROM path on the benchmark host.")
-    parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/host-results/pypi-stable-retro-turbo"))
+    parser.add_argument("--rom-path", required=True, help="ROM path on the benchmark machine.")
+    parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/local-results/pypi-stable-retro-turbo"))
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)
     parser.add_argument("--steps", type=int, default=50000)

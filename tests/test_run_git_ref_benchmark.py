@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from scripts.run_git_ref_host_benchmark import (
+from scripts.run_git_ref_benchmark import (
     BenchmarkPlan,
     BenchmarkRef,
     aggregate_single,
@@ -97,7 +97,7 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
 
     aggregate = aggregate_single(args, plan, measured_count=11, load_values=[0.5, 0.4])
 
-    assert aggregate["mode"] == "single_ref_fixed_host"
+    assert aggregate["mode"] == "single_ref_fixed_local"
     assert aggregate["decision"] == "converged"
     assert aggregate["official_median_sps"] == 1001.0
     assert aggregate["checkpoint_trace"][-1]["count"] == 11

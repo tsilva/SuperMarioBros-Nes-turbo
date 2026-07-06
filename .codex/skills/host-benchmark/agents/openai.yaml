@@ -1,4 +1,0 @@
-interface:
-  display_name: "Host Benchmark"
-  short_description: "Fixed-host commit throughput compares."
-  default_prompt: "Use $host-benchmark to compare two commits on the dedicated local host and report fixed-host throughput variance."
