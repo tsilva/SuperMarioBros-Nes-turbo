@@ -10,7 +10,9 @@ from scripts.run_git_ref_benchmark import (
     BenchmarkPlan,
     BenchmarkRef,
     aggregate_single,
+    cap_checkpoints,
     decide_mode,
+    load_ok_for_validity,
     load_snapshot_shell,
     parse_args,
     parse_load1,
@@ -45,6 +47,31 @@ def test_parse_args_reads_rom_path_from_dotenv(
     assert args.rom_path == str(Path("~/roms/SuperMarioBros.nes").expanduser())
 
 
+@pytest.mark.parametrize(
+    ("flag", "value", "message"),
+    [
+        ("--steps", "0", "--steps must be positive"),
+        ("--repeats", "0", "--repeats must be positive"),
+        ("--warmups", "-1", "--warmups must be non-negative"),
+        ("--max-measured-invocations", "0", "--max-measured-invocations must be positive"),
+        ("--max-wall-clock-minutes", "0", "--max-wall-clock-minutes must be positive"),
+    ],
+)
+def test_parse_args_rejects_invalid_benchmark_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: str,
+    value: str,
+    message: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SMB_ROM_PATH", raising=False)
+    (tmp_path / ".env").write_text("SMB_ROM_PATH=/tmp/SuperMarioBros.nes\n")
+
+    with pytest.raises(SystemExit, match=message):
+        parse_args(["--single", "HEAD", "--dry-run", flag, value])
+
+
 def test_parse_load1_extracts_unix_load_average() -> None:
     assert parse_load1("load average: 1.23, 4.56, 7.89") == 1.23
     assert parse_load1(" 15:41 up 10 days,  load average: 0.42, 0.50, 0.60") == 0.42
@@ -64,6 +91,18 @@ def test_uv_sync_command_includes_common_user_tool_paths() -> None:
     assert "$HOME/.local/bin" in command
     assert "$HOME/.cargo/bin" in command
     assert command.endswith("uv sync --frozen --no-dev")
+
+
+def test_cap_checkpoints_preserves_limit_as_final_checkpoint() -> None:
+    assert cap_checkpoints((7, 11, 15, 21, 31), None) == (7, 11, 15, 21, 31)
+    assert cap_checkpoints((7, 11, 15, 21, 31), 3) == (3,)
+    assert cap_checkpoints((7, 11, 15, 21, 31), 11) == (7, 11)
+    assert cap_checkpoints((7, 11, 15, 21, 31), 40) == (7, 11, 15, 21, 31, 40)
+
+
+def test_force_busy_overrides_load_for_validity_only() -> None:
+    assert not load_ok_for_validity(SimpleNamespace(force_busy=False, max_load=1.0), [2.0])
+    assert load_ok_for_validity(SimpleNamespace(force_busy=True, max_load=1.0), [2.0])
 
 
 def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
@@ -106,8 +145,11 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
     )
     args = SimpleNamespace(
         max_load=99.0,
+        force_busy=False,
         steps=50000,
         repeats=3,
+        max_measured_invocations=None,
+        max_wall_clock_minutes=None,
     )
 
     aggregate = aggregate_single(args, plan, measured_count=11, load_values=[0.5, 0.4])
@@ -116,3 +158,5 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
     assert aggregate["decision"] == "converged"
     assert aggregate["official_median_sps"] == 1001.0
     assert aggregate["checkpoint_trace"][-1]["count"] == 11
+    assert aggregate["load_gate_passed"]
+    assert not aggregate["load_gate_ignored_for_validity"]

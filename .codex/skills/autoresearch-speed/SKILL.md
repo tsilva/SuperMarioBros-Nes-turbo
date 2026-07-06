@@ -29,7 +29,7 @@ Benchmark funnel:
 - `local_diagnosis`: uncommitted profiling, smoke tests, and narrow checks.
   Helpful for edits only; cannot accept or reject a committed candidate.
 - `local_triage`: coordinator-owned paired screening from exact committed refs,
-  fresh baseline and candidate, identical shorter Make variables, ROM, state
+  fresh baseline and candidate, identical shorter runner settings, ROM, state
   directory, workload, load policy, and output metadata. Screening only.
 - `local_acceptance`: official fixed-ref paired benchmark. Only this tier can
   justify `keep`, `keep_small_gain`, accepted speedups, or baseline updates.
@@ -40,11 +40,27 @@ Official acceptance command:
 .venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3
 ```
 
-Default triage command shape for each side:
+This command is sequential: in compare mode each measured sample is one
+baseline/candidate pair, and the default convergence checkpoints may run up to
+31 measured pairs after smokes and warmups. If the user supplies limits, pass
+them through explicitly:
 
 ```bash
-BENCHMARK_STEPS=5000 BENCHMARK_REPEATS=1 BENCHMARK_WARMUP=100 BENCHMARK_ARGS="--json --output-json artifacts/benchmarks/triage-<role>-<label>.json" make benchmark
+.venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3 --max-measured-invocations <N> --max-wall-clock-minutes <minutes>
 ```
+
+Limit-stopped outputs are evidence, not automatic acceptance. Treat
+`limit_stop_reason` as `inconclusive` unless the aggregate still satisfies the
+normal acceptance gates.
+
+Default triage command:
+
+```bash
+.venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 5000 --repeats 1 --warmups 0 --max-measured-invocations 3
+```
+
+For uncommitted `local_diagnosis` only, `make benchmark` is acceptable because it
+is not acceptance evidence.
 
 Triage interpretation:
 
@@ -61,29 +77,35 @@ Triage interpretation:
 Acceptance decisions:
 
 - `keep`: required checks passed, official aggregate has
-  `decision=converged_candidate_win`, `validity_passed=true`, load gates passed,
-  and contract checks passed.
+  `decision=converged_candidate_win`, `validity_passed=true`, contract checks
+  passed, and either `load_gate_passed=true` or an explicit user-approved
+  `load_gate_ignored_for_validity=true`.
 - `keep_small_gain`: required checks passed, all official `stability_gates=true`,
   median pair ratio is above `1.0`, CI lower bound is not below `1.0`, enough
   faster pairs exist, and the change is simple, low-risk, simplifying,
-  composable, or plausibly compounding.
+  composable, or plausibly compounding. If load was forced, call that out in the
+  ledger and final report.
 - `discard`: equal/slower/no meaningful win/noisy/too complex/contract
   weakening.
 - `inconclusive`: malformed metadata, load failure, missing ROM, incomparable
   outputs, skipped required contract coverage, or too much noise.
 
-If the user provides benchmark run or wall-clock limits, record and obey them.
-Otherwise leave limit fields `null`. Run at most one benchmark at a time. A busy
-machine can be used for cheap screening, but blocks official acceptance unless
-the user explicitly says to force through load.
+If the user provides benchmark run or wall-clock limits, record and obey them by
+using the benchmark runner's limit flags or by stopping before another measured
+invocation begins. Otherwise leave limit fields `null`. Run at most one
+benchmark at a time. A busy machine can be used for cheap screening, but blocks
+official acceptance unless the user explicitly says to force through load. If
+forced, require the aggregate to record `load_gate_ignored_for_validity=true`
+and explain that the acceptance is load-forced.
 
 ## Branch And State
 
-Work on the current branch by default. For an approved worker campaign, the
-coordinator may create campaign-scoped worker worktrees, worker branches, replay
-branches, and temporary triage worktrees from the recorded baseline ref. Do not
-switch to `main`, merge into `main`, push, or delete non-campaign branches
-unless the user explicitly approves that operation in the current turn.
+Work on the current branch by default. Do not create or switch branches for
+ordinary local diagnosis. For an approved worker campaign, the coordinator may
+create campaign-scoped worker worktrees, worker branches, replay branches, and
+temporary triage worktrees from the recorded baseline ref. Do not switch to
+`main`, merge into `main`, push, or delete non-campaign branches unless the user
+explicitly approves that operation in the current turn.
 
 Conventional campaign branch, if approved:
 
@@ -118,8 +140,10 @@ Track every trial, including crashes and rejects:
 
 Keep campaign metadata and `results.tsv` uncommitted unless the user asks to
 commit logs. Accepted source commits stay on the approved work branch; rejected
-replay commits are reset away. Historical `ideas.md` files are not the active
-workflow source during worker campaigns.
+replay commits are reset away. Read `.codex/optimization_campaigns/ideas.md` and
+the durable ideas mirror as prior evidence to avoid repeats, but do not let
+workers mutate them or treat them as the shared handoff channel during a worker
+campaign.
 
 Preferred `results.tsv` header for new rows:
 
@@ -138,10 +162,14 @@ aggregate fields, accepted/rejected commits, cleanup state, and stop reason.
 
 ## Worker Campaign
 
-Use phased worker batch mode for autoresearch by default. Workers generate and
-implement candidates in parallel; the coordinator evaluates them serially. There
-is no coordinator direct-implementation mode and no active idea queue mode.
-Default `N=4` workers unless the user provides a different `N`.
+Use coordinator-led local diagnosis by default. Launch phased worker batch mode
+only when the user approves campaign branch/worktree creation in the current
+turn or resumes an already-approved campaign. In worker mode, workers generate
+and implement candidates in parallel while the coordinator evaluates them
+serially. Without worker approval, the coordinator may make a small direct
+candidate on the current branch, but must still use committed refs for triage
+and acceptance. Default worker count is `N=4` unless the user provides a
+different `N`.
 
 Phases:
 
