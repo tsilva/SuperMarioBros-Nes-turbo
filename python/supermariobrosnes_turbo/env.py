@@ -87,7 +87,7 @@ SMB_EVENT_SPECS = {
     "level_change": (("levelHi", "levelLo"), "change"),
 }
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
-ROM_PATH_ENV_VAR = "SMB_ROM_PATH"
+ROM_PATH_ENV_VAR = "ROM_PATH"
 GZIP_MAGIC = b"\x1f\x8b"
 INFO_KEYS = (
     "x_pos",

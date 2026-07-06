@@ -62,6 +62,11 @@ Default triage command:
 For uncommitted `local_diagnosis` only, `make benchmark` is acceptable because it
 is not acceptance evidence.
 
+Dry-run output is planning evidence only. Its `workload_hash` is a
+`planned_workload_hash` over requested parameters before source setup and before
+ROM/state file hashes are attached. Do not compare a dry-run hash to an
+aggregate `workload_hash` as acceptance evidence.
+
 Triage interpretation:
 
 - Below paired baseline, or below `+1%` with unstable samples: discard or
@@ -91,12 +96,18 @@ Acceptance decisions:
   outputs, skipped required contract coverage, or too much noise.
 
 If the user provides benchmark run or wall-clock limits, record and obey them by
-using the benchmark runner's limit flags or by stopping before another measured
-invocation begins. Otherwise leave limit fields `null`. Run at most one
+using the benchmark runner's limit flags or by stopping before another benchmark
+phase begins. `--max-measured-invocations` is an upper bound only; values above
+the default convergence maximum must not extend the sequential schedule.
+Otherwise leave limit fields `null`. Run at most one
 benchmark at a time. A busy machine can be used for cheap screening, but blocks
 official acceptance unless the user explicitly says to force through load. If
 forced, require the aggregate to record `load_gate_ignored_for_validity=true`
-and explain that the acceptance is load-forced.
+and explain that the acceptance is load-forced. Recheck host load after smokes
+and warmups, immediately before measured samples; if the gate fails, defer
+timing instead of producing predictably invalid official evidence. If load
+fails after a checkpoint, stop before the next measured sample and treat
+`limit_stop_reason=load_gate_failed` as inconclusive.
 
 ## Branch And State
 
@@ -148,7 +159,7 @@ campaign.
 Preferred `results.tsv` header for new rows:
 
 ```text
-epoch	commit	baseline_commit	official_median_sps	median_pair_ratio	ci95_low	ci95_high	candidate_faster_pairs	measured_pairs	status	description	artifact
+epoch	commit	baseline_commit	benchmark_tier	workload_hash	official_median_sps	median_pair_ratio	ci95_low	ci95_high	candidate_faster_pairs	measured_pairs	load_gate_passed	load_gate_ignored_for_validity	limit_stop_reason	discarded_incomplete_pair_raw_files	max_measured_invocations	max_wall_clock_minutes	expected_rom_sha256	rom_sha256	state_sha256	status	description	artifact
 ```
 
 Statuses: `baseline`, `triage_discard`, `triage_promote`, `keep`,
@@ -269,8 +280,10 @@ explicit evidence that relevant non-oracle parity or contract tests ran without
 skips before acceptance.
 
 The SMB ROM is mandatory for ROM-dependent checks, smoke runs, and benchmarks:
-`SMB_ROM_PATH` must resolve from the environment or `.env` to an existing ROM
-path. A missing ROM is a blocker.
+`ROM_PATH` must resolve from the environment or `.env` to an existing ROM
+file with SHA-256
+`f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de`. A missing
+or mismatched ROM is a blocker.
 
 If tests fail, treat it as a regression unless proven unrelated. Fix while
 preserving the optimization if possible; rerun the failing test first, then

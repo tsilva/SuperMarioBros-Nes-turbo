@@ -35,4 +35,8 @@ def require_env_or_dotenv_path(name: str, label: str, value: str | Path | None =
     path = Path(value).expanduser() if value else env_or_dotenv_path(name)
     if path is None:
         raise SystemExit(f"{label} required; pass --rom-path or set {name} in the environment or .env")
-    return str(path)
+    if not path.exists():
+        raise SystemExit(f"{label} does not exist: {path}")
+    if not path.is_file():
+        raise SystemExit(f"{label} is not a file: {path}")
+    return str(path.resolve())

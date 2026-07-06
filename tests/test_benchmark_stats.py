@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from scripts.benchmark_stats import comparison_convergence, single_ref_convergence
+import argparse
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts.benchmark_stats import (
+    comparison_convergence,
+    load_invocation_medians,
+    parse_float_list,
+    single_ref_convergence,
+)
 
 
 def samples_for(medians: list[float]) -> list[float]:
@@ -148,3 +159,31 @@ def test_comparison_convergence_stops_for_stable_no_meaningful_win() -> None:
     assert result["should_stop"] is True
     assert result["validity_passed"] is True
     assert result["no_meaningful_win_decision_gates"]["median_pair_ratio_below_1_01"] is True
+
+
+def test_load_invocation_medians_rejects_invalid_raw_samples(tmp_path: Path) -> None:
+    path = tmp_path / "raw.json"
+
+    path.write_text("[]\n")
+    with pytest.raises(ValueError, match="is not a JSON object"):
+        load_invocation_medians([path])
+
+    path.write_text(json.dumps({"runs": []}) + "\n")
+    with pytest.raises(ValueError, match="has no runs"):
+        load_invocation_medians([path])
+
+    path.write_text(json.dumps({"runs": [{"env_steps_per_sec": 0.0}]}) + "\n")
+    with pytest.raises(ValueError, match="non-positive env_steps_per_sec"):
+        load_invocation_medians([path])
+
+    path.write_text(json.dumps({"runs": [{"env_steps_per_sec": float("nan")}]}) + "\n")
+    with pytest.raises(ValueError, match="non-finite env_steps_per_sec"):
+        load_invocation_medians([path])
+
+
+def test_parse_float_list_rejects_invalid_pair_ratios() -> None:
+    assert parse_float_list("1.01, 1.02") == [1.01, 1.02]
+    with pytest.raises(argparse.ArgumentTypeError, match="values must be positive"):
+        parse_float_list("1.01, 0")
+    with pytest.raises(argparse.ArgumentTypeError, match="values must be finite"):
+        parse_float_list("1.01, nan")
