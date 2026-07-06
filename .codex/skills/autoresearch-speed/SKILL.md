@@ -135,10 +135,13 @@ Track every trial, including crashes and rejects:
 - `.codex/optimization_campaigns/current.json` for resume state
 - `.codex/optimization_campaigns/results.tsv` for human scanning
 - `.codex/optimization_campaigns/ideas.md` for the live idea queue
+- `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md` for the
+  branch-independent durable idea queue
 
-Keep `results.tsv` and `ideas.md` uncommitted unless the user asks to commit
-logs. Accepted source commits stay on the campaign branch; rejected commits are
-reset away.
+Keep `results.tsv` and the repo copy of `ideas.md` uncommitted unless the user
+asks to commit logs. Accepted source commits stay on the campaign branch;
+rejected commits are reset away. The durable queue outside the repo must survive
+checkout, reset, branch switching, and rejected-candidate rewinds.
 
 `results.tsv` should stay human-scannable. Older campaigns may already have the
 legacy benchmark header:
@@ -167,10 +170,17 @@ reason.
 
 ## Ideas Queue
 
-Create `.codex/optimization_campaigns/ideas.md` when missing and keep it as the
-authoritative optimization backlog. It is a Markdown document, not a table, so
-ideas may include rich rationale, links, checklists, code snippets, profiling
-notes, or benchmark hypotheses.
+Use `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md` as
+the authoritative optimization backlog. Mirror it into
+`.codex/optimization_campaigns/ideas.md` for repo-local context when needed, but
+sync the durable copy before any reset, checkout, branch switch, or rejected
+candidate rewind. If the two copies conflict, preserve `Done` and rejection
+evidence from both, then use the durable queue's `Ready` ordering unless live
+results prove it stale.
+
+Create the durable queue and repo mirror when missing. The queue is a Markdown
+document, not a table, so ideas may include rich rationale, links, checklists,
+code snippets, profiling notes, or benchmark hypotheses.
 
 Use this shape:
 
@@ -204,34 +214,44 @@ anti-repeat ledger.
 
 Before selecting an experiment:
 
-1. Read `ideas.md`, `results.tsv`, `.codex/optimization_campaigns/current.json`,
+1. Sync the durable idea queue into the repo mirror, then read both queue copies,
+   `results.tsv`, `.codex/optimization_campaigns/current.json`,
    `docs/PERFORMANCE_PLAN.md`, and the current hot-path source.
 2. Prefer the first high-quality `ready` idea that is not a duplicate of prior
    rejected or accepted work.
-3. Move or mark that idea as `in_progress`, record the epoch/pre-experiment SHA,
-   and set it as the current experiment in `current.json`.
-4. After the experiment, move the idea to `Done` with the decision, result row,
-   artifact, and rationale before starting another idea.
+3. If selecting the last non-duplicate `ready` idea, immediately start the
+   background refill below before implementing that idea. Do not wait for the
+   queue to become empty if the refill can run while the last task is in
+   diagnosis, implementation, testing, or benchmarking.
+4. Move or mark the selected idea as `in_progress` in both durable and repo
+   copies, record the epoch/pre-experiment SHA, and set it as the current
+   experiment in `current.json`.
+5. After the experiment, move the idea to `Done` with the decision, result row,
+   artifact, and rationale in both queue copies before starting another idea.
 
-Keep the queue topped up. If fewer than three non-duplicate `ready` ideas remain,
-or if the remaining ideas all target the same subsystem, launch idea-generation
-subagents before the next experiment. Use the user-provided `N` if present;
-otherwise use `N=3`. Run them in parallel, each with a different perspective,
-for example:
+Keep flushing the queue. When there are zero non-duplicate `ready` ideas, or
+when the selected idea is the last one, fork exactly four idea-generation
+subagents in parallel. Give each a distinct perspective:
 
 - emulator CPU/interpreter specialization
 - PPU/render/preprocessing path
 - vector environment scheduling and lane semantics
-- Python/Rust boundary and buffer movement
-- tests, instrumentation, simplification, or dead-code removal
+- Python/Rust boundary, buffer movement, tests, instrumentation, and cleanup
 
 Each idea subagent must return Markdown queue entries only. Instruct subagents
-to read the current source, `docs/PERFORMANCE_PLAN.md`, `results.tsv`, and
-`ideas.md`; avoid already-tried ideas; preserve the benchmark contract; include
-contract risks and required checks; and prefer one concrete, implementable
-experiment per entry. Merge their entries into `ideas.md`, deduplicate by
-mechanism and target files, assign stable `IDEA-YYYYMMDD-NNN` IDs, and keep the
-highest-signal ideas near the top of `Ready`.
+to read the current source, `docs/PERFORMANCE_PLAN.md`, `results.tsv`, both
+queue copies, and `.codex/optimization_campaigns/current.json`; avoid
+already-tried ideas; preserve the benchmark contract; include expected ROI,
+contract risks, required checks, and prior evidence; and prefer concrete,
+implementable experiments over broad themes. Subagents must not edit files,
+commit, benchmark, reset, or mutate campaign state.
+
+When all four subagents complete, aggregate their entries, deduplicate by
+mechanism and target files, reject ideas that duplicate `Done`/discarded work,
+assign stable `IDEA-YYYYMMDD-NNN` IDs, rank by expected ROI, and write the ranked
+result to the durable queue first. Then mirror it into the repo queue. Expected
+ROI means biggest plausible benchmark impact for the least code/risk/checking
+cost, with compounding/simplifying ideas preferred over isolated complexity.
 
 Do not spend benchmark runs merely to generate ideas. Idea generation is analysis
 work; only concrete candidates selected from the queue go through diagnosis,
@@ -290,8 +310,8 @@ Each experiment:
 
 1. Record pre-experiment SHA.
 2. Choose one concrete optimization idea from
-   `.codex/optimization_campaigns/ideas.md`, refilling the queue first if it is
-   running low.
+   the durable idea queue, refilling in advance when it is empty or when the
+   selected item is the last ready idea.
 3. Edit directly on the campaign branch.
 4. Run local diagnosis/build checks as needed.
 5. Run pre-triage checks appropriate to the changed surface.

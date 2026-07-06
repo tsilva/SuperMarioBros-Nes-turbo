@@ -5,9 +5,16 @@
   "root_branch": "main",
   "root_sha": null,
   "created_at": null,
-  "updated_at": "2026-07-03T12:19:49+01:00",
+  "updated_at": "2026-07-06T17:05:59+01:00",
   "allowed_benchmark_skill": "/local-benchmark",
   "allowed_output_root": "artifacts/benchmarks/",
+  "ideas_queue": {
+    "durable_path": "/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md",
+    "repo_mirror_path": ".codex/optimization_campaigns/ideas.md",
+    "refill_subagents": 4,
+    "prefetch_when_ready_count_lte": 1,
+    "rank_by": "expected_roi"
+  },
   "run_limits": {
     "max_total_benchmarks": null,
     "max_estimated_wall_clock_minutes": null
