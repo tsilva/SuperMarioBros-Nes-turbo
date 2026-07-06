@@ -27,76 +27,67 @@ Do not fake speed by skipping emulator progression, weakening the workload,
 returning stale observations, changing the public command, or loosening the
 observed contract.
 
-Throughput acceptance evidence must go through `/local-benchmark`. At the start
-of every campaign turn that needs timing evidence, read
-`.codex/skills/local-benchmark/SKILL.md` and follow that skill as the benchmark
-subroutine. Invoke it with exact committed refs; local dirty files are never part
-of benchmark acceptance. Local commands are for correctness, compilation,
-formatting, profiling, and diagnosis only, never acceptance.
+Throughput timing evidence must come from:
 
-For comparisons, `/local-benchmark` acceptance must use its paired fixed local
-decision metric: median candidate/baseline ratio after warmup-pair discard, the
-bootstrap confidence interval, faster-pair count, and validity gates. Treat
-absolute SPS as useful context, not as the decision statistic for candidate
-acceptance.
+```bash
+make benchmark
+```
+
+Run it from the local checkout after the candidate is committed. Local commands
+are for correctness, compilation, formatting, profiling, diagnosis, and timing;
+do not call a benchmark skill.
 
 Default campaign mode is dedicated-machine fast iteration: reject bad ideas as
-soon as a cheap exact-ref screen shows they are not promising, and spend full
-acceptance time only on candidates that look likely to improve results.
+soon as a cheap `make benchmark` screen shows they are not promising, and spend
+full acceptance time only on candidates that look likely to improve results.
 
 ## Benchmark Access
 
-Assume `/autoresearch-speed` uses the dedicated local benchmark machine through
-`/local-benchmark`. Do not use SSH, tailnet, cloud, Modal, or other non-local
-benchmark variants for autoresearch timing.
+Assume `/autoresearch-speed` uses the dedicated local benchmark machine by
+running `make benchmark`. Do not use SSH, tailnet, cloud, Modal, benchmark
+skills, or other non-local benchmark variants for autoresearch timing.
 
 If the user provides benchmark run or wall-clock limits, record and obey
 them. If not, leave limit fields as `null` and continue until stopped or
 blocked. Run at most one benchmark at a time.
 
-If `/local-benchmark` cannot produce a valid local `aggregate.json` because the
-load gate is busy, setup fails, metadata is malformed, or the result is too
-noisy, do not accept the candidate. Either mark the trial `inconclusive` and
-reset it away, or stop with a clear `stop_reason` when another attempt would
-just repeat the same blocker.
+If `make benchmark` cannot complete because the machine is busy, setup fails,
+metadata is malformed, or the result is too noisy, do not accept the candidate.
+Either mark the trial `inconclusive` and reset it away, or stop with a clear
+`stop_reason` when another attempt would just repeat the same blocker.
 
-Use the dedicated local machine aggressively for screening. A busy machine should still
-block official acceptance unless the user explicitly says to force through load,
-but cheap triage runs may use the same exact-ref runner with shorter workload
-settings to avoid wasting time on obvious losers.
+Use the dedicated local machine aggressively for screening. A busy machine should
+still block official acceptance unless the user explicitly says to force through
+load, but cheap triage runs may use shorter Make benchmark variables to avoid
+wasting time on obvious losers.
 
 ## Benchmark Tiers
 
-Use a funnel, not the full official protocol for every idea:
+Use a funnel, not full timing for every idea:
 
 1. `local_diagnosis`: uncommitted local profiling, smoke tests, and narrow
    checks for fast feedback. These results can guide edits only; they cannot
    reject or accept a committed candidate by themselves.
-2. `local_triage`: exact committed refs on the dedicated local machine, using the same public
-   benchmark contract but shorter runner settings. Default command shape:
+2. `local_triage`: committed candidate on the dedicated local machine, using the
+   public benchmark target with shorter Make variables. Default command shape:
 
    ```bash
-   .venv/bin/python scripts/run_git_ref_benchmark.py BASELINE_REF CANDIDATE_REF \
-     --rom-path /path/to/SuperMarioBros-Nes-v0.nes \
-     --steps 5000 --repeats 1 --warmups 1
+   BENCHMARK_STEPS=5000 BENCHMARK_REPEATS=1 BENCHMARK_WARMUP=100 make benchmark
    ```
 
-   The runner still performs smoke checks, alternating paired order, exact git
-   archives, isolated source trees, state hashes, and local result retention.
    Treat `local_triage` as screening only. It can justify `triage_discard`,
    another focused edit, or escalation to acceptance. It cannot justify `keep`.
-3. `local_acceptance`: the full `/local-benchmark` protocol with default official
-   workload and convergence gates. Only this tier can justify `keep`,
-   `keep_small_gain`, updating the active baseline, or reporting an accepted
-   campaign speedup.
+3. `local_acceptance`: the default `make benchmark` target. Only this tier can
+   justify `keep`, `keep_small_gain`, updating the active baseline, or reporting
+   an accepted campaign speedup.
 
 Triage interpretation:
 
-- If median paired ratio is below `1.00`, or below `1.01` with unstable/noisy
-  direction, discard or revise without running the full acceptance protocol.
-- If median paired ratio is at least `1.03`, the candidate is worth full checks
-  and `local_acceptance` unless the change is risky or contract-sensitive.
-- If median paired ratio is `1.01` to `1.03`, escalate only for simple,
+- If candidate benchmark SPS is below baseline, or below `+1%` with unstable or
+  noisy samples, discard or revise without running the full acceptance protocol.
+- If candidate benchmark SPS is at least `+3%`, the candidate is worth full
+  checks and `local_acceptance` unless the change is risky or contract-sensitive.
+- If candidate benchmark SPS is `+1%` to `+3%`, escalate only for simple,
   low-risk, compounding, or simplifying changes. Otherwise prefer the next idea.
 - If triage is noisy, rerun triage once on a calmer machine or with `--steps 10000`;
   do not keep sampling until the result becomes favorable.
@@ -150,11 +141,11 @@ legacy benchmark header:
 epoch	commit	mean_env_steps_per_sec	stdev_env_steps_per_sec	best_env_steps_per_sec	gain_pct	status	description	artifact
 ```
 
-For new local-benchmark rows, prefer the benchmark decision fields and migrate the
+For new benchmark rows, prefer `make benchmark` summary fields and migrate the
 header when practical:
 
 ```text
-epoch	commit	baseline_commit	official_median_sps	median_pair_ratio	ci95_low	ci95_high	candidate_faster_pairs	measured_pairs	status	description	artifact
+epoch	commit	baseline_commit	mean_env_steps_per_sec	stdev_env_steps_per_sec	best_env_steps_per_sec	gain_pct	status	description	artifact
 ```
 
 Statuses: `baseline`, `triage_discard`, `triage_promote`, `keep`,
@@ -162,11 +153,10 @@ Statuses: `baseline`, `triage_discard`, `triage_promote`, `keep`,
 `regression_unfixed_discard`, `inconclusive`.
 
 Manifest fields should include campaign id/mode, branch names, root SHA, epoch,
-allowed benchmark skill/output root, optional benchmark limits, benchmark runs
-used, triage benchmarks used, current baseline artifact and official
-median SPS, latest triage aggregate fields, latest benchmark comparison aggregate
-fields, accepted commits, discarded commits, current experiment, and stop
-reason.
+benchmark command/output root, optional benchmark limits, benchmark runs used,
+triage benchmarks used, current baseline output and mean SPS, latest triage
+benchmark fields, latest benchmark fields, accepted commits, discarded commits,
+current experiment, and stop reason.
 
 ## Ideas Queue
 
@@ -255,7 +245,7 @@ cost, with compounding/simplifying ideas preferred over isolated complexity.
 
 Do not spend benchmark runs merely to generate ideas. Idea generation is analysis
 work; only concrete candidates selected from the queue go through diagnosis,
-triage, and possible `/local-benchmark` acceptance.
+triage, and possible `make benchmark` acceptance.
 
 ## Required Checks
 
@@ -300,11 +290,11 @@ Fresh campaign:
 
 1. If `.codex/optimization_campaigns/current.json` says
    `requires_fresh_baseline`, satisfy that before selecting another idea.
-2. Run the initial `/local-benchmark` single-ref baseline from the unmodified
-   campaign branch exact `HEAD` commit.
-3. Record the local result bundle, `aggregate.json`, official median SPS,
-   bootstrap CI, CVs, validity gates, benchmark load metadata, and baseline status.
-   Do not use older mean-SPS artifacts as the active baseline for new candidates.
+2. Run the initial `make benchmark` baseline from the unmodified campaign branch
+   exact `HEAD` commit.
+3. Record the benchmark output, mean SPS, stdev SPS, best SPS, benchmark load
+   metadata when available, and baseline status. Do not use older benchmark
+   outputs as the active baseline for new candidates.
 
 Each experiment:
 
@@ -316,41 +306,34 @@ Each experiment:
 4. Run local diagnosis/build checks as needed.
 5. Run pre-triage checks appropriate to the changed surface.
 6. Commit the candidate before any benchmark timing.
-7. Run one `local_triage` comparison from the current baseline commit to that
-   candidate commit using exact refs and shorter workload settings.
-8. Parse the copied local `aggregate.json` and append a triage row. If triage is
-   clearly slower, noisy without enough upside, contract-weakening, or below the
+7. Run one `local_triage` benchmark with shorter Make variables and compare the
+   resulting SPS to the current recorded baseline.
+8. Parse the benchmark output and append a triage row. If triage is clearly
+   slower, noisy without enough upside, contract-weakening, or below the
    escalation bar, mark `triage_discard`, reset to the pre-experiment SHA, and
    continue with the next idea.
 9. For triage survivors, run the full required checks.
-10. Run exactly one `local_acceptance` `/local-benchmark` comparison from the
-    current baseline commit to that candidate commit. The local-benchmark skill
-    may continue through its sequential convergence checkpoints inside that
-    single comparison according to its preregistered gates.
-11. Parse the copied local `aggregate.json` and append a result row with the machine
-    decision fields.
+10. Run exactly one `local_acceptance` timing pass with `make benchmark`.
+11. Parse the benchmark output and append a result row with the machine decision
+    fields.
 12. Decide:
    - `keep`: required checks passed, the aggregate is a valid
-     `paired_compare_fixed_local` result, benchmark load/validity gates passed, the
-     bootstrap lower bound is above `1.00`, candidate-faster pair count satisfies
-     the `/local-benchmark` interpretation rules, and median paired speedup is
-     clearly positive. Treat `median_pair_ratio >= 1.10` as a strong keep signal;
-     smaller wins may still need the `keep_small_gain` rules.
-   - `keep_small_gain`: allowed only when `/local-benchmark` would call the result
-     a small local win, required checks passed, the change is simple,
-     low-risk, simplifying, or plausibly compounding, the bootstrap lower bound
-     is above `1.00`, and the candidate-faster pair count/CV/outlier/load gates
-     are clean. A raw `median_pair_ratio > 1.00` by itself is never enough.
+     `make benchmark` result, benchmark load/validity gates passed, and measured
+     speedup is clearly positive. Treat `>=10%` as a strong keep signal; smaller
+     wins may still need the `keep_small_gain` rules.
+   - `keep_small_gain`: allowed only when `make benchmark` shows a small local
+     win, required checks passed, the change is simple, low-risk, simplifying, or
+     plausibly compounding, and noisy/load-sensitive explanations are unlikely.
+     A raw tiny speedup by itself is never enough.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
-13. If kept, update baseline fields to the candidate commit and its latest benchmark
-    comparison artifact/official metrics, then continue from the improved
-    branch.
+13. If kept, update baseline fields to the candidate commit and its latest
+    `make benchmark` output/metrics, then continue from the improved branch.
 14. If rejected, reset back to pre-experiment SHA and continue.
 
 Never assume independent gains add. Every accepted commit becomes the new source
-baseline and later candidates are judged against a fresh benchmark
-comparison.
+baseline and later candidates are judged against a fresh `make benchmark`
+baseline.
 
 ## Optimization Guidance
 
@@ -382,8 +365,8 @@ unexpected unrelated branch changes appear, or the user asks to stop.
 
 For unattended goal execution, prefer blocking over guessing. A successful
 overnight goal may leave accepted commits only when each accepted candidate has:
-passing required checks, an exact-ref benchmark comparison artifact copied locally,
-valid `/local-benchmark` gates, and an updated campaign ledger. Machine busy/unreachable
+passing required checks, a `make benchmark` result recorded locally,
+valid benchmark gates, and an updated campaign ledger. Machine busy/unreachable
 states, missing fresh baseline, dirty branch ambiguity, failing tests, malformed
 aggregates, noisy CIs, missing campaign branches, or missing manifest refs must
 end as `blocked`, `inconclusive`, `discard`, or a clear pause state, not as
