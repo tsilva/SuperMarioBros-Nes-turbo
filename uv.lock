@@ -15,8 +15,8 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-supermariobrosnes-turbo = "2026-07-03T16:05:00Z"
-stable-retro-turbo = "2026-07-04T00:00:00Z"
+supermariobrosnes-turbo = "2026-07-04T07:50:05Z"
+stable-retro-turbo = "2026-07-07T00:00:00Z"
 
 [manifest]
 constraints = [
@@ -2749,7 +2749,7 @@ wheels = [
 
 [[package]]
 name = "stable-retro-turbo"
-version = "1.0.1.post3"
+version = "1.0.1.post6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "python_full_version == '3.14.*'" },
@@ -2757,8 +2757,8 @@ dependencies = [
     { name = "pyglet", marker = "python_full_version == '3.14.*'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/e2/76d8a2dafca970f31f3f48f2e43fe10fa4471eb3d51e5ceb245f41365eee/stable_retro_turbo-1.0.1.post3-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:fcb70e24b99568dd983f65c57dd49382a411ea5feed0245f6bcf61e81e731a33", size = 81537732, upload-time = "2026-07-03T16:15:38.918Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/80/b26c1de533dda8a500ad325d279c6da25559bc6cc69ffbfdd549c7cb7098/stable_retro_turbo-1.0.1.post3-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f83ee74ce98788264a8c6865ba7aea9e9f87b1769ebc9afa7620b257c9cb820", size = 84474072, upload-time = "2026-07-03T16:15:42.749Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/05/88c7d2180f355e61af4480b8c56817be1fcd91b30f008a673cf976167f07/stable_retro_turbo-1.0.1.post6-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:691e942bbcd4a87d35b7679bac3e6f05b119b96f1f594f0afa5cfda1d435ad37", size = 81543010, upload-time = "2026-07-06T17:01:37.692Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/d7/5c7658b512b9f16a9ff160d62f41b7bd49c08154080f812bf9623b3f030d/stable_retro_turbo-1.0.1.post6-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:607b7adc896461fba8d228b59170968ea9e42b9a9ddc000a87579fa7f1dd9f04", size = 84477491, upload-time = "2026-07-06T17:01:44.944Z" },
 ]
 
 [[package]]
@@ -2804,7 +2804,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "stable-baselines3", marker = "extra == 'dev'", specifier = ">=2.7.1" },
-    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.1.post3" },
+    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.1.post6" },
 ]
 provides-extras = ["dev"]
 

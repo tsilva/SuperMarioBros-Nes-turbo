@@ -119,6 +119,57 @@ def test_state_dir_env_resolves_named_initial_state(tmp_path: Path, monkeypatch:
     assert state_weights is None
 
 
+def test_constructor_state_accepts_string_list_and_dict() -> None:
+    single_states, single_names, single_weights = _normalize_initial_state_config(
+        "Level1-1",
+        None,
+        num_envs=2,
+    )
+    list_states, list_names, list_weights = _normalize_initial_state_config(
+        ["Level1-1", "Level1-2"],
+        None,
+        num_envs=2,
+    )
+    dict_states, dict_names, dict_weights = _normalize_initial_state_config(
+        {"Level1-1": 0.25, "Level1-2": 0.75},
+        None,
+        num_envs=2,
+    )
+
+    assert len(single_states) == 1
+    assert single_names == ("Level1-1",)
+    assert single_weights is None
+    assert len(list_states) == 2
+    assert list_names == ("Level1-1", "Level1-2")
+    assert list_weights is None
+    assert len(dict_states) == 2
+    assert dict_names == ("Level1-1", "Level1-2")
+    assert dict_weights == [0.25, 0.75]
+
+
+def test_weighted_state_validation_allows_zero_but_rejects_negative_and_all_zero() -> None:
+    _states, names, weights = _normalize_initial_state_config(
+        {"Level1-1": 0.0, "Level1-2": 3.0},
+        None,
+        num_envs=2,
+    )
+    assert names == ("Level1-1", "Level1-2")
+    assert weights == [0.0, 1.0]
+
+    with pytest.raises(ValueError, match="non-negative finite"):
+        _normalize_initial_state_config(
+            {"Level1-1": -0.1, "Level1-2": 1.0},
+            None,
+            num_envs=2,
+        )
+    with pytest.raises(ValueError, match="positive finite"):
+        _normalize_initial_state_config(
+            {"Level1-1": 0.0, "Level1-2": 0.0},
+            None,
+            num_envs=2,
+        )
+
+
 def test_sb3_step_contract_and_reset_infos() -> None:
     env = make_env(require_rom())
     try:
@@ -322,6 +373,101 @@ def test_weighted_state_sampling_survives_lane_local_autoreset() -> None:
         env.close()
 
 
+def test_set_state_updates_sampling_on_next_reset() -> None:
+    env = make_env(
+        require_rom(),
+        state={"Level1-1": 1.0, "Level1-2": 1.0},
+        num_envs=4,
+    )
+    try:
+        env.seed(20260706)
+        env.reset()
+        assert set(env.active_states()) <= {"Level1-1", "Level1-2"}
+
+        env.set_state({"Level1-1": 0.0, "Level1-2": 1.0})
+        assert env.state_sampling_weights() == {"Level1-1": 0.0, "Level1-2": 1.0}
+        assert set(env.active_states()) <= {"Level1-1", "Level1-2"}
+
+        env.reset()
+        assert env.active_states() == ("Level1-2",) * env.num_envs
+    finally:
+        env.close()
+
+
+def test_set_state_string_and_list_match_constructor_state_forms() -> None:
+    env = make_env(
+        require_rom(),
+        state={"Level1-1": 1.0, "Level1-2": 1.0, "Level1-3": 1.0},
+        num_envs=4,
+    )
+    try:
+        env.reset()
+
+        env.set_state("Level1-3")
+        env.reset()
+        assert env.active_states() == ("Level1-3",) * env.num_envs
+
+        fixed_states = ["Level1-1", "Level1-2", "Level1-1", "Level1-2"]
+        env.set_state(fixed_states)
+        env.reset()
+        assert env.active_states() == tuple(fixed_states)
+    finally:
+        env.close()
+
+
+def test_set_state_does_not_change_active_lanes_before_boundary() -> None:
+    env = make_env(
+        require_rom(),
+        state=["Level1-1", "Level1-2"],
+        num_envs=2,
+    )
+    try:
+        env.reset()
+        before_states = env.active_states()
+        before_indices = env.active_state_indices().copy()
+
+        env.set_state("Level1-3")
+
+        assert env.active_states() == before_states
+        np.testing.assert_array_equal(env.active_state_indices(), before_indices)
+    finally:
+        env.close()
+
+
+def test_set_state_applies_to_lane_autoreset_only_after_done() -> None:
+    env = make_env(
+        require_rom(),
+        state=["Level1-1", "Level1-1"],
+        num_envs=2,
+        done_on_info={"x_progress": ("x_pos", "increase")},
+    )
+    actions = make_action_batch(env.num_envs, ["right", "noop"])
+    try:
+        env.reset()
+        assert env.active_states() == ("Level1-1", "Level1-1")
+
+        env.set_state({"Level1-2": 1.0})
+        assert env.active_states() == ("Level1-1", "Level1-1")
+
+        for _ in range(300):
+            _obs, _rewards, dones, infos = env.step(actions)
+            if not bool(dones[0]):
+                continue
+
+            assert dones.tolist() == [True, False]
+            assert env.active_states() == ("Level1-2", "Level1-1")
+            assert infos[0]["reset_info"] == {
+                "state": "Level1-2",
+                "start_state": "Level1-2",
+            }
+            assert "reset_info" not in infos[1]
+            break
+        else:
+            pytest.fail("x_pos did not increase enough to trigger lane-local autoreset")
+    finally:
+        env.close()
+
+
 def test_terminal_info_filter_only_reports_done_lanes() -> None:
     env = make_env(
         require_rom(),
@@ -373,3 +519,7 @@ def test_wrapper_option_validation_runs_before_rom_load() -> None:
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on=["bad_event"])
     with pytest.raises(ValueError, match="cannot pass both done_on"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on=["life_loss"], done_on_info={})
+    with pytest.raises(TypeError, match="states"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, states=["Level1-1"])
+    with pytest.raises(TypeError, match="state_probs"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, state_probs=[1.0])

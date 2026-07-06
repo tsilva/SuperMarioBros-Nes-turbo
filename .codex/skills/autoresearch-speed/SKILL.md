@@ -1,6 +1,6 @@
 ---
 name: autoresearch-speed
-description: Single-threaded Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with fixed local experiments, make-test regression gating, commit/revert discipline, and experiment tracking.
+description: Phased Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with fixed local experiments, make-test regression gating, commit/revert discipline, and experiment tracking.
 ---
 
 # Autoresearch Speed
@@ -37,9 +37,11 @@ Run it from the local checkout after the candidate is committed. Local commands
 are for correctness, compilation, formatting, profiling, diagnosis, and timing;
 do not call a benchmark skill.
 
-Default campaign mode is dedicated-machine fast iteration: reject bad ideas as
-soon as a cheap `make benchmark` screen shows they are not promising, and spend
-full acceptance time only on candidates that look likely to improve results.
+Default campaign mode is phased dedicated-machine fast iteration: generate and
+code a small batch of candidate proposals, stop all agent activity, then
+benchmark and accept candidates serially. Reject bad ideas as soon as a cheap
+`make benchmark` screen shows they are not promising, and spend full acceptance
+time only on candidates that look likely to improve results.
 
 ## Benchmark Access
 
@@ -128,6 +130,8 @@ Track every trial, including crashes and rejects:
 - `.codex/optimization_campaigns/ideas.md` for the live idea queue
 - `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md` for the
   branch-independent durable idea queue
+- `/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/candidates/` for
+  coordinator-imported implementation candidate manifests
 
 Keep `results.tsv` and the repo copy of `ideas.md` uncommitted unless the user
 asks to commit logs. Accepted source commits stay on the campaign branch;
@@ -247,6 +251,87 @@ Do not spend benchmark runs merely to generate ideas. Idea generation is analysi
 work; only concrete candidates selected from the queue go through diagnosis,
 triage, and possible `make benchmark` acceptance.
 
+## Phased Batch Mode
+
+Use phased batch mode when there are multiple independent, small, high-quality
+ready ideas. Use the serial single-candidate loop instead when there is one
+obvious best idea, when the change is contract-sensitive, or when benchmark
+feedback is needed before coding the next candidate.
+
+Phases:
+
+1. `generate`: fork idea agents, deduplicate their entries, and select a small
+   batch by expected SPS impact, simplicity, correctness risk, and mechanism
+   diversity. Preserve one lane for structural simplification ideas when the
+   profiler only points at local hotspots.
+2. `code`: fork implementation agents in isolated `git worktree` checkouts.
+   Use two implementation agents by default. Raise to three only when the
+   selected candidates are small, clearly independent, and unlikely to compete
+   for the same hot path. Each agent implements one candidate, runs targeted
+   non-official checks, creates a final commit, and returns a manifest.
+3. `freeze`: stop all implementation and idea agents before any official
+   timing. No agent builds, tests, profiling runs, local timings, edits, or
+   background jobs may continue during `benchmark` or `merge`.
+4. `benchmark`: the main thread imports candidate manifests, chooses evaluation
+   order, and evaluates candidates one at a time on the quiet machine.
+5. `merge`: if the batch has accepted commits, run merge verification against
+   current `main` and merge only if the accepted batch still shows a real win.
+   If the batch has no kept candidates, do not merge.
+6. `next_batch`: update the idea queue, rejection evidence, candidate manifests,
+   and campaign state, then start a new generate/code phase or pause.
+
+Implementation agents must not run official benchmarks, mutate
+`.codex/optimization_campaigns/current.json`, mutate `results.tsv`, edit either
+ideas queue copy, touch `main`, reset the coordinator branch, switch the main
+thread's branch, or continue after the freeze phase. Worker-side timings, if
+any, are diagnostic only and cannot justify `keep` or `keep_small_gain`.
+
+Candidate manifests are proposals, not acceptance evidence. Each worker must
+commit its final patch before handoff and report a manifest with enough identity
+to recover and replay it:
+
+```json
+{
+  "schema_version": 1,
+  "idea_id": "IDEA-YYYYMMDD-NNN",
+  "worker_id": "worker-1",
+  "repo_path": "/Users/tsilva/repos/tsilva/SuperMarioBros-Nes-turbo",
+  "worktree_path": "/absolute/path/to/worktree",
+  "branch": "codex/autoresearch-worker-...",
+  "base_sha": "40-hex-sha",
+  "candidate_sha": "40-hex-sha",
+  "patch_id": "git patch-id --stable value if available",
+  "changed_files": ["src/emulator.rs"],
+  "checks_run": ["cargo fmt --check", "cargo check --release"],
+  "risk_level": "low | medium | high",
+  "expected_speed_mechanism": "short concrete mechanism",
+  "worker_verdict": "ready | incomplete | discard",
+  "notes": "short handoff notes"
+}
+```
+
+The coordinator imports manifests into
+`/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/candidates/`. Do not
+let workers append to a shared repo-local candidate file. If a manifest names an
+uncommitted diff, a missing commit, or an unrecoverable worktree, mark it
+`incomplete` or `discard` rather than reconstructing the candidate by hand.
+
+Coordinator candidate evaluation rules:
+
+- Choose evaluation order by expected incremental value, simplicity, risk, and
+  overlap; do not use FIFO by default.
+- Treat every worker candidate as a proposal until it is replayed onto the
+  current accepted campaign baseline and measured there.
+- Prefer creating a fresh replay branch from the current baseline and
+  cherry-picking the candidate commit(s). If the cherry-pick is messy, either
+  discard the candidate or return it to a worker in a later code phase.
+- After accepting candidate A, candidate B must be replayed onto
+  `baseline + A`, checked again, and benchmarked again before it can be kept.
+- Reject candidates that become redundant, conflict-heavy, contract-weakening,
+  too complex for their measured gain, or no longer improve SPS on the updated
+  baseline.
+- Never assume isolated worker gains add.
+
 ## Required Checks
 
 Before every `local_acceptance` benchmark, run:
@@ -322,9 +407,12 @@ Each experiment:
      speedup is clearly positive. Treat `>=10%` as a strong keep signal; smaller
      wins may still need the `keep_small_gain` rules.
    - `keep_small_gain`: allowed only when `make benchmark` shows a small local
-     win, required checks passed, the change is simple, low-risk, simplifying, or
-     plausibly compounding, and noisy/load-sensitive explanations are unlikely.
-     A raw tiny speedup by itself is never enough.
+     win, required checks passed, the change is simple, low-risk, composable,
+     simplifying, or plausibly compounding, and noisy/load-sensitive
+     explanations are unlikely. For gains below `+3%`, require a meaningful
+     simplification/removal, a very narrow hot-path mechanism, or direct
+     evidence that the change composes with the accepted batch. A raw tiny
+     speedup by itself is never enough.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
 13. If kept, update baseline fields to the candidate commit and its latest
@@ -334,6 +422,11 @@ Each experiment:
 Never assume independent gains add. Every accepted commit becomes the new source
 baseline and later candidates are judged against a fresh `make benchmark`
 baseline.
+
+For phased batches, this serial experiment loop runs inside the `benchmark`
+phase for each imported candidate. A candidate accepted during the batch updates
+the campaign baseline immediately. Every remaining candidate must then be
+replayed onto that updated baseline before any checks or timing.
 
 ## Optimization Guidance
 
@@ -376,6 +469,34 @@ Triage artifacts are useful evidence for why ideas were discarded, but they are
 not accepted commits and must not remain in history after rejection. Reset
 triage rejects away promptly so the dedicated machine keeps producing useful
 experiments instead of polishing losing candidates.
+
+Use a review checkpoint after any of: one clear `keep`, two or three clean
+`keep_small_gain` commits, six to ten consecutive rejects after the last keep,
+three to four hours of active campaign time without meaningful progress, or
+before touching benchmark semantics, public APIs, or major test contracts. If
+accepted commits exist, the checkpoint may become a merge verification. If no
+accepted commits exist, do not merge; update rejection evidence, refresh or
+re-rank ideas, and continue with a new batch or pause.
+
+Before merging accepted campaign work into `main`, ensure there are no active
+agents or background builds/tests/profiling/timing jobs, then run:
+
+```bash
+cargo fmt --check
+cargo check --release
+.venv/bin/python -m maturin develop --release
+make test
+make benchmark
+```
+
+For a stronger final gate, run:
+
+```bash
+.venv/bin/python scripts/run_git_ref_benchmark.py main codex/autoresearch-continuous
+```
+
+Merge only when the accepted batch shows a real measured win versus current
+`main`.
 
 On pause, leave accepted commits on the campaign branch, rejected commits out of
 history, update campaign state, and report:
