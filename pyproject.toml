@@ -20,7 +20,7 @@ dev = [
   "maturin>=1.7,<2",
   "pytest>=8",
   "stable-baselines3>=2.7.1",
-  "stable-retro-turbo==1.0.1.post6; python_version == '3.14'",
+  "stable-retro-turbo==1.0.1.post7; python_version == '3.14'",
 ]
 
 [tool.maturin]
