@@ -14,11 +14,11 @@ import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 
-REMOTE_ROOT = PurePosixPath("/home/tsilva/SuperMarioBros-Nes-turbo-host-bench")
+LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local")
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE = "stable-retro-turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -30,21 +30,6 @@ def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[st
 
 def quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
-def ssh_base(args: argparse.Namespace) -> list[str]:
-    cmd = ["ssh"]
-    if args.host_key_alias:
-        cmd += ["-o", f"HostKeyAlias={args.host_key_alias}"]
-    cmd.append(args.ssh_target)
-    return cmd
-
-
-def rsync_rsh(args: argparse.Namespace) -> str:
-    parts = ["ssh"]
-    if args.host_key_alias:
-        parts += ["-o", f"HostKeyAlias={args.host_key_alias}"]
-    return " ".join(parts)
 
 
 def pypi_latest() -> dict[str, Any]:
@@ -145,60 +130,55 @@ def parse_load1(text: str | None) -> float | None:
     return float(text.split("load average:", 1)[1].split(",", 1)[0].strip())
 
 
-def make_remote_run_name(version: str, workload_hash: str) -> str:
+def make_local_run_name(version: str, workload_hash: str) -> str:
     safe_version = re.sub(r"[^A-Za-z0-9_.-]", "-", version)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     return f"host-pypi-stable-retro-turbo-{safe_version}-{stamp}-{workload_hash[:8]}"
 
 
-def remote_setup(args: argparse.Namespace, remote: PurePosixPath, version: str) -> None:
-    run(ssh_base(args) + [f"mkdir -p {quote(str(remote / 'raw'))} {quote(str(remote / 'scripts'))}"])
-    run(
-        [
-            "rsync",
-            "-az",
-            "-e",
-            rsync_rsh(args),
-            "scripts/benchmark_stable_retro_turbo_pypi.py",
-            f"{args.ssh_target}:{remote / 'scripts'}/",
-        ]
-    )
+def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
+    (run_dir / "raw").mkdir(parents=True, exist_ok=True)
+    (run_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    shutil.copy2("scripts/benchmark_stable_retro_turbo_pypi.py", run_dir / "scripts")
     setup = (
-        f"cd {quote(str(remote))} && "
+        f"cd {quote(str(run_dir))} && "
         f"uv venv --python {quote(args.python)} .venv && "
         f"uv pip install --python .venv/bin/python {quote(PACKAGE + '==' + version)}"
     )
-    run(ssh_base(args) + [setup])
+    run(["bash", "-lc", setup])
 
 
-def run_invocations(args: argparse.Namespace, remote: PurePosixPath) -> None:
+def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
     base_cmd = (
-        f"cd {quote(str(remote))} && "
+        f"cd {quote(str(run_dir))} && "
         f"RAYON_NUM_THREADS={args.num_threads} .venv/bin/python scripts/benchmark_stable_retro_turbo_pypi.py "
         f"--rom-path {quote(args.rom_path)} "
         f"--num-envs {args.num_envs} --num-threads {args.num_threads} "
         f"--steps {args.steps} --repeats {args.repeats} --warmup {args.warmup} "
         f"--json --output-json "
     )
-    run(ssh_base(args) + [f"uptime > {quote(str(remote / 'raw' / 'load-before-measured.txt'))}"])
+    run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-measured.txt'))}"])
     for index in range(args.warmup_invocations):
-        output = remote / "raw" / f"warmup-pypi-{index:02d}.json"
-        run(ssh_base(args) + [base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
+        output = run_dir / "raw" / f"warmup-pypi-{index:02d}.json"
+        run(["bash", "-lc", base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
     for index in range(args.measured_invocations):
-        output = remote / "raw" / f"measured-pypi-{index:02d}.json"
-        run(ssh_base(args) + [base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
-    run(ssh_base(args) + [f"uptime > {quote(str(remote / 'raw' / 'load-after-measured.txt'))}"])
+        output = run_dir / "raw" / f"measured-pypi-{index:02d}.json"
+        run(["bash", "-lc", base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
+    run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-after-measured.txt'))}"])
 
 
-def copy_remote_tree(args: argparse.Namespace, remote: PurePosixPath, cache_dir: Path) -> None:
+def copy_local_tree(run_dir: Path, cache_dir: Path) -> None:
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
     (cache_dir / "raw").mkdir(parents=True, exist_ok=True)
-    remote_prefix = f"{args.ssh_target}:{remote}"
-    run(["rsync", "-az", "-e", rsync_rsh(args), f"{remote_prefix}/raw/", str(cache_dir / "raw") + "/"])
+    for path in sorted((run_dir / "raw").glob("*")):
+        if path.suffix == ".json" and path.name.endswith(".stdout.json"):
+            continue
+        if path.suffix in {".json", ".txt"}:
+            shutil.copy2(path, cache_dir / "raw" / path.name)
 
 
-def aggregate(args: argparse.Namespace, cache_dir: Path, remote: PurePosixPath, version_info: dict[str, Any], workload_payload: dict[str, Any]) -> dict[str, Any]:
+def aggregate(args: argparse.Namespace, cache_dir: Path, run_dir: Path, version_info: dict[str, Any], workload_payload: dict[str, Any]) -> dict[str, Any]:
     measured_files = [cache_dir / "raw" / f"measured-pypi-{index:02d}.json" for index in range(args.measured_invocations)]
     warmup_files = [cache_dir / "raw" / f"warmup-pypi-{index:02d}.json" for index in range(args.warmup_invocations)]
     measured = []
@@ -231,8 +211,8 @@ def aggregate(args: argparse.Namespace, cache_dir: Path, remote: PurePosixPath, 
         "package": version_info,
         "workload": workload_payload,
         "workload_hash": stable_hash(workload_payload),
-        "remote_run_dir": str(remote),
-        "ssh_route": {"host": args.ssh_target, "host_key_alias": args.host_key_alias},
+        "execution_target": "local_dedicated_host",
+        "local_run_dir": str(run_dir),
         "measured_invocation_count": args.measured_invocations,
         "warmup_invocation_count": args.warmup_invocations,
         "measured_invocations": measured,
@@ -266,7 +246,7 @@ def write_manifest_and_index(args: argparse.Namespace, cache_dir: Path, aggregat
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cache_dir": str(cache_dir),
         "copied_files": files,
-        "retention": "local cache is durable; remote pypi run dir is purged after copy",
+        "retention": "local cache is durable; local pypi run dir is purged after copy",
     }
     (cache_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     index_path = args.local_cache_root / "index.jsonl"
@@ -293,21 +273,19 @@ def write_manifest_and_index(args: argparse.Namespace, cache_dir: Path, aggregat
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def purge_remote(args: argparse.Namespace, remote: PurePosixPath) -> None:
+def purge_local(run_dir: Path) -> None:
     try:
-        remote.relative_to(REMOTE_ROOT / "runs")
+        run_dir.relative_to(LOCAL_ROOT / "runs")
     except ValueError as exc:
-        raise SystemExit(f"Refusing to purge remote path outside benchmark runs: {remote}") from exc
-    run(ssh_base(args) + [f"rm -rf -- {quote(str(remote))}"])
+        raise SystemExit(f"Refusing to purge path outside benchmark runs: {run_dir}") from exc
+    shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=None, help="PyPI version; defaults to latest from PyPI JSON.")
     parser.add_argument("--python", default="3.14")
-    parser.add_argument("--ssh-target", default="beast-3-local")
-    parser.add_argument("--host-key-alias", default=None)
-    parser.add_argument("--rom-path", required=True, help="ROM path on the remote benchmark host.")
+    parser.add_argument("--rom-path", required=True, help="ROM path on the benchmark host.")
     parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/host-results/pypi-stable-retro-turbo"))
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)
@@ -317,7 +295,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--warmup-invocations", type=int, default=2)
     parser.add_argument("--measured-invocations", type=int, default=11)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--keep-remote", action="store_true")
+    parser.add_argument("--keep-run-dir", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -333,23 +311,23 @@ def main(argv: list[str]) -> int:
         print(json.dumps({"cache_hit": True, "aggregate": str(aggregate_path), "workload_hash": workload_hash}, indent=2))
         return 0
 
-    run_name = make_remote_run_name(version_info["version"], workload_hash)
-    remote = REMOTE_ROOT / "runs" / run_name
+    run_name = make_local_run_name(version_info["version"], workload_hash)
+    run_dir = LOCAL_ROOT / "runs" / run_name
     try:
-        remote_setup(args, remote, version_info["version"])
-        run_invocations(args, remote)
-        copy_remote_tree(args, remote, cache_dir)
-        aggregate_payload = aggregate(args, cache_dir, remote, version_info, workload_payload)
+        local_setup(args, run_dir, version_info["version"])
+        run_invocations(args, run_dir)
+        copy_local_tree(run_dir, cache_dir)
+        aggregate_payload = aggregate(args, cache_dir, run_dir, version_info, workload_payload)
         write_manifest_and_index(args, cache_dir, aggregate_payload)
     except BaseException:
-        if not args.keep_remote:
+        if not args.keep_run_dir:
             try:
-                purge_remote(args, remote)
+                purge_local(run_dir)
             except Exception as cleanup_error:
-                print(f"warning: failed to purge interrupted remote run {remote}: {cleanup_error}", file=sys.stderr)
+                print(f"warning: failed to purge interrupted local run {run_dir}: {cleanup_error}", file=sys.stderr)
         raise
-    if not args.keep_remote:
-        purge_remote(args, remote)
+    if not args.keep_run_dir:
+        purge_local(run_dir)
     print(json.dumps({"cache_hit": False, "aggregate": str(cache_dir / "aggregate.json"), "workload_hash": workload_hash, "validity_passed": aggregate_payload["validity_passed"]}, indent=2))
     return 0
 

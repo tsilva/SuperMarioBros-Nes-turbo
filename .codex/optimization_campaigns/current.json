@@ -13,10 +13,10 @@
     "max_estimated_wall_clock_minutes": null
   },
   "host_benchmarks_used": 0,
-  "previous_remote_benchmarks_used": 0,
+  "previous_benchmarks_used": 0,
   "requires_fresh_host_baseline": true,
-  "previous_remote_initial_baseline_artifact": null,
-  "previous_remote_initial_baseline_mean_env_steps_per_sec": null,
+  "previous_initial_baseline_artifact": null,
+  "previous_initial_baseline_mean_env_steps_per_sec": null,
   "current_baseline_commit": null,
   "current_baseline_artifact": null,
   "current_baseline_host_run_dir": null,

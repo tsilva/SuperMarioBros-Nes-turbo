@@ -46,19 +46,19 @@ acceptance time only on candidates that look likely to improve results.
 
 ## Benchmark Access
 
-Assume `/autoresearch-speed` may use the fixed `beast-3-local` benchmark host
-through `/host-benchmark`. Do not ask for cloud spend, upload approval, or
-external-service confirmation before benchmarking.
+Assume `/autoresearch-speed` uses the dedicated local benchmark host through
+`/host-benchmark`. Do not use SSH, tailnet, cloud, Modal, or other non-local
+benchmark variants for autoresearch timing.
 
 If the user provides host benchmark run or wall-clock limits, record and obey
 them. If not, leave limit fields as `null` and continue until stopped or
 blocked. Run at most one host benchmark at a time.
 
 If `/host-benchmark` cannot produce a valid local `aggregate.json` because the
-host is unreachable, the load gate is busy, setup fails, metadata is malformed,
-or the result is too noisy, do not accept the candidate. Either mark the trial
-`inconclusive` and reset it away, or stop with a clear `stop_reason` when another
-attempt would just repeat the same blocker.
+load gate is busy, setup fails, metadata is malformed, or the result is too
+noisy, do not accept the candidate. Either mark the trial `inconclusive` and
+reset it away, or stop with a clear `stop_reason` when another attempt would
+just repeat the same blocker.
 
 Use the dedicated host aggressively for screening. A busy host should still
 block official acceptance unless the user explicitly says to force through load,
@@ -72,12 +72,12 @@ Use a funnel, not the full official protocol for every idea:
 1. `local_diagnosis`: uncommitted local profiling, smoke tests, and narrow
    checks for fast feedback. These results can guide edits only; they cannot
    reject or accept a committed candidate by themselves.
-2. `host_triage`: exact committed refs on `beast-3-local`, using the same public
+2. `host_triage`: exact committed refs on the dedicated local host, using the same public
    benchmark contract but shorter runner settings. Default command shape:
 
    ```bash
    .venv/bin/python scripts/run_git_ref_host_benchmark.py BASELINE_REF CANDIDATE_REF \
-     --rom-path /home/tsilva/roms/SuperMarioBros-Nes-v0.nes \
+     --rom-path /path/to/SuperMarioBros-Nes-v0.nes \
      --steps 5000 --repeats 1 --warmups 1
    ```
 
@@ -141,7 +141,7 @@ logs. Accepted source commits stay on the campaign branch; rejected commits are
 reset away.
 
 `results.tsv` should stay human-scannable. Older campaigns may already have the
-legacy remote-benchmark header:
+legacy benchmark header:
 
 ```text
 epoch	commit	mean_env_steps_per_sec	stdev_env_steps_per_sec	best_env_steps_per_sec	gain_pct	status	description	artifact
@@ -283,9 +283,8 @@ Fresh campaign:
 2. Run the initial `/host-benchmark` single-ref baseline from the unmodified
    campaign branch exact `HEAD` commit.
 3. Record the local result bundle, `aggregate.json`, official median SPS,
-   bootstrap CI, CVs, validity gates, host route/load metadata, and baseline
-   status. Do not use older remote/local mean-SPS artifacts as the active
-   baseline for new candidates.
+   bootstrap CI, CVs, validity gates, host load metadata, and baseline status.
+   Do not use older mean-SPS artifacts as the active baseline for new candidates.
 
 Each experiment:
 

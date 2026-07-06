@@ -179,7 +179,7 @@ audits, and publishes the wheels to PyPI via trusted publishing.
 
 ## Fixed-host benchmark target
 
-Use `stable-retro-turbo==1.0.1.post3` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the fixed `beast-3` CPU host.
+Use `stable-retro-turbo==1.0.1.post3` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the dedicated local CPU host.
 
 Historical fixed-host results:
 

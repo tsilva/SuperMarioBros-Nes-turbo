@@ -15,7 +15,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 try:
@@ -38,9 +38,7 @@ except ModuleNotFoundError:
     )
 
 
-REMOTE_ROOT = PurePosixPath("/home/tsilva/SuperMarioBros-Nes-turbo-host-bench")
 LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-host-bench-local")
-REMOTE_STATE_DIR = REMOTE_ROOT / "states" / "SuperMarioBros-Nes-v0"
 LOCAL_STATE_DIR = LOCAL_ROOT / "states" / "SuperMarioBros-Nes-v0"
 STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 DEFAULT_STATE_SOURCE = Path(
@@ -50,7 +48,6 @@ DEFAULT_STATE_SOURCE = Path(
 ARCHIVE_DIR = Path("artifacts/benchmarks/host-archives")
 LOCAL_RESULTS_ROOT = Path("artifacts/benchmarks/host-results")
 
-Target = Literal["remote", "local"]
 Mode = Literal["single", "compare"]
 
 
@@ -69,7 +66,6 @@ class BenchmarkRef:
 @dataclass(frozen=True)
 class BenchmarkPlan:
     mode: Mode
-    target: Target
     run_name: str
     run_dir: str
     refs: list[BenchmarkRef]
@@ -147,14 +143,13 @@ def decide_mode(refs: list[str], *, single: bool) -> tuple[Mode, list[tuple[str,
     raise SystemExit("pass one ref with --single, one candidate ref, or baseline candidate")
 
 
-def make_run_name(mode: Mode, target: Target, refs: list[BenchmarkRef]) -> str:
+def make_run_name(mode: Mode, refs: list[BenchmarkRef]) -> str:
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    prefix = "local" if target == "local" else "host"
     if mode == "single":
-        return f"{prefix}-single-{stamp}-R{refs[0].short_sha}"
+        return f"host-single-{stamp}-R{refs[0].short_sha}"
     baseline = next(ref for ref in refs if ref.role == "baseline")
     candidate = next(ref for ref in refs if ref.role == "candidate")
-    return f"{prefix}-compare-{stamp}-B{baseline.short_sha}-C{candidate.short_sha}"
+    return f"host-compare-{stamp}-B{baseline.short_sha}-C{candidate.short_sha}"
 
 
 def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
@@ -165,16 +160,14 @@ def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
         archive = ARCHIVE_DIR / f"{role}-{sha[:12]}.tar.gz"
         refs.append(BenchmarkRef(role=role, ref=ref, sha=sha, archive=archive))
 
-    target: Target = "local" if args.local else "remote"
-    root = Path(args.run_root) if target == "local" else PurePosixPath(args.run_root)
-    run_name = make_run_name(mode, target, refs)
+    root = Path(args.run_root)
+    run_name = make_run_name(mode, refs)
     run_dir = str(root / "runs" / run_name)
     state_dir = str(args.state_dir)
     checkpoints = DEFAULT_SINGLE_CHECKPOINTS if mode == "single" else DEFAULT_COMPARISON_CHECKPOINTS
     warmups = args.warmups if args.warmups is not None else 2
     return BenchmarkPlan(
         mode=mode,
-        target=target,
         run_name=run_name,
         run_dir=run_dir,
         refs=refs,
@@ -186,53 +179,26 @@ def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
     )
 
 
-def ssh_base(args: argparse.Namespace) -> list[str]:
-    cmd = ["ssh"]
-    if args.host_key_alias:
-        cmd += ["-o", f"HostKeyAlias={args.host_key_alias}"]
-    cmd.append(args.ssh_target)
-    return cmd
-
-
-def rsync_rsh(args: argparse.Namespace) -> str:
-    parts = ["ssh"]
-    if args.host_key_alias:
-        parts += ["-o", f"HostKeyAlias={args.host_key_alias}"]
-    return " ".join(parts)
-
-
 def target_run(args: argparse.Namespace, plan: BenchmarkPlan, shell: str) -> str:
-    if plan.target == "remote":
-        return run(ssh_base(args) + [shell]).stdout
     return run(["bash", "-lc", shell]).stdout
 
 
 def target_run_stream(args: argparse.Namespace, plan: BenchmarkPlan, shell: str) -> None:
-    if plan.target == "remote":
-        run_stream(ssh_base(args) + [shell])
-    else:
-        run_stream(["bash", "-lc", shell])
+    run_stream(["bash", "-lc", shell])
 
 
 def target_write(args: argparse.Namespace, plan: BenchmarkPlan, path: str, text: str) -> None:
-    if plan.target == "remote":
-        run(ssh_base(args) + [f"cat > {quote(path)}"], input_text=text)
-    else:
-        local = Path(path)
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_text(text)
+    local = Path(path)
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(text)
 
 
 def target_read(args: argparse.Namespace, plan: BenchmarkPlan, path: str) -> str:
-    if plan.target == "remote":
-        return run(ssh_base(args) + [f"cat {quote(path)}"]).stdout
     return Path(path).read_text()
 
 
 def target_exists(args: argparse.Namespace, plan: BenchmarkPlan, path: str) -> bool:
     cmd = f"test -e {quote(path)}"
-    if plan.target == "remote":
-        return run(ssh_base(args) + [cmd], check=False).returncode == 0
     return run(["bash", "-lc", cmd], check=False).returncode == 0
 
 
@@ -245,14 +211,7 @@ def parse_load1(uptime_text: str) -> float | None:
         return None
 
 
-def load_snapshot_shell(raw_path: str, *, remote: bool) -> str:
-    if remote:
-        return (
-            "set -e; "
-            f"{{ hostname; uptime; nproc; lscpu | sed -n '1,40p'; "
-            "ps -eo pid,pcpu,pmem,comm,args --sort=-pcpu | head -20; } "
-            f"> {quote(raw_path)}"
-        )
+def load_snapshot_shell(raw_path: str) -> str:
     return (
         "set -e; "
         f"{{ hostname; uptime; "
@@ -265,7 +224,7 @@ def load_snapshot_shell(raw_path: str, *, remote: bool) -> str:
 
 def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> tuple[float | None, str]:
     raw_path = f"{plan.run_dir}/raw/load-{label}.txt"
-    shell = load_snapshot_shell(raw_path, remote=plan.target == "remote")
+    shell = load_snapshot_shell(raw_path)
     target_run(args, plan, shell)
     text = target_read(args, plan, raw_path)
     return parse_load1(text), text
@@ -288,19 +247,8 @@ def ensure_states(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
         source = args.state_source / f"{name}.state"
         if not source.exists():
             raise SystemExit(f"missing state source {source}")
-    if plan.target == "remote":
-        cmd = [
-            "rsync",
-            "-az",
-            "-e",
-            rsync_rsh(args),
-            *[str(args.state_source / f"{name}.state") for name in missing],
-            f"{args.ssh_target}:{plan.state_dir}/",
-        ]
-        run_stream(cmd)
-    else:
-        for name in missing:
-            shutil.copy2(args.state_source / f"{name}.state", Path(plan.state_dir) / f"{name}.state")
+    for name in missing:
+        shutil.copy2(args.state_source / f"{name}.state", Path(plan.state_dir) / f"{name}.state")
 
 
 def create_archives(plan: BenchmarkPlan) -> list[BenchmarkRef]:
@@ -317,22 +265,10 @@ def uv_sync_command() -> str:
 
 def prepare_sources(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
     target_run(args, plan, f"mkdir -p {quote(plan.run_dir + '/archives')} {quote(plan.run_dir + '/raw')}")
-    if plan.target == "remote":
-        run_stream(
-            [
-                "rsync",
-                "-az",
-                "-e",
-                rsync_rsh(args),
-                *[str(ref.archive) for ref in plan.refs],
-                f"{args.ssh_target}:{plan.run_dir}/archives/",
-            ]
-        )
-    else:
-        archives = Path(plan.run_dir) / "archives"
-        archives.mkdir(parents=True, exist_ok=True)
-        for ref in plan.refs:
-            shutil.copy2(ref.archive, archives / ref.archive.name)
+    archives = Path(plan.run_dir) / "archives"
+    archives.mkdir(parents=True, exist_ok=True)
+    for ref in plan.refs:
+        shutil.copy2(ref.archive, archives / ref.archive.name)
 
     for ref in plan.refs:
         source_dir = f"{plan.run_dir}/sources/{ref.role}"
@@ -511,14 +447,7 @@ def target_file_hashes(args: argparse.Namespace, plan: BenchmarkPlan, paths: lis
         if not target_exists(args, plan, path):
             hashes[path] = None
             continue
-        if plan.target == "remote":
-            hashes[path] = target_run(
-                args,
-                plan,
-                f"sha256sum {quote(path)} | awk '{{print $1}}'",
-            ).strip()
-        else:
-            hashes[path] = sha256_path(Path(path))
+        hashes[path] = sha256_path(Path(path))
     return hashes
 
 
@@ -532,12 +461,7 @@ def base_aggregate(
     return {
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "execution_target": "local" if plan.target == "local" else "remote_beast_3_local",
-        "ssh_route": (
-            None
-            if plan.target == "local"
-            else {"host": args.ssh_target, "host_key_alias": args.host_key_alias}
-        ),
+        "execution_target": "local_dedicated_host",
         "target_run_dir": plan.run_dir,
         "run_name": plan.run_name,
         "local_git_status_short": run(["git", "status", "--short"]).stdout.splitlines(),
@@ -723,25 +647,6 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def finalize_remote(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
-    if args.no_finalize:
-        return
-    cmd = [
-        sys.executable,
-        "scripts/finalize_host_benchmark.py",
-        "--ssh-target",
-        args.ssh_target,
-        "--remote-run-dir",
-        plan.run_dir,
-        "--purge-local-archives",
-    ]
-    if args.host_key_alias:
-        cmd += ["--host-key-alias", args.host_key_alias]
-    if not args.keep_bulk:
-        cmd.append("--purge-remote-bulk")
-    run_stream(cmd)
-
-
 def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     if args.dry_run:
         payload = {
@@ -755,7 +660,6 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     archived_refs = create_archives(plan)
     plan = BenchmarkPlan(
         mode=plan.mode,
-        target=plan.target,
         run_name=plan.run_name,
         run_dir=plan.run_dir,
         refs=archived_refs,
@@ -776,9 +680,7 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     prepare_sources(args, plan)
     aggregate = run_single(args, plan) if plan.mode == "single" else run_compare(args, plan)
     capture_load(args, plan, "after-measured")
-    if plan.target == "remote":
-        finalize_remote(args, plan)
-    elif not args.no_finalize:
+    if not args.no_finalize:
         finalize_local(plan)
     return aggregate
 
@@ -786,7 +688,6 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
 def plan_to_json(plan: BenchmarkPlan) -> dict[str, Any]:
     return {
         "mode": plan.mode,
-        "target": plan.target,
         "run_name": plan.run_name,
         "run_dir": plan.run_dir,
         "refs": [
@@ -804,9 +705,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("refs", nargs="+", help="single ref, candidate ref, or baseline candidate")
     parser.add_argument("--single", action="store_true", help="Benchmark one ref only.")
-    parser.add_argument("--local", action="store_true", help="Run on this machine instead of beast-3-local.")
-    parser.add_argument("--ssh-target", default="beast-3-local")
-    parser.add_argument("--host-key-alias")
     parser.add_argument("--rom-path", required=True)
     parser.add_argument("--state-dir")
     parser.add_argument("--state-source", type=Path, default=DEFAULT_STATE_SOURCE)
@@ -816,17 +714,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=None)
     parser.add_argument("--max-load", type=float)
     parser.add_argument("--force-busy", action="store_true")
-    parser.add_argument("--keep-bulk", action="store_true")
     parser.add_argument("--no-finalize", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.run_root is None:
-        args.run_root = str(LOCAL_ROOT if args.local else REMOTE_ROOT)
+        args.run_root = str(LOCAL_ROOT)
     if args.state_dir is None:
-        args.state_dir = str(LOCAL_STATE_DIR if args.local else REMOTE_STATE_DIR)
+        args.state_dir = str(LOCAL_STATE_DIR)
     if args.max_load is None:
-        args.max_load = max(os.cpu_count() or 1, 1) / 3 if args.local else 4.0
+        args.max_load = max(os.cpu_count() or 1, 1) / 3
     return args
 
 

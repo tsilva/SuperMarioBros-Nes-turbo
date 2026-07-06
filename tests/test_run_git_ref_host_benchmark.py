@@ -37,13 +37,10 @@ def test_parse_load1_extracts_unix_load_average() -> None:
 
 
 def test_load_snapshot_shell_closes_group_once() -> None:
-    remote_shell = load_snapshot_shell("/tmp/load.txt", remote=True)
-    local_shell = load_snapshot_shell("/tmp/load.txt", remote=False)
+    shell = load_snapshot_shell("/tmp/load.txt")
 
-    assert "; } > /tmp/load.txt" in remote_shell
-    assert "; } > /tmp/load.txt" in local_shell
-    assert "}}" not in remote_shell
-    assert "}}" not in local_shell
+    assert "; } > /tmp/load.txt" in shell
+    assert "}}" not in shell
 
 
 def test_uv_sync_command_includes_common_user_tool_paths() -> None:
@@ -76,7 +73,6 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
 
     plan = BenchmarkPlan(
         mode="single",
-        target="local",
         run_name="local-single-test",
         run_dir=str(run_dir),
         refs=[
@@ -97,8 +93,6 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
         max_load=99.0,
         steps=50000,
         repeats=3,
-        ssh_target="beast-3-local",
-        host_key_alias=None,
     )
 
     aggregate = aggregate_single(args, plan, measured_count=11, load_values=[0.5, 0.4])

@@ -1,6 +1,6 @@
 ---
 name: host-benchmark
-description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits with the fixed host protocol, either on beast-3-local by default or directly on this machine when the user explicitly requests a local run. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on beast-3/local host, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
+description: Benchmark one SuperMarioBros-Nes-turbo commit or compare two commits with the fixed local-host protocol. Use when the user asks to benchmark, compare, confirm, or measure env_steps_per_sec on the dedicated local host, especially for exact-ref single-run baselines or deciding whether a candidate commit is faster than a baseline.
 ---
 
 # Host Benchmark
@@ -12,26 +12,25 @@ Run the checked-in deterministic runner from the repo root:
 
 ```bash
 .venv/bin/python scripts/run_git_ref_host_benchmark.py --single REF \
-  --rom-path /path/on/target/to/SuperMarioBros.nes
+  --rom-path /path/to/SuperMarioBros.nes
 
 .venv/bin/python scripts/run_git_ref_host_benchmark.py BASELINE_REF CANDIDATE_REF \
-  --rom-path /path/on/target/to/SuperMarioBros.nes
+  --rom-path /path/to/SuperMarioBros.nes
 
 .venv/bin/python scripts/run_git_ref_host_benchmark.py CANDIDATE_REF \
-  --rom-path /path/on/target/to/SuperMarioBros.nes
+  --rom-path /path/to/SuperMarioBros.nes
 ```
 
-The one-ref comparison form uses local `main` as baseline. Add `--local` only
-when the user explicitly asks to run on this machine instead of `beast-3-local`.
-Use `--dry-run` to inspect the exact run plan without creating archives or
-touching the target.
+The one-ref comparison form uses local `main` as baseline. Use `--dry-run` to
+inspect the exact run plan without creating archives or touching the benchmark
+run root.
 
 The runner owns deterministic mechanics:
 
 - exact `git rev-parse` ref resolution
 - reproducible `git archive` snapshots without switching branches
 - exclusion of dirty/untracked local files from measured sources
-- remote/local run directory naming and isolation
+- local run directory naming and isolation
 - state-file setup from the sibling stable-retro checkout
 - per-ref `uv sync --frozen --no-dev`
 - smoke checks
@@ -61,16 +60,6 @@ user provides one ref without saying "only", "single", "no comparison", or
 equivalent, compare latest local `main` against that candidate. If two refs are
 provided, first is baseline and second is candidate. If ambiguous, ask one short
 clarifying question before running.
-
-Default target is remote `beast-3-local`. If the LAN route is unavailable, retry
-with the known tailnet target and host-key alias:
-
-```bash
-.venv/bin/python scripts/run_git_ref_host_benchmark.py BASELINE_REF CANDIDATE_REF \
-  --ssh-target beast-3.tail50040f.ts.net \
-  --host-key-alias beast-3-local \
-  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
-```
 
 Do not install system packages. If Rust/Cargo is truly absent, ask before
 installing it.
@@ -121,8 +110,8 @@ The convergence math lives in:
 ## Load Gate
 
 The runner records load snapshots in `raw/load-*.txt`. By default it blocks
-remote runs when the initial 1-minute load is above `4` unless `--force-busy` is
-passed. For local runs it defaults to roughly one-third of logical CPU count.
+when the initial 1-minute load is above roughly one-third of logical CPU count
+unless `--force-busy` is passed.
 
 Smoke checks are acceptable on a busy host, but official timing should use a
 calm host. If the host is busy and the user did not ask to force it, stop and
@@ -137,19 +126,16 @@ Stable Retro oracle:
 
 ```bash
 .venv/bin/python scripts/run_pypi_stable_retro_turbo_host_benchmark.py \
-  --ssh-target beast-3-local \
-  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
+  --rom-path /path/to/SuperMarioBros.nes
 ```
 
 Published SuperMarioBros-Nes-turbo:
 
 ```bash
 .venv/bin/python scripts/run_pypi_supermariobrosnes_turbo_host_benchmark.py \
-  --ssh-target beast-3-local \
-  --rom-path /path/on/beast-3-local/to/SuperMarioBros.nes
+  --rom-path /path/to/SuperMarioBros.nes
 ```
 
-Use the tailnet `--ssh-target` plus `--host-key-alias beast-3-local` if needed.
 Use cached PyPI baselines until PyPI publishes a newer version or the workload
 hash changes.
 
