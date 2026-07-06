@@ -9,8 +9,9 @@ else
 RUSTFLAGS_EXT ?=
 endif
 BENCHMARK_NUM_ENVS ?= 16
-BENCHMARK_STEPS ?= 500
+BENCHMARK_STEPS ?= 5000
 BENCHMARK_REPEATS ?= 3
+BENCHMARK_WARMUP ?= 500
 BENCHMARK_ARGS ?=
 
 develop:
@@ -19,7 +20,7 @@ develop:
 benchmark: benchmark-local
 
 benchmark-local:
-	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) $(BENCHMARK_ARGS)
+	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_ARGS)
 
 release:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev --group dev

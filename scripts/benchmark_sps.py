@@ -22,6 +22,8 @@ from supermariobrosnes_turbo import (
 
 DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+DEFAULT_MIN_START_LOAD_LIMIT = 4.0
+DEFAULT_START_LOAD_CPU_FRACTION = 0.5
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
 BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 ACTION_BUTTONS = {
@@ -78,6 +80,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument(
+        "--max-start-load",
+        type=float,
+        default=None,
+        help=(
+            "Fail before benchmarking if 1-minute load exceeds this value. "
+            "Default: max(4.0, logical_cpus * 0.5)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-load-preflight",
+        action="store_true",
+        help="Disable the startup CPU load guard.",
+    )
+    parser.add_argument(
         "--profile-output",
         type=Path,
         default=None,
@@ -110,6 +126,8 @@ def validate_args(args: argparse.Namespace) -> None:
     for field in non_negative_fields:
         if getattr(args, field) < 0:
             raise ValueError(f"--{field.replace('_', '-')} must be non-negative")
+    if args.max_start_load is not None and args.max_start_load <= 0:
+        raise ValueError("--max-start-load must be positive")
     action_meanings = ACTION_SETS[args.action_set]
     if args.action not in action_meanings:
         raise ValueError(
@@ -149,6 +167,50 @@ def benchmark_state(args: argparse.Namespace) -> str | list[str] | None:
 
 def has_initial_state(args: argparse.Namespace) -> bool:
     return args.state is not None or args.parsed_states is not None
+
+
+def default_max_start_load() -> float:
+    return max(
+        DEFAULT_MIN_START_LOAD_LIMIT,
+        (os.cpu_count() or 1) * DEFAULT_START_LOAD_CPU_FRACTION,
+    )
+
+
+def load_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    if args.skip_load_preflight:
+        return {
+            "enabled": False,
+            "start_1min": None,
+            "max_start_load": None,
+            "load_ok": True,
+        }
+    max_start_load = args.max_start_load
+    if max_start_load is None:
+        max_start_load = default_max_start_load()
+    try:
+        start_1min = os.getloadavg()[0]
+    except (AttributeError, OSError) as exc:
+        return {
+            "enabled": True,
+            "start_1min": None,
+            "max_start_load": max_start_load,
+            "load_ok": True,
+            "unavailable_reason": str(exc),
+        }
+    load_ok = start_1min <= max_start_load
+    result: dict[str, Any] = {
+        "enabled": True,
+        "start_1min": start_1min,
+        "max_start_load": max_start_load,
+        "load_ok": load_ok,
+    }
+    if not load_ok:
+        raise SystemExit(
+            f"Refusing to benchmark: 1-minute load {start_1min:.2f} exceeds "
+            f"--max-start-load {max_start_load:.2f}. Use --skip-load-preflight "
+            "to override."
+        )
+    return result
 
 
 def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
@@ -221,6 +283,7 @@ def build_result(
     obs: np.ndarray,
     runs: list[dict[str, float]],
     active_states: tuple[str | None, ...],
+    load: dict[str, Any],
 ) -> dict[str, Any]:
     batch_sps = [run["batch_steps_per_sec"] for run in runs]
     env_sps = [run["env_steps_per_sec"] for run in runs]
@@ -260,6 +323,7 @@ def build_result(
             "bytes": int(obs.nbytes),
             "mib": obs.nbytes / (1024**2),
         },
+        "load": load,
         "runs": runs,
         "summary": {
             "elapsed_s": summarize(elapsed),
@@ -287,6 +351,18 @@ def print_human(result: dict[str, Any]) -> None:
     )
     if config["lane_states"] is not None:
         print(f"lane_states={config['lane_states']}")
+    load = result["load"]
+    if load["enabled"] and load["start_1min"] is not None:
+        print(
+            "load_preflight="
+            f"start_1min={load['start_1min']:.2f} "
+            f"max_start_load={load['max_start_load']:.2f} "
+            f"load_ok={load['load_ok']}"
+        )
+    elif load["enabled"]:
+        print(f"load_preflight=unavailable load_ok={load['load_ok']}")
+    else:
+        print("load_preflight=disabled")
     print(
         f"obs_shape={tuple(obs['shape'])} obs_dtype={obs['dtype']} "
         f"obs_mib={obs['mib']:.2f}"
@@ -312,6 +388,7 @@ def main() -> None:
     args = parse_args()
     validate_args(args)
     args.parsed_states = initial_states_for_args(args)
+    load = load_preflight(args)
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
     if args.state_dir is not None:
@@ -340,7 +417,7 @@ def main() -> None:
     if args.profile_output is not None:
         env.reset_profiler()
     runs = [run_once(env, actions, args) for _ in range(args.repeats)]
-    result = build_result(args, obs, runs, active_states)
+    result = build_result(args, obs, runs, active_states, load)
     if args.profile_output is not None:
         result["profiler"] = env.profiler_snapshot()
 

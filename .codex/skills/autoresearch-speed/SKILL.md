@@ -27,8 +27,8 @@ Do not fake speed by skipping emulator progression, weakening the workload,
 returning stale observations, changing the public command, or loosening the
 observed contract.
 
-Throughput evidence must go through `/host-benchmark`. At the start of every
-campaign turn that needs timing evidence, read
+Throughput acceptance evidence must go through `/host-benchmark`. At the start
+of every campaign turn that needs timing evidence, read
 `.codex/skills/host-benchmark/SKILL.md` and follow that skill as the benchmark
 subroutine. Invoke it with exact committed refs; local dirty files are never part
 of benchmark acceptance. Local commands are for correctness, compilation,
@@ -39,6 +39,10 @@ decision metric: median candidate/baseline ratio after warmup-pair discard, the
 bootstrap confidence interval, faster-pair count, and validity gates. Treat
 absolute SPS as useful context, not as the decision statistic for candidate
 acceptance.
+
+Default campaign mode is dedicated-machine fast iteration: reject bad ideas as
+soon as a cheap exact-ref screen shows they are not promising, and spend full
+acceptance time only on candidates that look likely to improve results.
 
 ## Benchmark Access
 
@@ -55,6 +59,49 @@ host is unreachable, the load gate is busy, setup fails, metadata is malformed,
 or the result is too noisy, do not accept the candidate. Either mark the trial
 `inconclusive` and reset it away, or stop with a clear `stop_reason` when another
 attempt would just repeat the same blocker.
+
+Use the dedicated host aggressively for screening. A busy host should still
+block official acceptance unless the user explicitly says to force through load,
+but cheap triage runs may use the same exact-ref runner with shorter workload
+settings to avoid wasting time on obvious losers.
+
+## Benchmark Tiers
+
+Use a funnel, not the full official protocol for every idea:
+
+1. `local_diagnosis`: uncommitted local profiling, smoke tests, and narrow
+   checks for fast feedback. These results can guide edits only; they cannot
+   reject or accept a committed candidate by themselves.
+2. `host_triage`: exact committed refs on `beast-3-local`, using the same public
+   benchmark contract but shorter runner settings. Default command shape:
+
+   ```bash
+   .venv/bin/python scripts/run_git_ref_host_benchmark.py BASELINE_REF CANDIDATE_REF \
+     --rom-path /home/tsilva/roms/SuperMarioBros-Nes-v0.nes \
+     --steps 5000 --repeats 1 --warmups 1
+   ```
+
+   The runner still performs smoke checks, alternating paired order, exact git
+   archives, isolated source trees, state hashes, and local result retention.
+   Treat `host_triage` as screening only. It can justify `triage_discard`,
+   another focused edit, or escalation to acceptance. It cannot justify `keep`.
+3. `host_acceptance`: the full `/host-benchmark` protocol with default official
+   workload and convergence gates. Only this tier can justify `keep`,
+   `keep_small_gain`, updating the active baseline, or reporting an accepted
+   campaign speedup.
+
+Triage interpretation:
+
+- If median paired ratio is below `1.00`, or below `1.01` with unstable/noisy
+  direction, discard or revise without running the full acceptance protocol.
+- If median paired ratio is at least `1.03`, the candidate is worth full checks
+  and `host_acceptance` unless the change is risky or contract-sensitive.
+- If median paired ratio is `1.01` to `1.03`, escalate only for simple,
+  low-risk, compounding, or simplifying changes. Otherwise prefer the next idea.
+- If triage is noisy, rerun triage once on a calmer host or with `--steps 10000`;
+  do not keep sampling until the result becomes favorable.
+- Never accept a candidate whose full acceptance result fails validity gates or
+  does not improve the paired decision statistic.
 
 ## Branch And State
 
@@ -107,14 +154,16 @@ header when practical:
 epoch	commit	baseline_commit	official_median_sps	median_pair_ratio	ci95_low	ci95_high	candidate_faster_pairs	measured_pairs	status	description	artifact
 ```
 
-Statuses: `baseline`, `keep`, `keep_small_gain`, `discard`, `crash`,
-`regression_fixed_keep`, `regression_unfixed_discard`, `inconclusive`.
+Statuses: `baseline`, `triage_discard`, `triage_promote`, `keep`,
+`keep_small_gain`, `discard`, `crash`, `regression_fixed_keep`,
+`regression_unfixed_discard`, `inconclusive`.
 
 Manifest fields should include campaign id/mode, branch names, root SHA, epoch,
 allowed benchmark skill/output root, optional host benchmark limits, host
-benchmarks used, current baseline artifact and official median SPS, latest host
-comparison aggregate fields, accepted commits, discarded commits, current
-experiment, and stop reason.
+benchmarks used, triage benchmarks used, current baseline artifact and official
+median SPS, latest triage aggregate fields, latest host comparison aggregate
+fields, accepted commits, discarded commits, current experiment, and stop
+reason.
 
 ## Ideas Queue
 
@@ -185,12 +234,12 @@ mechanism and target files, assign stable `IDEA-YYYYMMDD-NNN` IDs, and keep the
 highest-signal ideas near the top of `Ready`.
 
 Do not spend host benchmark runs merely to generate ideas. Idea generation is analysis
-work; only concrete candidates selected from the queue go through the required
-checks and `/host-benchmark`.
+work; only concrete candidates selected from the queue go through diagnosis,
+triage, and possible `/host-benchmark` acceptance.
 
 ## Required Checks
 
-Before every candidate host benchmark, run:
+Before every `host_acceptance` benchmark, run:
 
 ```bash
 cargo fmt --check
@@ -203,7 +252,15 @@ make test
 unit tests plus the stable-retro-turbo oracle parity suite, including
 observation/preprocessing checks for renderer, termination, reset, and info
 surface regressions. Do not substitute `cargo test`, `cargo check`, smoke
-scripts, or local throughput runs for `make test`.
+scripts, local throughput runs, or `host_triage` for `make test` before
+acceptance.
+
+Before `host_triage`, run the cheapest checks that match the changed surface.
+Default to `cargo fmt --check` and `cargo check --release` for Rust-only hot-path
+changes. Add targeted tests before triage when touching observations, rewards,
+termination, reset behavior, action mapping, info fields, preprocessing bytes,
+state loading, or Python API contracts. Full `make test` may wait until after a
+positive triage signal unless the change is contract-sensitive.
 
 Use narrower checks such as `scripts/check_vec_env_equivalence.py` or
 `scripts/smoke_smb.py` only for diagnosis or rerunning the first failing surface.
@@ -238,15 +295,22 @@ Each experiment:
    running low.
 3. Edit directly on the campaign branch.
 4. Run local diagnosis/build checks as needed.
-5. Run required checks.
-6. Commit the candidate before benchmarking.
-7. Run exactly one `/host-benchmark` comparison from the current baseline commit
-   to that candidate commit. The host-benchmark skill may continue through its
-   sequential convergence checkpoints inside that single comparison according to
-   its preregistered gates.
-8. Parse the copied local `aggregate.json` and append a result row with the host
-   decision fields.
-9. Decide:
+5. Run pre-triage checks appropriate to the changed surface.
+6. Commit the candidate before any host timing.
+7. Run one `host_triage` comparison from the current baseline commit to that
+   candidate commit using exact refs and shorter workload settings.
+8. Parse the copied local `aggregate.json` and append a triage row. If triage is
+   clearly slower, noisy without enough upside, contract-weakening, or below the
+   escalation bar, mark `triage_discard`, reset to the pre-experiment SHA, and
+   continue with the next idea.
+9. For triage survivors, run the full required checks.
+10. Run exactly one `host_acceptance` `/host-benchmark` comparison from the
+    current baseline commit to that candidate commit. The host-benchmark skill
+    may continue through its sequential convergence checkpoints inside that
+    single comparison according to its preregistered gates.
+11. Parse the copied local `aggregate.json` and append a result row with the host
+    decision fields.
+12. Decide:
    - `keep`: required checks passed, the aggregate is a valid
      `paired_compare_fixed_host` result, host load/validity gates passed, the
      bootstrap lower bound is above `1.00`, candidate-faster pair count satisfies
@@ -260,10 +324,10 @@ Each experiment:
      are clean. A raw `median_pair_ratio > 1.00` by itself is never enough.
    - `discard`: equal/slower/noisy/too complex/contract weakening.
    - `inconclusive`: malformed, too noisy, or incomparable metadata.
-10. If kept, update baseline fields to the candidate commit and its latest host
+13. If kept, update baseline fields to the candidate commit and its latest host
     comparison artifact/official metrics, then continue from the improved
     branch.
-11. If rejected, reset back to pre-experiment SHA and continue.
+14. If rejected, reset back to pre-experiment SHA and continue.
 
 Never assume independent gains add. Every accepted commit becomes the new source
 baseline and later candidates are judged against a fresh host benchmark
@@ -306,6 +370,11 @@ aggregates, noisy CIs, missing campaign branches, or missing manifest refs must
 end as `blocked`, `inconclusive`, `discard`, or a clear pause state, not as
 `keep`.
 
+Triage artifacts are useful evidence for why ideas were discarded, but they are
+not accepted commits and must not remain in history after rejection. Reset
+triage rejects away promptly so the dedicated machine keeps producing useful
+experiments instead of polishing losing candidates.
+
 On pause, leave accepted commits on the campaign branch, rejected commits out of
 history, update campaign state, and report:
 
@@ -315,6 +384,7 @@ history, update campaign state, and report:
 - checks run
 - changed files
 - host benchmarks/remaining limits if provided
+- triage benchmarks used, accepted/escalated count, and triage rejects
 - next plausible experiment
 - whether the branch appears fast-forwardable from `main`
 
