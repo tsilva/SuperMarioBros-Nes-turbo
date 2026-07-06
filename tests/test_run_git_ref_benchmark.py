@@ -9,21 +9,89 @@ import pytest
 from scripts.run_git_ref_benchmark import (
     BenchmarkPlan,
     BenchmarkRef,
+    EXPECTED_SMB_ROM_SHA256,
+    STATE_NAMES,
+    append_index,
+    aggregate_with_extra_load_snapshot,
     aggregate_single,
+    base_aggregate,
+    benchmark_command,
+    benchmark_tier,
     cap_checkpoints,
     decide_mode,
+    execute,
     load_ok_for_validity,
+    load_gate_stop_reason,
+    load_raw,
     load_snapshot_shell,
+    measured_invocation_limit_applies,
     parse_args,
     parse_load1,
+    require_load_gate,
+    require_wall_clock_budget,
+    run_compare,
     uv_sync_command,
+    validate_rom_hash,
 )
 
 
-def write_raw(path: Path, values: list[float]) -> None:
+def benchmark_raw_config(
+    plan: BenchmarkPlan,
+    args: SimpleNamespace,
+    *,
+    steps: int | None = None,
+    repeats: int | None = None,
+) -> dict[str, object]:
+    return {
+        "rom_path": plan.rom_path,
+        "rom_sha256": EXPECTED_SMB_ROM_SHA256,
+        "rayon_num_threads": 12,
+        "num_envs": 16,
+        "steps": args.steps if steps is None else steps,
+        "repeats": args.repeats if repeats is None else repeats,
+        "warmup": 100,
+        "frame_skip": 4,
+        "frame_stack": 4,
+        "grayscale": True,
+        "crop_top": 32,
+        "crop_bottom": 0,
+        "resize_width": 84,
+        "resize_height": 84,
+        "obs_resize_algorithm": "area",
+        "action_set": "simple",
+        "action": "noop",
+        "state": None,
+        "states": list(STATE_NAMES),
+        "state_dir": plan.state_dir,
+        "include_info": False,
+        "terminate_on_flag": False,
+        "start_game": False,
+    }
+
+
+def write_raw(path: Path, values: list[float], config: dict[str, object]) -> None:
     path.write_text(
-        json.dumps({"runs": [{"env_steps_per_sec": value} for value in values]}) + "\n"
+        json.dumps(
+            {
+                "package": {
+                    "name": "supermariobrosnes-turbo",
+                    "version": "0.0.test",
+                    "import": "supermariobrosnes_turbo",
+                },
+                "config": config,
+                "runs": [{"env_steps_per_sec": value} for value in values],
+            }
+        )
+        + "\n"
     )
+
+
+def valid_package_metadata() -> dict[str, object]:
+    return {
+        "name": "supermariobrosnes-turbo",
+        "version": "0.0.test",
+        "import": "supermariobrosnes_turbo",
+    }
 
 
 def test_decide_mode_rejects_multi_ref_single() -> None:
@@ -39,12 +107,39 @@ def test_parse_args_reads_rom_path_from_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SMB_ROM_PATH", raising=False)
-    (tmp_path / ".env").write_text("SMB_ROM_PATH=~/roms/SuperMarioBros.nes\n")
+    monkeypatch.delenv("ROM_PATH", raising=False)
+    rom_path = tmp_path / "SuperMarioBros.nes"
+    rom_path.write_bytes(b"placeholder")
+    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
 
     args = parse_args(["--single", "HEAD", "--dry-run"])
 
-    assert args.rom_path == str(Path("~/roms/SuperMarioBros.nes").expanduser())
+    assert args.rom_path == str(rom_path)
+
+
+def test_parse_args_dry_run_allows_planned_missing_rom_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ROM_PATH", raising=False)
+    rom_path = tmp_path / "planned" / "SuperMarioBros.nes"
+    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+
+    args = parse_args(["--single", "HEAD", "--dry-run"])
+
+    assert args.rom_path == str(rom_path)
+
+
+def test_parse_args_real_run_rejects_missing_rom_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ROM_PATH", raising=False)
+    rom_path = tmp_path / "planned" / "SuperMarioBros.nes"
+    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+
+    with pytest.raises(SystemExit, match="ROM path does not exist"):
+        parse_args(["--single", "HEAD"])
 
 
 @pytest.mark.parametrize(
@@ -65,8 +160,10 @@ def test_parse_args_rejects_invalid_benchmark_limits(
     message: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SMB_ROM_PATH", raising=False)
-    (tmp_path / ".env").write_text("SMB_ROM_PATH=/tmp/SuperMarioBros.nes\n")
+    monkeypatch.delenv("ROM_PATH", raising=False)
+    rom_path = tmp_path / "SuperMarioBros.nes"
+    rom_path.write_bytes(b"placeholder")
+    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
 
     with pytest.raises(SystemExit, match=message):
         parse_args(["--single", "HEAD", "--dry-run", flag, value])
@@ -93,16 +190,212 @@ def test_uv_sync_command_includes_common_user_tool_paths() -> None:
     assert command.endswith("uv sync --frozen --no-dev")
 
 
-def test_cap_checkpoints_preserves_limit_as_final_checkpoint() -> None:
+def test_cap_checkpoints_treats_limit_as_upper_bound() -> None:
     assert cap_checkpoints((7, 11, 15, 21, 31), None) == (7, 11, 15, 21, 31)
     assert cap_checkpoints((7, 11, 15, 21, 31), 3) == (3,)
     assert cap_checkpoints((7, 11, 15, 21, 31), 11) == (7, 11)
-    assert cap_checkpoints((7, 11, 15, 21, 31), 40) == (7, 11, 15, 21, 31, 40)
+    assert cap_checkpoints((7, 11, 15, 21, 31), 40) == (7, 11, 15, 21, 31)
+
+
+def test_measured_invocation_limit_reason_only_applies_when_shortened(tmp_path: Path) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="limit-reason-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(7, 11, 15, 21, 31),
+        warmups=2,
+        measured_cap=31,
+    )
+
+    assert measured_invocation_limit_applies(
+        SimpleNamespace(max_measured_invocations=3), plan
+    )
+    assert not measured_invocation_limit_applies(
+        SimpleNamespace(max_measured_invocations=31), plan
+    )
+    assert not measured_invocation_limit_applies(
+        SimpleNamespace(max_measured_invocations=40), plan
+    )
+
+
+def test_benchmark_tier_labels_official_and_triage_shapes(tmp_path: Path) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="tier-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(7, 11, 15, 21, 31),
+        warmups=2,
+        measured_cap=31,
+    )
+
+    assert benchmark_tier(
+        SimpleNamespace(steps=50000, repeats=3, max_measured_invocations=None),
+        plan,
+    ) == "local_acceptance"
+    assert benchmark_tier(
+        SimpleNamespace(steps=5000, repeats=1, max_measured_invocations=3),
+        BenchmarkPlan(
+            mode=plan.mode,
+            run_name=plan.run_name,
+            run_dir=plan.run_dir,
+            refs=plan.refs,
+            rom_path=plan.rom_path,
+            state_dir=plan.state_dir,
+            checkpoints=(3,),
+            warmups=0,
+            measured_cap=3,
+        ),
+    ) == "local_triage"
+    assert benchmark_tier(
+        SimpleNamespace(steps=5000, repeats=1, max_measured_invocations=None),
+        plan,
+    ) == "local_diagnosis"
+
+
+def test_benchmark_command_pins_canonical_workload_flags(tmp_path: Path) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="command-flags-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(7,),
+        warmups=2,
+        measured_cap=7,
+    )
+
+    command = benchmark_command(plan, "candidate", "measured-candidate-00", steps=50000, repeats=3)
+
+    for expected in (
+        "--num-envs 16",
+        "--steps 50000 --repeats 3",
+        "--warmup 100",
+        "--frame-skip 4",
+        "--frame-stack 4",
+        "--crop-top 32",
+        "--crop-bottom 0",
+        "--resize-width 84",
+        "--resize-height 84",
+        "--states Level1-1,Level1-2,Level1-3,Level1-4",
+        "--action-set simple --action noop",
+        "--no-start-game",
+    ):
+        assert expected in command
+
+
+def test_execute_dry_run_reports_tier_and_workload_hash(tmp_path: Path) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="dry-run-tier-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(7, 11, 15, 21, 31),
+        warmups=2,
+        measured_cap=31,
+    )
+    args = SimpleNamespace(
+        dry_run=True,
+        steps=50000,
+        repeats=3,
+        max_load=1.0,
+        force_busy=False,
+        max_measured_invocations=None,
+        max_wall_clock_minutes=None,
+    )
+
+    payload = execute(args, plan)
+
+    assert payload["benchmark_tier"] == "local_acceptance"
+    assert payload["workload"]["obs_resize_algorithm"] == "area"
+    assert len(payload["workload_hash"]) == 64
+    assert payload["planned_workload_hash"] == payload["workload_hash"]
+    assert payload["workload_hash_scope"] == "planned_without_rom_or_state_file_hashes"
 
 
 def test_force_busy_overrides_load_for_validity_only() -> None:
     assert not load_ok_for_validity(SimpleNamespace(force_busy=False, max_load=1.0), [2.0])
     assert load_ok_for_validity(SimpleNamespace(force_busy=True, max_load=1.0), [2.0])
+
+
+def test_load_gate_blocks_missing_or_busy_load_before_expensive_phase() -> None:
+    args = SimpleNamespace(force_busy=False, max_load=1.0)
+
+    with pytest.raises(SystemExit, match="benchmark load unavailable before measured phase"):
+        require_load_gate(args, None, "measured phase")
+    with pytest.raises(SystemExit, match="benchmark load 2.00 meets or exceeds max 1.00 before measured phase"):
+        require_load_gate(args, 2.0, "measured phase")
+    with pytest.raises(SystemExit, match="benchmark load 1.00 meets or exceeds max 1.00 before measured phase"):
+        require_load_gate(args, 1.0, "measured phase")
+
+    require_load_gate(SimpleNamespace(force_busy=True, max_load=1.0), 2.0, "measured phase")
+
+
+def test_checkpoint_load_gate_failure_gets_stop_reason() -> None:
+    args = SimpleNamespace(force_busy=False, max_load=1.0)
+
+    assert load_gate_stop_reason(args, 2.0) == "load_gate_failed"
+    assert load_gate_stop_reason(args, None) == "load_gate_failed"
+    assert load_gate_stop_reason(args, 1.0) == "load_gate_failed"
+    assert load_gate_stop_reason(args, 0.5) is None
+    assert load_gate_stop_reason(SimpleNamespace(force_busy=True, max_load=1.0), 2.0) is None
+
+
+def test_wall_clock_budget_error_names_phase() -> None:
+    args = SimpleNamespace(max_wall_clock_minutes=0.001)
+
+    with pytest.raises(SystemExit, match="wall-clock limit exhausted before source preparation"):
+        require_wall_clock_budget(args, start_time=0.0, phase="source preparation")
+
+
+def test_wall_clock_budget_allows_unlimited_runs() -> None:
+    args = SimpleNamespace(max_wall_clock_minutes=None)
+
+    require_wall_clock_budget(args, start_time=0.0, phase="source preparation")
+
+
+def test_validate_rom_hash_rejects_wrong_rom_bytes(tmp_path: Path) -> None:
+    rom_path = tmp_path / "not-the-rom.nes"
+    rom_path.write_bytes(b"not the supported rom")
+
+    with pytest.raises(SystemExit, match="ROM SHA-256 mismatch"):
+        validate_rom_hash(str(rom_path))
+
+
+def test_campaign_results_header_tracks_benchmark_identity_and_rom_digest() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    header = (
+        repo_root / ".codex" / "optimization_campaigns" / "results.tsv"
+    ).read_text().splitlines()[0].split("\t")
+
+    assert "benchmark_tier" in header
+    assert "workload_hash" in header
+    assert header.index("workload_hash") == header.index("benchmark_tier") + 1
+    assert "expected_rom_sha256" in header
+    assert "rom_sha256" in header
+    assert header.index("rom_sha256") == header.index("expected_rom_sha256") + 1
+    assert "state_sha256" in header
+    assert header.index("state_sha256") == header.index("rom_sha256") + 1
 
 
 def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
@@ -122,9 +415,6 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
         1001.0,
         1000.0,
     ]
-    for index, value in enumerate(medians):
-        write_raw(raw_dir / f"measured-ref-{index:02d}.json", [value - 1.0, value, value + 1.0])
-
     plan = BenchmarkPlan(
         mode="single",
         run_name="local-single-test",
@@ -151,12 +441,541 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
         max_measured_invocations=None,
         max_wall_clock_minutes=None,
     )
+    config = benchmark_raw_config(plan, args)
+    smoke_config = benchmark_raw_config(plan, args, steps=1000, repeats=1)
+    write_raw(raw_dir / "smoke-ref.json", [1000.0], smoke_config)
+    for index in range(plan.warmups):
+        write_raw(raw_dir / f"warmup-ref-{index:02d}.json", [1000.0], config)
+    for index, value in enumerate(medians):
+        write_raw(
+            raw_dir / f"measured-ref-{index:02d}.json",
+            [value - 1.0, value, value + 1.0],
+            config,
+        )
 
-    aggregate = aggregate_single(args, plan, measured_count=11, load_values=[0.5, 0.4])
+    aggregate = aggregate_single(
+        args,
+        plan,
+        measured_count=11,
+        load_values=[0.5, 0.4],
+        load_labels=["before-setup", "before-measured"],
+    )
 
     assert aggregate["mode"] == "single_ref_fixed_local"
+    assert aggregate["benchmark_tier"] == "local_diagnosis"
+    assert len(aggregate["workload_hash"]) == 64
     assert aggregate["decision"] == "converged"
     assert aggregate["official_median_sps"] == 1001.0
     assert aggregate["checkpoint_trace"][-1]["count"] == 11
     assert aggregate["load_gate_passed"]
     assert not aggregate["load_gate_ignored_for_validity"]
+    assert aggregate["smoke_raw_files"] == [{"file": "raw/smoke-ref.json", "tier": "smoke"}]
+    assert aggregate["warmup_raw_files"] == [
+        "raw/warmup-ref-00.json",
+        "raw/warmup-ref-01.json",
+    ]
+    assert aggregate["setup_only_raw_files"] == [
+        {"file": "raw/smoke-ref.json", "tier": "smoke"},
+        {"file": "raw/warmup-ref-00.json", "tier": "warmup"},
+        {"file": "raw/warmup-ref-01.json", "tier": "warmup"},
+    ]
+    assert aggregate["load_1min_labels"] == ["before-setup", "before-measured"]
+    assert aggregate["load_1min_by_label"] == {"before-setup": 0.5, "before-measured": 0.4}
+    assert aggregate["workload"]["rom_path"] == plan.rom_path
+    assert aggregate["workload"]["state_dir"] == plan.state_dir
+    assert aggregate["workload"]["warmup"] == 100
+    assert aggregate["workload"]["crop_bottom"] == 0
+    assert aggregate["workload"]["obs_resize_algorithm"] == "area"
+    assert aggregate["workload"]["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
+    assert aggregate["workload"]["rom_sha256"] is None
+    assert aggregate["workload"]["state_sha256"] == {
+        "Level1-1": None,
+        "Level1-2": None,
+        "Level1-3": None,
+        "Level1-4": None,
+    }
+
+
+def test_workload_hash_includes_state_file_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="state-hash-workload-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path="/roms/SuperMarioBros.nes",
+        state_dir="/states/SuperMarioBros-Nes-v0",
+        checkpoints=(7,),
+        warmups=2,
+        measured_cap=7,
+    )
+    args = SimpleNamespace(
+        steps=50000,
+        repeats=3,
+        max_load=1.0,
+        force_busy=False,
+        max_measured_invocations=None,
+        max_wall_clock_minutes=None,
+    )
+    file_hash_sets = iter(
+        [
+            {
+                "/roms/SuperMarioBros.nes": EXPECTED_SMB_ROM_SHA256,
+                "/states/SuperMarioBros-Nes-v0/Level1-1.state": "state-a",
+                "/states/SuperMarioBros-Nes-v0/Level1-2.state": "state-b",
+                "/states/SuperMarioBros-Nes-v0/Level1-3.state": "state-c",
+                "/states/SuperMarioBros-Nes-v0/Level1-4.state": "state-d",
+            },
+            {
+                "/roms/SuperMarioBros.nes": EXPECTED_SMB_ROM_SHA256,
+                "/states/SuperMarioBros-Nes-v0/Level1-1.state": "state-a",
+                "/states/SuperMarioBros-Nes-v0/Level1-2.state": "state-b",
+                "/states/SuperMarioBros-Nes-v0/Level1-3.state": "state-c",
+                "/states/SuperMarioBros-Nes-v0/Level1-4.state": "changed-state-d",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.target_file_hashes",
+        lambda *_args: next(file_hash_sets),
+    )
+
+    first = base_aggregate(args, plan, [0.5])
+    second = base_aggregate(args, plan, [0.5])
+
+    assert first["workload"]["state_sha256"]["Level1-4"] == "state-d"
+    assert second["workload"]["state_sha256"]["Level1-4"] == "changed-state-d"
+    assert first["workload_hash"] != second["workload_hash"]
+
+
+def test_load_raw_rejects_measured_workload_mismatch(tmp_path: Path) -> None:
+    run_dir = tmp_path / "local-mismatch-test"
+    raw_dir = run_dir / "raw"
+    raw_dir.mkdir(parents=True)
+    plan = BenchmarkPlan(
+        mode="single",
+        run_name="local-mismatch-test",
+        run_dir=str(run_dir),
+        refs=[
+            BenchmarkRef(
+                role="ref",
+                ref="HEAD",
+                sha="1" * 40,
+                archive=tmp_path / "ref-111111111111.tar.gz",
+            )
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(5,),
+        warmups=0,
+        measured_cap=5,
+    )
+    args = SimpleNamespace(steps=50000, repeats=3)
+    config = benchmark_raw_config(plan, args)
+    config["steps"] = 5000
+    write_raw(raw_dir / "measured-ref-00.json", [1000.0, 1001.0, 999.0], config)
+
+    with pytest.raises(SystemExit, match="workload mismatch: config.steps=5000 expected 50000"):
+        load_raw(args, plan, "measured-ref-00")
+
+
+def test_load_raw_rejects_package_identity_mismatch(tmp_path: Path) -> None:
+    run_dir = tmp_path / "local-package-mismatch-test"
+    raw_dir = run_dir / "raw"
+    raw_dir.mkdir(parents=True)
+    plan = BenchmarkPlan(
+        mode="single",
+        run_name="local-package-mismatch-test",
+        run_dir=str(run_dir),
+        refs=[
+            BenchmarkRef(
+                role="ref",
+                ref="HEAD",
+                sha="1" * 40,
+                archive=tmp_path / "ref-111111111111.tar.gz",
+            )
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(5,),
+        warmups=0,
+        measured_cap=5,
+    )
+    args = SimpleNamespace(steps=50000, repeats=3)
+    config = benchmark_raw_config(plan, args)
+    path = raw_dir / "measured-ref-00.json"
+    payload = {
+        "package": {
+            "name": "stable-retro-turbo",
+            "version": "1.0.0",
+            "import": "stable_retro",
+        },
+        "config": config,
+        "runs": [{"env_steps_per_sec": 1000.0}],
+    }
+    path.write_text(json.dumps(payload) + "\n")
+
+    with pytest.raises(SystemExit, match="package mismatch: package.name"):
+        load_raw(args, plan, "measured-ref-00")
+
+    payload["package"] = {
+        "name": "supermariobrosnes-turbo",
+        "version": None,
+        "import": "supermariobrosnes_turbo",
+    }
+    path.write_text(json.dumps(payload) + "\n")
+
+    with pytest.raises(SystemExit, match="package.version must be a string"):
+        load_raw(args, plan, "measured-ref-00")
+
+
+def test_load_raw_rejects_invalid_benchmark_samples(tmp_path: Path) -> None:
+    run_dir = tmp_path / "local-invalid-samples-test"
+    raw_dir = run_dir / "raw"
+    raw_dir.mkdir(parents=True)
+    plan = BenchmarkPlan(
+        mode="single",
+        run_name="local-invalid-samples-test",
+        run_dir=str(run_dir),
+        refs=[
+            BenchmarkRef(
+                role="ref",
+                ref="HEAD",
+                sha="1" * 40,
+                archive=tmp_path / "ref-111111111111.tar.gz",
+            )
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(5,),
+        warmups=0,
+        measured_cap=5,
+    )
+    args = SimpleNamespace(steps=50000, repeats=3)
+    config = benchmark_raw_config(plan, args)
+    path = raw_dir / "measured-ref-00.json"
+
+    path.write_text("[]\n")
+    with pytest.raises(SystemExit, match="is not a JSON object"):
+        load_raw(args, plan, "measured-ref-00")
+
+    path.write_text(json.dumps({"package": valid_package_metadata(), "config": config, "runs": []}) + "\n")
+    with pytest.raises(SystemExit, match="missing non-empty benchmark runs"):
+        load_raw(args, plan, "measured-ref-00")
+
+    path.write_text(json.dumps({"package": valid_package_metadata(), "config": config, "runs": [{"env_steps_per_sec": 0.0}]}) + "\n")
+    with pytest.raises(SystemExit, match="non-positive env_steps_per_sec"):
+        load_raw(args, plan, "measured-ref-00")
+
+    path.write_text(json.dumps({"package": valid_package_metadata(), "config": config, "runs": [{"env_steps_per_sec": float("nan")}]}) + "\n")
+    with pytest.raises(SystemExit, match="non-finite env_steps_per_sec"):
+        load_raw(args, plan, "measured-ref-00")
+
+
+def test_run_compare_checks_wall_clock_before_each_half_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="half-pair-limit-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(2,),
+        warmups=0,
+        measured_cap=2,
+    )
+    args = SimpleNamespace(
+        force_busy=False,
+        max_load=1.0,
+        max_wall_clock_minutes=1.0,
+        max_measured_invocations=None,
+        steps=50000,
+        repeats=3,
+    )
+    invocations: list[str] = []
+    checks = iter([False, False, False, False, False, True])
+
+    def fake_wall_clock_limit_exceeded(*_args: object) -> bool:
+        return next(checks)
+
+    def fake_run_invocation(
+        _args: object,
+        _plan: BenchmarkPlan,
+        role: str,
+        output_name: str,
+        *_positional: object,
+        **_keyword: object,
+    ) -> None:
+        invocations.append(output_name)
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.capture_load", lambda *_args: (0.1, ""))
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.wall_clock_limit_exceeded",
+        fake_wall_clock_limit_exceeded,
+    )
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.run_invocation", fake_run_invocation)
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.aggregate_compare",
+        lambda *_args, **_keyword: {"should_stop": False},
+    )
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.write_aggregate", lambda *_args: None)
+
+    aggregate = run_compare(args, plan, start_time=0.0)
+
+    assert invocations == [
+        "smoke-baseline",
+        "smoke-candidate",
+        "measured-baseline-00",
+        "measured-candidate-00",
+        "measured-candidate-01",
+    ]
+    assert aggregate["limit_stop_reason"] == "max_wall_clock_minutes"
+    assert aggregate["discarded_incomplete_pair_raw_files"] == [
+        "raw/measured-candidate-01.json"
+    ]
+
+
+def test_run_compare_blocks_measured_pairs_when_pre_measured_load_is_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="busy-before-measured-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(2,),
+        warmups=0,
+        measured_cap=2,
+    )
+    args = SimpleNamespace(
+        force_busy=False,
+        max_load=1.0,
+        max_wall_clock_minutes=None,
+        max_measured_invocations=None,
+        steps=50000,
+        repeats=3,
+    )
+    invocations: list[str] = []
+
+    def fake_run_invocation(
+        _args: object,
+        _plan: BenchmarkPlan,
+        _role: str,
+        output_name: str,
+        *_positional: object,
+        **_keyword: object,
+    ) -> None:
+        invocations.append(output_name)
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.capture_load", lambda *_args: (2.0, ""))
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.run_invocation", fake_run_invocation)
+
+    with pytest.raises(SystemExit, match="benchmark load 2.00 meets or exceeds max 1.00 before measured phase"):
+        run_compare(args, plan, start_time=0.0)
+
+    assert invocations == ["smoke-baseline", "smoke-candidate"]
+
+
+def test_run_compare_stops_when_load_fails_after_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="busy-after-checkpoint-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(1, 2),
+        warmups=0,
+        measured_cap=2,
+    )
+    args = SimpleNamespace(
+        force_busy=False,
+        max_load=1.0,
+        max_wall_clock_minutes=None,
+        max_measured_invocations=None,
+        steps=50000,
+        repeats=3,
+    )
+    invocations: list[str] = []
+    loads = iter([(0.1, ""), (2.0, "")])
+    written: list[dict[str, object]] = []
+
+    def fake_run_invocation(
+        _args: object,
+        _plan: BenchmarkPlan,
+        _role: str,
+        output_name: str,
+        *_positional: object,
+        **_keyword: object,
+    ) -> None:
+        invocations.append(output_name)
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.capture_load", lambda *_args: next(loads))
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.run_invocation", fake_run_invocation)
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.aggregate_compare",
+        lambda *_args, **_keyword: {"should_stop": False, "validity_passed": False},
+    )
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.write_aggregate",
+        lambda _args, _plan, aggregate: written.append(dict(aggregate)),
+    )
+
+    aggregate = run_compare(args, plan, start_time=0.0)
+
+    assert invocations == [
+        "smoke-baseline",
+        "smoke-candidate",
+        "measured-baseline-00",
+        "measured-candidate-00",
+    ]
+    assert aggregate["limit_stop_reason"] == "load_gate_failed"
+    assert written[-1]["limit_stop_reason"] == "load_gate_failed"
+
+
+def test_aggregate_with_extra_load_snapshot_refreshes_validity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="after-load-refresh-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(1,),
+        warmups=0,
+        measured_cap=1,
+    )
+    args = SimpleNamespace(
+        force_busy=False,
+        max_load=1.0,
+        max_wall_clock_minutes=None,
+        max_measured_invocations=None,
+        steps=50000,
+        repeats=3,
+    )
+    original = {
+        "measured_pairs": 1,
+        "load_1min_labels": ["before-setup", "before-measured"],
+        "load_1min_values": [0.2, 0.3],
+        "limit_stop_reason": "max_measured_invocations",
+    }
+    calls: list[dict[str, object]] = []
+
+    def fake_aggregate_compare(
+        _args: object,
+        _plan: BenchmarkPlan,
+        *,
+        measured_count: int,
+        load_values: list[float | None],
+        load_labels: list[str],
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "measured_count": measured_count,
+                "load_values": list(load_values),
+                "load_labels": list(load_labels),
+            }
+        )
+        return {
+            "measured_pairs": measured_count,
+            "load_1min_labels": load_labels,
+            "load_1min_values": load_values,
+            "load_gate_passed": False,
+            "validity_passed": False,
+        }
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.aggregate_compare", fake_aggregate_compare)
+
+    refreshed = aggregate_with_extra_load_snapshot(
+        args,
+        plan,
+        original,
+        label="after-measured",
+        load_value=1.5,
+    )
+
+    assert calls == [
+        {
+            "measured_count": 1,
+            "load_values": [0.2, 0.3, 1.5],
+            "load_labels": ["before-setup", "before-measured", "after-measured"],
+        }
+    ]
+    assert refreshed["load_gate_passed"] is False
+    assert refreshed["validity_passed"] is False
+    assert refreshed["limit_stop_reason"] == "load_gate_failed"
+    assert refreshed["previous_limit_stop_reason"] == "max_measured_invocations"
+
+
+def test_append_index_preserves_validity_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.LOCAL_RESULTS_ROOT", tmp_path)
+    aggregate = {
+        "mode": "paired_compare_fixed_local",
+        "benchmark_tier": "local_acceptance",
+        "refs": {"baseline": "main", "candidate": "HEAD"},
+        "shas": {"baseline": "1" * 40, "candidate": "2" * 40},
+        "workload_hash": "abcdef",
+        "measured_pair_details": [{"pair_index": 0}, {"pair_index": 1}],
+        "median_pair_ratio": 1.02,
+        "validity_passed": True,
+        "load_gate_passed": False,
+        "load_gate_ignored_for_validity": True,
+        "limit_stop_reason": "max_measured_invocations",
+        "previous_limit_stop_reason": "load_gate_failed",
+        "benchmark_limits": {"max_measured_invocations": 3, "max_wall_clock_minutes": None},
+        "discarded_incomplete_pair_raw_files": ["raw/measured-candidate-01.json"],
+        "expected_rom_sha256": "expected",
+        "rom_sha256": "actual",
+        "state_sha256": {"Level1-1": "state-sha"},
+        "decision": "needs_more_samples",
+    }
+
+    append_index("metadata-test", tmp_path / "runs" / "metadata-test", aggregate)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "index.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert records[0]["load_gate_passed"] is False
+    assert records[0]["benchmark_tier"] == "local_acceptance"
+    assert records[0]["workload_hash"] == "abcdef"
+    assert records[0]["measured_pair_count"] == 2
+    assert records[0]["load_gate_ignored_for_validity"] is True
+    assert records[0]["limit_stop_reason"] == "max_measured_invocations"
+    assert records[0]["previous_limit_stop_reason"] == "load_gate_failed"
+    assert records[0]["benchmark_limits"]["max_measured_invocations"] == 3
+    assert records[0]["discarded_incomplete_pair_raw_files"] == [
+        "raw/measured-candidate-01.json"
+    ]
+    assert records[0]["setup_only_raw_files"] is None
+    assert records[0]["expected_rom_sha256"] == "expected"
+    assert records[0]["rom_sha256"] == "actual"
+    assert records[0]["state_sha256"] == {"Level1-1": "state-sha"}

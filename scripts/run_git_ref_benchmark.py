@@ -7,6 +7,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -28,7 +29,8 @@ try:
         single_ref_convergence,
         summary,
     )
-    from dotenv_utils import require_env_or_dotenv_path
+    from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from dotenv_utils import env_or_dotenv_path, require_env_or_dotenv_path
 except ModuleNotFoundError:
     from scripts.benchmark_stats import (
         DEFAULT_COMPARISON_CHECKPOINTS,
@@ -38,12 +40,15 @@ except ModuleNotFoundError:
         single_ref_convergence,
         summary,
     )
-    from scripts.dotenv_utils import require_env_or_dotenv_path
+    from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from scripts.dotenv_utils import env_or_dotenv_path, require_env_or_dotenv_path
 
 
 LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
 LOCAL_STATE_DIR = LOCAL_ROOT / "states" / "SuperMarioBros-Nes-v0"
 STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+PACKAGE_NAME = "supermariobrosnes-turbo"
+IMPORT_PACKAGE = "supermariobrosnes_turbo"
 DEFAULT_STATE_SOURCE = Path(
     "/Users/tsilva/repos/tsilva/stable-retro-turbo/"
     "stable_retro/data/stable/SuperMarioBros-Nes-v0"
@@ -109,6 +114,29 @@ def sha256_path(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def stable_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def benchmark_tier(args: argparse.Namespace, plan: BenchmarkPlan) -> str:
+    if (
+        plan.mode == "compare"
+        and args.steps == 50000
+        and args.repeats == 3
+        and plan.warmups == 2
+    ):
+        return "local_acceptance"
+    if (
+        plan.mode == "compare"
+        and args.steps == 5000
+        and args.repeats == 1
+        and plan.warmups == 0
+        and args.max_measured_invocations == 3
+    ):
+        return "local_triage"
+    return "local_diagnosis"
 
 
 def resolve_ref(ref: str) -> str:
@@ -237,7 +265,7 @@ def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> t
 
 
 def load_ok(load_values: list[float | None], max_load: float) -> bool:
-    return all(value is not None and value <= max_load for value in load_values)
+    return all(value is not None and value < max_load for value in load_values)
 
 
 def load_ok_for_validity(args: argparse.Namespace, load_values: list[float | None]) -> bool:
@@ -246,8 +274,32 @@ def load_ok_for_validity(args: argparse.Namespace, load_values: list[float | Non
     return load_ok(load_values, args.max_load)
 
 
+def require_load_gate(args: argparse.Namespace, load_value: float | None, phase: str) -> None:
+    if args.force_busy:
+        return
+    if load_value is None:
+        raise SystemExit(
+            f"benchmark load unavailable before {phase}; rerun with --force-busy to override"
+        )
+    if load_value >= args.max_load:
+        raise SystemExit(
+            f"benchmark load {load_value:.2f} meets or exceeds max {args.max_load:.2f} before {phase}; "
+            "rerun with --force-busy to override"
+        )
+
+
+def load_gate_stop_reason(args: argparse.Namespace, load_value: float | None) -> str | None:
+    if args.force_busy:
+        return None
+    if load_value is None or load_value >= args.max_load:
+        return "load_gate_failed"
+    return None
+
+
 def cap_checkpoints(checkpoints: tuple[int, ...], cap: int | None) -> tuple[int, ...]:
     if cap is None:
+        return checkpoints
+    if cap >= checkpoints[-1]:
         return checkpoints
     capped = [checkpoint for checkpoint in checkpoints if checkpoint <= cap]
     if not capped or capped[-1] != cap:
@@ -255,10 +307,26 @@ def cap_checkpoints(checkpoints: tuple[int, ...], cap: int | None) -> tuple[int,
     return tuple(capped)
 
 
+def measured_invocation_limit_applies(args: argparse.Namespace, plan: BenchmarkPlan) -> bool:
+    if args.max_measured_invocations is None:
+        return False
+    default_max = (
+        DEFAULT_SINGLE_CHECKPOINTS[-1]
+        if plan.mode == "single"
+        else DEFAULT_COMPARISON_CHECKPOINTS[-1]
+    )
+    return args.max_measured_invocations < default_max
+
+
 def wall_clock_limit_exceeded(args: argparse.Namespace, start_time: float) -> bool:
     if args.max_wall_clock_minutes is None:
         return False
     return time.monotonic() - start_time >= args.max_wall_clock_minutes * 60.0
+
+
+def require_wall_clock_budget(args: argparse.Namespace, start_time: float, phase: str) -> None:
+    if wall_clock_limit_exceeded(args, start_time):
+        raise SystemExit(f"wall-clock limit exhausted before {phase}")
 
 
 def ensure_states(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
@@ -326,7 +394,10 @@ def benchmark_command(
         f"--state-dir {quote(plan.state_dir)} "
         "--num-envs 16 "
         f"--steps {steps} --repeats {repeats} "
+        "--warmup 100 --frame-skip 4 --frame-stack 4 "
+        "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
         f"--states {quote(states)} --action-set simple --action noop "
+        "--no-start-game "
         f"--json --output-json {quote(output)} "
         f"> {quote(output + '.stdout.json')}"
     )
@@ -344,23 +415,137 @@ def run_invocation(
     target_run_stream(args, plan, benchmark_command(plan, role, output_name, steps=steps, repeats=repeats))
 
 
-def load_raw(args: argparse.Namespace, plan: BenchmarkPlan, name: str) -> dict[str, Any]:
-    return json.loads(target_read(args, plan, f"{plan.run_dir}/raw/{name}.json"))
+def require_raw_payload_matches_plan(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    name: str,
+    *,
+    steps: int | None = None,
+    repeats: int | None = None,
+) -> None:
+    package = payload.get("package")
+    if not isinstance(package, dict):
+        raise SystemExit(f"raw/{name}.json is missing package metadata")
+    expected_package = {
+        "name": PACKAGE_NAME,
+        "import": IMPORT_PACKAGE,
+    }
+    package_mismatches = [
+        f"package.{key}={package.get(key)!r} expected {value!r}"
+        for key, value in expected_package.items()
+        if package.get(key) != value
+    ]
+    if package_mismatches:
+        raise SystemExit(f"raw/{name}.json package mismatch: " + "; ".join(package_mismatches))
+    if not isinstance(package.get("version"), str):
+        raise SystemExit(f"raw/{name}.json package.version must be a string")
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        raise SystemExit(f"raw/{name}.json is missing benchmark config")
+    expected_steps = args.steps if steps is None else steps
+    expected_repeats = args.repeats if repeats is None else repeats
+    expected = {
+        "rom_path": plan.rom_path,
+        "rom_sha256": EXPECTED_SMB_ROM_SHA256,
+        "rayon_num_threads": 12,
+        "num_envs": 16,
+        "steps": expected_steps,
+        "repeats": expected_repeats,
+        "warmup": 100,
+        "frame_skip": 4,
+        "frame_stack": 4,
+        "grayscale": True,
+        "crop_top": 32,
+        "crop_bottom": 0,
+        "resize_width": 84,
+        "resize_height": 84,
+        "obs_resize_algorithm": "area",
+        "action_set": "simple",
+        "action": "noop",
+        "state": None,
+        "states": list(STATE_NAMES),
+        "state_dir": plan.state_dir,
+        "include_info": False,
+        "terminate_on_flag": False,
+        "start_game": False,
+    }
+    mismatches = [
+        f"config.{key}={config.get(key)!r} expected {value!r}"
+        for key, value in expected.items()
+        if config.get(key) != value
+    ]
+    if mismatches:
+        raise SystemExit(f"raw/{name}.json workload mismatch: " + "; ".join(mismatches))
+
+
+def env_steps_per_sec_samples(payload: dict[str, Any], label: str) -> list[float]:
+    runs = payload.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise SystemExit(f"{label} is missing non-empty benchmark runs")
+    samples: list[float] = []
+    for index, run_payload in enumerate(runs):
+        if not isinstance(run_payload, dict):
+            raise SystemExit(f"{label} run {index} is not an object")
+        try:
+            sample = float(run_payload["env_steps_per_sec"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"{label} run {index} has invalid env_steps_per_sec") from exc
+        if not math.isfinite(sample):
+            raise SystemExit(f"{label} run {index} has non-finite env_steps_per_sec")
+        if sample <= 0.0:
+            raise SystemExit(f"{label} run {index} has non-positive env_steps_per_sec")
+        samples.append(sample)
+    return samples
+
+
+def load_raw(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    name: str,
+    *,
+    steps: int | None = None,
+    repeats: int | None = None,
+) -> dict[str, Any]:
+    payload = json.loads(target_read(args, plan, f"{plan.run_dir}/raw/{name}.json"))
+    if not isinstance(payload, dict):
+        raise SystemExit(f"raw/{name}.json is not a JSON object")
+    require_raw_payload_matches_plan(
+        payload,
+        args,
+        plan,
+        name,
+        steps=steps,
+        repeats=repeats,
+    )
+    env_steps_per_sec_samples(payload, f"raw/{name}.json")
+    return payload
+
+
+def raw_file_record(args: argparse.Namespace, plan: BenchmarkPlan, name: str, *, tier: str) -> dict[str, str]:
+    load_raw(
+        args,
+        plan,
+        name,
+        steps=1000 if tier == "smoke" else args.steps,
+        repeats=1 if tier == "smoke" else args.repeats,
+    )
+    return {"file": f"raw/{name}.json", "tier": tier}
 
 
 def invocation_median(payload: dict[str, Any]) -> float:
-    return median([float(run["env_steps_per_sec"]) for run in payload["runs"]])
+    return median(env_steps_per_sec_samples(payload, "raw payload"))
 
 
 def invocation_mean(payload: dict[str, Any]) -> float:
-    samples = [float(run["env_steps_per_sec"]) for run in payload["runs"]]
+    samples = env_steps_per_sec_samples(payload, "raw payload")
     return sum(samples) / len(samples)
 
 
 def all_samples(payloads: list[dict[str, Any]]) -> list[float]:
     samples: list[float] = []
     for payload in payloads:
-        samples.extend(float(run["env_steps_per_sec"]) for run in payload["runs"])
+        samples.extend(env_steps_per_sec_samples(payload, "raw payload"))
     return samples
 
 
@@ -370,6 +555,7 @@ def aggregate_single(
     *,
     measured_count: int,
     load_values: list[float | None],
+    load_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     payloads = [load_raw(args, plan, f"measured-ref-{index:02d}") for index in range(measured_count)]
     medians = [invocation_median(payload) for payload in payloads]
@@ -385,22 +571,25 @@ def aggregate_single(
             "file": f"raw/measured-ref-{index:02d}.json",
             "mean_env_steps_per_sec": invocation_mean(payload),
             "median_env_steps_per_sec": invocation_median(payload),
-            "samples_env_steps_per_sec": [
-                float(run["env_steps_per_sec"]) for run in payload["runs"]
-            ],
+            "samples_env_steps_per_sec": env_steps_per_sec_samples(payload, "raw payload"),
         }
         for index, payload in enumerate(payloads)
     ]
     ref = plan.refs[0]
+    smoke_raw_files = [raw_file_record(args, plan, "smoke-ref", tier="smoke")]
+    warmup_raw_files = [
+        raw_file_record(args, plan, f"warmup-ref-{index:02d}", tier="warmup")
+        for index in range(plan.warmups)
+    ]
     return {
-        **base_aggregate(args, plan, load_values),
+        **base_aggregate(args, plan, load_values, load_labels=load_labels),
         "mode": "single_ref_fixed_local",
         "refs": {"ref": ref.ref},
         "shas": {"ref": ref.sha},
         "measured_invocations": measured,
-        "warmup_raw_files": [
-            f"raw/warmup-ref-{index:02d}.json" for index in range(plan.warmups)
-        ],
+        "smoke_raw_files": smoke_raw_files,
+        "warmup_raw_files": [record["file"] for record in warmup_raw_files],
+        "setup_only_raw_files": smoke_raw_files + warmup_raw_files,
         "load_gate_passed": load_ok(load_values, args.max_load),
         "load_gate_ignored_for_validity": bool(args.force_busy),
         **convergence,
@@ -413,6 +602,7 @@ def aggregate_compare(
     *,
     measured_count: int,
     load_values: list[float | None],
+    load_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     pairs = []
     baseline_medians = []
@@ -426,8 +616,8 @@ def aggregate_compare(
         candidate_median = invocation_median(candidate_payload)
         baseline_medians.append(baseline_median)
         candidate_medians.append(candidate_median)
-        baseline_samples.extend(float(run["env_steps_per_sec"]) for run in baseline_payload["runs"])
-        candidate_samples.extend(float(run["env_steps_per_sec"]) for run in candidate_payload["runs"])
+        baseline_samples.extend(env_steps_per_sec_samples(baseline_payload, "raw payload"))
+        candidate_samples.extend(env_steps_per_sec_samples(candidate_payload, "raw payload"))
         pairs.append(
             {
                 "pair_index": index,
@@ -446,17 +636,26 @@ def aggregate_compare(
     )
     baseline = next(ref for ref in plan.refs if ref.role == "baseline")
     candidate = next(ref for ref in plan.refs if ref.role == "candidate")
+    smoke_raw_files = [
+        raw_file_record(args, plan, "smoke-baseline", tier="smoke"),
+        raw_file_record(args, plan, "smoke-candidate", tier="smoke"),
+    ]
+    warmup_raw_files = [
+        raw_file_record(args, plan, f"warmup-baseline-{index:02d}", tier="warmup")
+        for index in range(plan.warmups)
+    ] + [
+        raw_file_record(args, plan, f"warmup-candidate-{index:02d}", tier="warmup")
+        for index in range(plan.warmups)
+    ]
     return {
-        **base_aggregate(args, plan, load_values),
+        **base_aggregate(args, plan, load_values, load_labels=load_labels),
         "mode": "paired_compare_fixed_local",
         "refs": {"baseline": baseline.ref, "candidate": candidate.ref},
         "shas": {"baseline": baseline.sha, "candidate": candidate.sha},
         "measured_pair_details": pairs,
-        "warmup_raw_files": [
-            f"raw/warmup-baseline-{index:02d}.json"
-            for index in range(plan.warmups)
-        ]
-        + [f"raw/warmup-candidate-{index:02d}.json" for index in range(plan.warmups)],
+        "smoke_raw_files": smoke_raw_files,
+        "warmup_raw_files": [record["file"] for record in warmup_raw_files],
+        "setup_only_raw_files": smoke_raw_files + warmup_raw_files,
         "baseline_run_median_summary": summary(baseline_medians),
         "candidate_run_median_summary": summary(candidate_medians),
         "baseline_all_sample_summary": summary(baseline_samples),
@@ -482,44 +681,75 @@ def target_file_hashes(args: argparse.Namespace, plan: BenchmarkPlan, paths: lis
     return hashes
 
 
+def workload_payload(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
+    return {
+        "rom_path": plan.rom_path,
+        "state_dir": plan.state_dir,
+        "rayon_num_threads": 12,
+        "num_envs": 16,
+        "steps": args.steps,
+        "repeats": args.repeats,
+        "warmup": 100,
+        "frame_skip": 4,
+        "frame_stack": 4,
+        "grayscale": True,
+        "crop_top": 32,
+        "crop_bottom": 0,
+        "resize": [84, 84],
+        "states": list(STATE_NAMES),
+        "action_set": "simple",
+        "action": "noop",
+        "obs_resize_algorithm": "area",
+        "include_info": False,
+        "terminate_on_flag": False,
+        "start_game": False,
+    }
+
+
 def base_aggregate(
     args: argparse.Namespace,
     plan: BenchmarkPlan,
     load_values: list[float | None],
+    *,
+    load_labels: list[str] | None = None,
 ) -> dict[str, Any]:
+    if load_labels is None:
+        load_labels = [f"load-{index}" for index in range(len(load_values))]
     state_paths = [f"{plan.state_dir}/{name}.state" for name in STATE_NAMES]
     file_hashes = target_file_hashes(args, plan, [plan.rom_path, *state_paths])
+    rom_sha256 = file_hashes.get(plan.rom_path)
+    state_sha256 = {
+        name: file_hashes.get(f"{plan.state_dir}/{name}.state") for name in STATE_NAMES
+    }
+    workload = {
+        **workload_payload(args, plan),
+        "expected_rom_sha256": EXPECTED_SMB_ROM_SHA256,
+        "rom_sha256": rom_sha256,
+        "state_sha256": state_sha256,
+    }
     return {
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "benchmark_tier": benchmark_tier(args, plan),
         "execution_target": "local_machine",
         "target_run_dir": plan.run_dir,
         "run_name": plan.run_name,
         "local_git_status_short": run(["git", "status", "--short"]).stdout.splitlines(),
         "dirty_local_files_excluded": True,
-        "workload": {
-            "rayon_num_threads": 12,
-            "num_envs": 16,
-            "steps": args.steps,
-            "repeats": args.repeats,
-            "frame_skip": 4,
-            "frame_stack": 4,
-            "grayscale": True,
-            "crop_top": 32,
-            "resize": [84, 84],
-            "states": list(STATE_NAMES),
-            "action_set": "simple",
-            "action": "noop",
-        },
+        "workload": workload,
+        "workload_hash": stable_hash(workload),
         "sequential_policy": {
             "warmups": plan.warmups,
             "checkpoints": list(plan.checkpoints),
             "max_measured_samples": plan.measured_cap,
         },
         "source_archive_sha256": archive_hashes(plan),
-        "rom_sha256": file_hashes.get(plan.rom_path),
-        "state_sha256": {name: file_hashes.get(f"{plan.state_dir}/{name}.state") for name in STATE_NAMES},
+        "expected_rom_sha256": EXPECTED_SMB_ROM_SHA256,
+        "rom_sha256": rom_sha256,
+        "state_sha256": state_sha256,
+        "load_1min_labels": load_labels,
         "load_1min_values": load_values,
+        "load_1min_by_label": dict(zip(load_labels, load_values, strict=False)),
         "load_policy": {
             "max_load": args.max_load,
             "force_busy": bool(args.force_busy),
@@ -540,12 +770,24 @@ def write_aggregate(args: argparse.Namespace, plan: BenchmarkPlan, aggregate: di
     target_write(args, plan, f"{plan.run_dir}/aggregate.json", text)
 
 
-def run_single(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float) -> dict[str, Any]:
+def run_single(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    start_time: float,
+    setup_load_snapshots: list[tuple[str, float | None]] | None = None,
+) -> dict[str, Any]:
+    require_wall_clock_budget(args, start_time, "single-ref smoke")
     run_invocation(args, plan, "ref", "smoke-ref", steps=1000, repeats=1)
     for index in range(plan.warmups):
+        require_wall_clock_budget(args, start_time, f"single-ref warmup {index}")
         run_invocation(args, plan, "ref", f"warmup-ref-{index:02d}", steps=args.steps, repeats=args.repeats)
 
-    load_values = [capture_load(args, plan, "before-measured")[0]]
+    load_snapshots = list(setup_load_snapshots or [])
+    before_measured_load = capture_load(args, plan, "before-measured")[0]
+    load_snapshots.append(("before-measured", before_measured_load))
+    load_values = [value for _label, value in load_snapshots]
+    load_labels = [label for label, _value in load_snapshots]
+    require_load_gate(args, before_measured_load, "measured phase")
     aggregate: dict[str, Any] = {}
     measured_count = 0
     for checkpoint in plan.checkpoints:
@@ -553,7 +795,13 @@ def run_single(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float)
             if wall_clock_limit_exceeded(args, start_time):
                 if measured_count == 0:
                     raise SystemExit("wall-clock limit exhausted before any measured invocations")
-                aggregate = aggregate_single(args, plan, measured_count=measured_count, load_values=load_values)
+                aggregate = aggregate_single(
+                    args,
+                    plan,
+                    measured_count=measured_count,
+                    load_values=load_values,
+                    load_labels=load_labels,
+                )
                 aggregate["limit_stop_reason"] = "max_wall_clock_minutes"
                 write_aggregate(args, plan, aggregate)
                 return aggregate
@@ -566,12 +814,26 @@ def run_single(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float)
                 repeats=args.repeats,
             )
             measured_count += 1
-        load_values.append(capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0])
-        aggregate = aggregate_single(args, plan, measured_count=measured_count, load_values=load_values)
+        checkpoint_load = capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0]
+        load_snapshots.append((f"after-checkpoint-{checkpoint}", checkpoint_load))
+        load_values = [value for _label, value in load_snapshots]
+        load_labels = [label for label, _value in load_snapshots]
+        aggregate = aggregate_single(
+            args,
+            plan,
+            measured_count=measured_count,
+            load_values=load_values,
+            load_labels=load_labels,
+        )
         write_aggregate(args, plan, aggregate)
+        stop_reason = load_gate_stop_reason(args, checkpoint_load)
+        if stop_reason is not None:
+            aggregate["limit_stop_reason"] = stop_reason
+            write_aggregate(args, plan, aggregate)
+            return aggregate
         if aggregate["should_stop"]:
             break
-    if args.max_measured_invocations is not None and measured_count >= plan.measured_cap:
+    if measured_invocation_limit_applies(args, plan) and measured_count >= plan.measured_cap:
         aggregate["limit_stop_reason"] = aggregate.get("limit_stop_reason") or "max_measured_invocations"
         write_aggregate(args, plan, aggregate)
     return aggregate
@@ -581,11 +843,19 @@ def pair_order(index: int) -> tuple[str, str]:
     return ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
 
 
-def run_compare(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float) -> dict[str, Any]:
+def run_compare(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    start_time: float,
+    setup_load_snapshots: list[tuple[str, float | None]] | None = None,
+) -> dict[str, Any]:
+    require_wall_clock_budget(args, start_time, "baseline smoke")
     run_invocation(args, plan, "baseline", "smoke-baseline", steps=1000, repeats=1)
+    require_wall_clock_budget(args, start_time, "candidate smoke")
     run_invocation(args, plan, "candidate", "smoke-candidate", steps=1000, repeats=1)
     for index in range(plan.warmups):
         for role in pair_order(index):
+            require_wall_clock_budget(args, start_time, f"{role} warmup {index}")
             run_invocation(
                 args,
                 plan,
@@ -595,19 +865,36 @@ def run_compare(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float
                 repeats=args.repeats,
             )
 
-    load_values = [capture_load(args, plan, "before-measured")[0]]
+    load_snapshots = list(setup_load_snapshots or [])
+    before_measured_load = capture_load(args, plan, "before-measured")[0]
+    load_snapshots.append(("before-measured", before_measured_load))
+    load_values = [value for _label, value in load_snapshots]
+    load_labels = [label for label, _value in load_snapshots]
+    require_load_gate(args, before_measured_load, "measured phase")
     aggregate: dict[str, Any] = {}
     measured_count = 0
     for checkpoint in plan.checkpoints:
         while measured_count < checkpoint:
-            if wall_clock_limit_exceeded(args, start_time):
-                if measured_count == 0:
-                    raise SystemExit("wall-clock limit exhausted before any measured pairs")
-                aggregate = aggregate_compare(args, plan, measured_count=measured_count, load_values=load_values)
-                aggregate["limit_stop_reason"] = "max_wall_clock_minutes"
-                write_aggregate(args, plan, aggregate)
-                return aggregate
+            completed_roles: list[str] = []
             for role in pair_order(measured_count):
+                if wall_clock_limit_exceeded(args, start_time):
+                    if measured_count == 0:
+                        raise SystemExit("wall-clock limit exhausted before any measured pairs")
+                    aggregate = aggregate_compare(
+                        args,
+                        plan,
+                        measured_count=measured_count,
+                        load_values=load_values,
+                        load_labels=load_labels,
+                    )
+                    aggregate["limit_stop_reason"] = "max_wall_clock_minutes"
+                    if completed_roles:
+                        aggregate["discarded_incomplete_pair_raw_files"] = [
+                            f"raw/measured-{completed_role}-{measured_count:02d}.json"
+                            for completed_role in completed_roles
+                        ]
+                    write_aggregate(args, plan, aggregate)
+                    return aggregate
                 run_invocation(
                     args,
                     plan,
@@ -616,13 +903,28 @@ def run_compare(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float
                     steps=args.steps,
                     repeats=args.repeats,
                 )
+                completed_roles.append(role)
             measured_count += 1
-        load_values.append(capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0])
-        aggregate = aggregate_compare(args, plan, measured_count=measured_count, load_values=load_values)
+        checkpoint_load = capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0]
+        load_snapshots.append((f"after-checkpoint-{checkpoint}", checkpoint_load))
+        load_values = [value for _label, value in load_snapshots]
+        load_labels = [label for label, _value in load_snapshots]
+        aggregate = aggregate_compare(
+            args,
+            plan,
+            measured_count=measured_count,
+            load_values=load_values,
+            load_labels=load_labels,
+        )
         write_aggregate(args, plan, aggregate)
+        stop_reason = load_gate_stop_reason(args, checkpoint_load)
+        if stop_reason is not None:
+            aggregate["limit_stop_reason"] = stop_reason
+            write_aggregate(args, plan, aggregate)
+            return aggregate
         if aggregate["should_stop"]:
             break
-    if args.max_measured_invocations is not None and measured_count >= plan.measured_cap:
+    if measured_invocation_limit_applies(args, plan) and measured_count >= plan.measured_cap:
         aggregate["limit_stop_reason"] = aggregate.get("limit_stop_reason") or "max_measured_invocations"
         write_aggregate(args, plan, aggregate)
     return aggregate
@@ -682,13 +984,29 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
         "run_name": run_name,
         "local_result_dir": str(local_dir),
         "mode": aggregate.get("mode"),
+        "benchmark_tier": aggregate.get("benchmark_tier"),
         "refs": aggregate.get("refs"),
         "shas": aggregate.get("shas"),
+        "workload_hash": aggregate.get("workload_hash"),
+        "measured_invocation_count": aggregate.get("measured_invocation_count"),
+        "measured_pair_count": len(aggregate.get("measured_pair_details", [])),
         "official_median_sps": aggregate.get("official_median_sps"),
         "mean_invocation_median_sps": aggregate.get("mean_invocation_median_sps"),
         "median_pair_ratio": aggregate.get("median_pair_ratio"),
         "mean_pair_ratio": aggregate.get("mean_pair_ratio"),
         "validity_passed": aggregate.get("validity_passed"),
+        "load_gate_passed": aggregate.get("load_gate_passed"),
+        "load_gate_ignored_for_validity": aggregate.get("load_gate_ignored_for_validity"),
+        "limit_stop_reason": aggregate.get("limit_stop_reason"),
+        "previous_limit_stop_reason": aggregate.get("previous_limit_stop_reason"),
+        "benchmark_limits": aggregate.get("benchmark_limits"),
+        "setup_only_raw_files": aggregate.get("setup_only_raw_files"),
+        "discarded_incomplete_pair_raw_files": aggregate.get(
+            "discarded_incomplete_pair_raw_files"
+        ),
+        "expected_rom_sha256": aggregate.get("expected_rom_sha256"),
+        "rom_sha256": aggregate.get("rom_sha256"),
+        "state_sha256": aggregate.get("state_sha256"),
         "decision": aggregate.get("decision"),
     }
     index_path = LOCAL_RESULTS_ROOT / "index.jsonl"
@@ -706,12 +1024,60 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def aggregate_with_extra_load_snapshot(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    aggregate: dict[str, Any],
+    *,
+    label: str,
+    load_value: float | None,
+) -> dict[str, Any]:
+    load_labels = list(aggregate.get("load_1min_labels", []))
+    load_values = list(aggregate.get("load_1min_values", []))
+    load_labels.append(label)
+    load_values.append(load_value)
+    if plan.mode == "single":
+        measured_count = int(aggregate["measured_invocation_count"])
+        refreshed = aggregate_single(
+            args,
+            plan,
+            measured_count=measured_count,
+            load_values=load_values,
+            load_labels=load_labels,
+        )
+    else:
+        measured_count = int(aggregate["measured_pairs"])
+        refreshed = aggregate_compare(
+            args,
+            plan,
+            measured_count=measured_count,
+            load_values=load_values,
+            load_labels=load_labels,
+        )
+    for key in ("limit_stop_reason", "discarded_incomplete_pair_raw_files"):
+        if key in aggregate:
+            refreshed[key] = aggregate[key]
+    stop_reason = load_gate_stop_reason(args, load_value)
+    if stop_reason is not None:
+        if "limit_stop_reason" in refreshed:
+            refreshed["previous_limit_stop_reason"] = refreshed["limit_stop_reason"]
+        refreshed["limit_stop_reason"] = stop_reason
+    return refreshed
+
+
 def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     start_time = time.monotonic()
     if args.dry_run:
+        workload = workload_payload(args, plan)
+        planned_workload_hash = stable_hash(workload)
         payload = {
             "dry_run": True,
             "plan": plan_to_json(plan),
+            "benchmark_tier": benchmark_tier(args, plan),
+            "workload": workload,
+            "workload_hash": planned_workload_hash,
+            "planned_workload_hash": planned_workload_hash,
+            "workload_hash_scope": "planned_without_rom_or_state_file_hashes",
             "load_policy": {
                 "max_load": args.max_load,
                 "force_busy": bool(args.force_busy),
@@ -725,6 +1091,8 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return payload
 
+    validate_rom_hash(args.rom_path)
+    require_wall_clock_budget(args, start_time, "source archive creation")
     archived_refs = create_archives(plan)
     plan = BenchmarkPlan(
         mode=plan.mode,
@@ -738,20 +1106,26 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
         measured_cap=plan.measured_cap,
     )
     target_run(args, plan, f"mkdir -p {quote(plan.run_dir + '/raw')}")
+    require_wall_clock_budget(args, start_time, "state setup")
     ensure_states(args, plan)
     initial_load, _ = capture_load(args, plan, "before-setup")
-    if initial_load is not None and initial_load > args.max_load and not args.force_busy:
-        raise SystemExit(
-            f"benchmark load {initial_load:.2f} exceeds max {args.max_load:.2f}; "
-            "rerun with --force-busy to override"
-        )
+    require_load_gate(args, initial_load, "source preparation")
+    require_wall_clock_budget(args, start_time, "source preparation")
     prepare_sources(args, plan)
     aggregate = (
-        run_single(args, plan, start_time)
+        run_single(args, plan, start_time, [("before-setup", initial_load)])
         if plan.mode == "single"
-        else run_compare(args, plan, start_time)
+        else run_compare(args, plan, start_time, [("before-setup", initial_load)])
     )
-    capture_load(args, plan, "after-measured")
+    after_measured_load = capture_load(args, plan, "after-measured")[0]
+    aggregate = aggregate_with_extra_load_snapshot(
+        args,
+        plan,
+        aggregate,
+        label="after-measured",
+        load_value=after_measured_load,
+    )
+    write_aggregate(args, plan, aggregate)
     if not args.no_finalize:
         finalize_local(plan)
     return aggregate
@@ -774,6 +1148,15 @@ def plan_to_json(plan: BenchmarkPlan) -> dict[str, Any]:
     }
 
 
+def resolve_rom_path_for_args(args: argparse.Namespace) -> str:
+    if not args.dry_run:
+        return require_env_or_dotenv_path("ROM_PATH", "ROM path", args.rom_path)
+    path = Path(args.rom_path).expanduser() if args.rom_path else env_or_dotenv_path("ROM_PATH")
+    if path is None:
+        raise SystemExit("ROM path required; pass --rom-path or set ROM_PATH in the environment or .env")
+    return str(path.resolve(strict=False))
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("refs", nargs="+", help="single ref, candidate ref, or baseline candidate")
@@ -781,7 +1164,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--rom-path",
         default=None,
-        help="ROM path on the benchmark machine. Defaults to SMB_ROM_PATH from the environment or .env.",
+        help="ROM path on the benchmark machine. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--state-dir")
     parser.add_argument("--state-source", type=Path, default=DEFAULT_STATE_SOURCE)
@@ -799,12 +1182,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--max-wall-clock-minutes",
         type=float,
-        help="Stop before starting another measured invocation after this many minutes.",
+        help="Stop before starting another benchmark phase after this many minutes.",
     )
     parser.add_argument("--no-finalize", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    args.rom_path = require_env_or_dotenv_path("SMB_ROM_PATH", "ROM path", args.rom_path)
+    args.rom_path = resolve_rom_path_for_args(args)
 
     if args.run_root is None:
         args.run_root = str(LOCAL_ROOT)

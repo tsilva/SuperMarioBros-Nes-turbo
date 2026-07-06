@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import importlib.util
 import json
@@ -17,9 +18,14 @@ from typing import Any
 
 import numpy as np
 
+try:
+    from benchmark_rom import validate_rom_hash
+except ModuleNotFoundError:
+    from scripts.benchmark_rom import validate_rom_hash
+
 
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
-ROM_PATH_ENV_VAR = "SMB_ROM_PATH"
+ROM_PATH_ENV_VAR = "ROM_PATH"
 DEFAULT_ROM = (
     Path(os.environ[ROM_PATH_ENV_VAR]).expanduser()
     if ROM_PATH_ENV_VAR in os.environ
@@ -45,7 +51,26 @@ def resolve_required_rom_path(path: Path | None = None) -> Path:
         raise ValueError(
             f"ROM path required; pass --rom-path or set {ROM_PATH_ENV_VAR} in the environment or .env"
         )
-    return path.expanduser()
+    expanded = path.expanduser()
+    if not expanded.exists():
+        raise ValueError(f"ROM path does not exist: {expanded}")
+    if not expanded.is_file():
+        raise ValueError(f"ROM path is not a file: {expanded}")
+    return expanded.resolve()
+
+
+def resolve_verified_rom_path(path: Path | None = None) -> Path:
+    resolved = resolve_required_rom_path(path)
+    validate_rom_hash(resolved)
+    return resolved
+
+
+def sha256_path(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def dotenv_rom_path(dotenv_path: Path = Path(".env")) -> Path | None:
@@ -131,7 +156,7 @@ def parse_args() -> argparse.Namespace:
         "--rom-path",
         type=Path,
         default=DEFAULT_ROM,
-        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH from the environment or .env.",
+        help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
     parser.add_argument("--num-envs", type=int, default=16)
@@ -221,7 +246,14 @@ def summarize(values: list[float]) -> dict[str, float]:
     }
 
 
-def build_result(args: argparse.Namespace, version: str, obs: np.ndarray, runs: list[dict[str, float]], states: tuple[str, ...]) -> dict[str, Any]:
+def build_result(
+    args: argparse.Namespace,
+    version: str,
+    obs: np.ndarray,
+    runs: list[dict[str, float]],
+    states: tuple[str, ...],
+    rom_path: Path,
+) -> dict[str, Any]:
     batch_sps = [run["batch_steps_per_sec"] for run in runs]
     env_sps = [run["env_steps_per_sec"] for run in runs]
     frame_sps = [run["emulated_frames_per_sec"] for run in runs]
@@ -234,6 +266,8 @@ def build_result(args: argparse.Namespace, version: str, obs: np.ndarray, runs: 
             "import": "stable_retro",
         },
         "config": {
+            "rom_path": str(rom_path),
+            "rom_sha256": sha256_path(rom_path),
             "game": args.game,
             "num_envs": args.num_envs,
             "num_threads": args.num_threads,
@@ -279,6 +313,7 @@ def main() -> None:
 
     version = importlib.metadata.version("stable-retro-turbo")
     states = parse_states(args.states)
+    rom_path = resolve_verified_rom_path(args.rom_path)
     crop = None
     if args.crop_top or args.crop_bottom:
         crop = (args.crop_top, args.crop_bottom, 0, 0)
@@ -288,7 +323,7 @@ def main() -> None:
         state=lane_states(args.num_envs, states),
         num_envs=args.num_envs,
         num_threads=args.num_threads,
-        rom_path=str(resolve_required_rom_path(args.rom_path)),
+        rom_path=str(rom_path),
         render_mode="rgb_array",
         use_restricted_actions=retro.Actions.ALL,
         obs_crop=crop,
@@ -308,10 +343,10 @@ def main() -> None:
     )
     try:
         obs = env.reset()
-        actions = fill_actions(args.num_envs, args.action, retro_button_names(retro, resolve_required_rom_path(args.rom_path)))
+        actions = fill_actions(args.num_envs, args.action, retro_button_names(retro, rom_path))
         step_repeated(env, actions, args.warmup)
         runs = [run_once(env, actions, args) for _ in range(args.repeats)]
-        result = build_result(args, version, obs, runs, states)
+        result = build_result(args, version, obs, runs, states, rom_path)
     finally:
         env.close()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import statistics
 from pathlib import Path
@@ -296,18 +297,43 @@ def load_invocation_medians(paths: list[Path]) -> tuple[list[float], list[float]
     all_samples = []
     for path in paths:
         payload = json.loads(path.read_text())
-        samples = [float(run["env_steps_per_sec"]) for run in payload["runs"]]
-        if not samples:
-            raise ValueError(f"{path} has no runs")
+        samples = env_steps_per_sec_samples(payload, path)
         invocation_medians.append(median(samples))
         all_samples.extend(samples)
     return invocation_medians, all_samples
+
+
+def env_steps_per_sec_samples(payload: object, path: Path) -> list[float]:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    runs = payload.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError(f"{path} has no runs")
+    samples = []
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            raise ValueError(f"{path} run {index} is not an object")
+        try:
+            sample = float(run["env_steps_per_sec"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{path} run {index} has invalid env_steps_per_sec") from exc
+        if not math.isfinite(sample):
+            raise ValueError(f"{path} run {index} has non-finite env_steps_per_sec")
+        if sample <= 0.0:
+            raise ValueError(f"{path} run {index} has non-positive env_steps_per_sec")
+        samples.append(sample)
+    return samples
 
 
 def parse_float_list(raw: str) -> list[float]:
     values = [float(value) for value in raw.split(",") if value.strip()]
     if not values:
         raise argparse.ArgumentTypeError("expected at least one comma-separated float")
+    for value in values:
+        if not math.isfinite(value):
+            raise argparse.ArgumentTypeError("values must be finite")
+        if value <= 0.0:
+            raise argparse.ArgumentTypeError("values must be positive")
     return values
 
 

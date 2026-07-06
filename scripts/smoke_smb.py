@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         "--rom-path",
         type=Path,
         default=default_rom_path(),
-        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH from the environment or .env.",
+        help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     return parser.parse_args()
 

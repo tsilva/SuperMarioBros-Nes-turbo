@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import re
 import shutil
@@ -18,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
     from dotenv_utils import require_env_or_dotenv_path
 except ModuleNotFoundError:
+    from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
     from scripts.dotenv_utils import require_env_or_dotenv_path
 
 
@@ -29,6 +32,7 @@ DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
+MAX_LOAD = 4.0
 
 
 def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -39,10 +43,34 @@ def quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def pypi_latest() -> dict[str, Any]:
-    with urllib.request.urlopen(PYPI_JSON, timeout=30) as response:
-        data = json.load(response)
-    version = data["info"]["version"]
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def state_hashes(state_dir: str | Path) -> dict[str, str]:
+    root = Path(state_dir)
+    hashes: dict[str, str] = {}
+    for name in DEFAULT_STATES:
+        path = root / f"{name}.state"
+        if not path.exists():
+            raise SystemExit(f"state file does not exist: {path}")
+        if not path.is_file():
+            raise SystemExit(f"state path is not a file: {path}")
+        hashes[name] = sha256_path(path)
+    return hashes
+
+
+def pypi_version_info_from_json(
+    data: dict[str, Any],
+    requested_version: str | None = None,
+) -> dict[str, Any]:
+    version = requested_version or data["info"]["version"]
+    if version not in data["releases"]:
+        raise SystemExit(f"{PACKAGE} version {version!r} not found in PyPI release metadata")
     return {
         "name": PACKAGE,
         "import": IMPORT_PACKAGE,
@@ -52,13 +80,26 @@ def pypi_latest() -> dict[str, Any]:
     }
 
 
+def pypi_version_info(requested_version: str | None = None) -> dict[str, Any]:
+    with urllib.request.urlopen(PYPI_JSON, timeout=30) as response:
+        data = json.load(response)
+    return pypi_version_info_from_json(data, requested_version)
+
+
+def pypi_latest() -> dict[str, Any]:
+    return pypi_version_info()
+
+
 def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
     return {
         "package": PACKAGE,
         "version": version,
         "python": args.python,
         "rom_path": args.rom_path,
+        "expected_rom_sha256": EXPECTED_SMB_ROM_SHA256,
+        "rom_sha256": args.rom_sha256,
         "state_dir": args.state_dir,
+        "state_sha256": args.state_sha256,
         "num_envs": args.num_envs,
         "num_threads": args.num_threads,
         "steps": args.steps,
@@ -91,7 +132,126 @@ def cache_paths(args: argparse.Namespace, version: str, workload_hash: str) -> t
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open() as handle:
-        return json.load(handle)
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return payload
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    for name in (
+        "num_envs",
+        "num_threads",
+        "steps",
+        "repeats",
+        "warmup_invocations",
+        "measured_invocations",
+    ):
+        if getattr(args, name) <= 0:
+            raise SystemExit(f"--{name.replace('_', '-')} must be positive")
+    if args.warmup < 0:
+        raise SystemExit("--warmup must be non-negative")
+
+
+def cached_aggregate_is_usable(path: Path, expected_workload_hash: str) -> bool:
+    try:
+        aggregate = load_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    workload = aggregate.get("workload", {})
+    package = aggregate.get("package", {})
+    return (
+        aggregate.get("validity_passed") is True
+        and aggregate.get("workload_hash") == expected_workload_hash
+        and isinstance(workload, dict)
+        and stable_hash(workload) == expected_workload_hash
+        and isinstance(package, dict)
+        and package.get("name") == PACKAGE
+        and package.get("import") == IMPORT_PACKAGE
+        and isinstance(package.get("version"), str)
+        and package.get("version") == workload.get("version")
+        and aggregate.get("load_gate_passed") is True
+        and aggregate.get("load_gate_ignored_for_validity") is not True
+        and workload.get("expected_rom_sha256") == EXPECTED_SMB_ROM_SHA256
+        and workload.get("rom_sha256") == EXPECTED_SMB_ROM_SHA256
+        and isinstance(workload.get("state_sha256"), dict)
+        and all(workload["state_sha256"].get(name) for name in DEFAULT_STATES)
+        and cached_raw_files_are_usable(path.parent, aggregate, workload)
+    )
+
+
+def safe_cache_file(cache_dir: Path, relative_path: str) -> Path | None:
+    path = cache_dir / relative_path
+    try:
+        path.resolve().relative_to(cache_dir.resolve())
+    except ValueError:
+        return None
+    return path
+
+
+def cached_raw_files_are_usable(
+    cache_dir: Path,
+    aggregate: dict[str, Any],
+    workload_payload: dict[str, Any],
+) -> bool:
+    measured = aggregate.get("measured_invocations")
+    warmups = aggregate.get("warmup_raw_files")
+    if not isinstance(measured, list) or not measured or not isinstance(warmups, list):
+        return False
+    if aggregate.get("measured_invocation_count") != len(measured):
+        return False
+    if aggregate.get("warmup_invocation_count") != len(warmups):
+        return False
+    measured_medians: list[float] = []
+    for item in measured:
+        if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+            return False
+        path = safe_cache_file(cache_dir, item["file"])
+        if path is None:
+            return False
+        try:
+            payload = load_json(path)
+            require_raw_payload_matches_workload(payload, workload_payload, path)
+            samples = env_steps_per_sec_samples(payload, path)
+        except (OSError, ValueError, json.JSONDecodeError, SystemExit):
+            return False
+        sample_median = median(samples)
+        measured_medians.append(sample_median)
+        if not samples_match(item.get("samples_env_steps_per_sec"), samples):
+            return False
+        if not float_matches(item.get("median_env_steps_per_sec"), sample_median):
+            return False
+        if not float_matches(item.get("mean_env_steps_per_sec"), mean(samples)):
+            return False
+    for item in warmups:
+        if not isinstance(item, str):
+            return False
+        path = safe_cache_file(cache_dir, item)
+        if path is None:
+            return False
+        try:
+            require_raw_payload_matches_workload(load_json(path), workload_payload, path)
+        except (OSError, ValueError, json.JSONDecodeError, SystemExit):
+            return False
+    if not float_matches(aggregate.get("official_median_sps"), median(measured_medians)):
+        return False
+    if not float_matches(aggregate.get("mean_invocation_median_sps"), mean(measured_medians)):
+        return False
+    return True
+
+
+def float_matches(value: object, expected: float) -> bool:
+    try:
+        actual = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(actual) and math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-9)
+
+
+def samples_match(value: object, expected: list[float]) -> bool:
+    if not isinstance(value, list) or len(value) != len(expected):
+        return False
+    return all(float_matches(actual, sample) for actual, sample in zip(value, expected, strict=True))
 
 
 def median(values: list[float]) -> float:
@@ -151,7 +311,118 @@ def outliers(values: list[float]) -> dict[str, list[int]]:
 def parse_load1(text: str | None) -> float | None:
     if not text or "load average:" not in text:
         return None
-    return float(text.split("load average:", 1)[1].split(",", 1)[0].strip())
+    try:
+        return float(text.split("load average:", 1)[1].split(",", 1)[0].strip())
+    except ValueError:
+        return None
+
+
+def require_raw_payload_matches_workload(
+    payload: dict[str, Any],
+    workload_payload: dict[str, Any],
+    path: Path,
+) -> None:
+    package = payload.get("package")
+    if not isinstance(package, dict):
+        raise SystemExit(f"{path} is missing package metadata")
+    expected_package = {
+        "name": PACKAGE,
+        "version": workload_payload["version"],
+        "import": IMPORT_PACKAGE,
+    }
+    package_mismatches = [
+        f"package.{key}={package.get(key)!r} expected {value!r}"
+        for key, value in expected_package.items()
+        if package.get(key) != value
+    ]
+    if package_mismatches:
+        raise SystemExit(f"{path} package mismatch: " + "; ".join(package_mismatches))
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        raise SystemExit(f"{path} is missing benchmark config")
+    expected = {
+        "rom_path": workload_payload["rom_path"],
+        "rom_sha256": workload_payload["rom_sha256"],
+        "state_dir": workload_payload["state_dir"],
+        "rayon_num_threads": workload_payload["num_threads"],
+        "num_envs": workload_payload["num_envs"],
+        "steps": workload_payload["steps"],
+        "repeats": workload_payload["repeats"],
+        "warmup": workload_payload["warmup"],
+        "frame_skip": workload_payload["frame_skip"],
+        "frame_stack": workload_payload["frame_stack"],
+        "grayscale": workload_payload["grayscale"],
+        "crop_top": workload_payload["crop_top"],
+        "crop_bottom": workload_payload["crop_bottom"],
+        "resize_width": workload_payload["resize"][0],
+        "resize_height": workload_payload["resize"][1],
+        "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "states": workload_payload["states"],
+        "action_set": workload_payload["action_set"],
+        "action": workload_payload["action"],
+        "include_info": workload_payload["include_info"],
+    }
+    mismatches = [
+        f"config.{key}={config.get(key)!r} expected {value!r}"
+        for key, value in expected.items()
+        if config.get(key) != value
+    ]
+    if mismatches:
+        raise SystemExit(f"{path} workload mismatch: " + "; ".join(mismatches))
+    env_steps_per_sec_samples(payload, path)
+
+
+def env_steps_per_sec_samples(payload: dict[str, Any], path: Path) -> list[float]:
+    runs = payload.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise SystemExit(f"{path} is missing non-empty benchmark runs")
+    samples: list[float] = []
+    for index, run_payload in enumerate(runs):
+        if not isinstance(run_payload, dict):
+            raise SystemExit(f"{path} run {index} is not an object")
+        try:
+            sample = float(run_payload["env_steps_per_sec"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"{path} run {index} has invalid env_steps_per_sec") from exc
+        if not math.isfinite(sample):
+            raise SystemExit(f"{path} run {index} has non-finite env_steps_per_sec")
+        if sample <= 0.0:
+            raise SystemExit(f"{path} run {index} has non-positive env_steps_per_sec")
+        samples.append(sample)
+    return samples
+
+
+def require_package_info_matches_workload(
+    package_info: dict[str, Any],
+    workload_payload: dict[str, Any],
+) -> None:
+    expected = {
+        "name": PACKAGE,
+        "import": IMPORT_PACKAGE,
+        "version": workload_payload["version"],
+    }
+    mismatches = [
+        f"package.{key}={package_info.get(key)!r} expected {value!r}"
+        for key, value in expected.items()
+        if package_info.get(key) != value
+    ]
+    if mismatches:
+        raise SystemExit("aggregate package mismatch: " + "; ".join(mismatches))
+
+
+def require_measured_load_gate(args: argparse.Namespace, path: Path) -> None:
+    if args.force_busy:
+        return
+    value = parse_load1(path.read_text())
+    if value is None:
+        raise SystemExit(
+            f"benchmark load unavailable before measured phase; rerun with --force-busy to override"
+        )
+    if value >= MAX_LOAD:
+        raise SystemExit(
+            f"benchmark load {value:.2f} meets or exceeds max {MAX_LOAD:.2f} before measured phase; "
+            "rerun with --force-busy to override"
+        )
 
 
 def make_local_run_name(version: str, workload_hash: str) -> str:
@@ -180,13 +451,18 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--rom-path {quote(args.rom_path)} "
         f"--state-dir {quote(args.state_dir)} "
         f"--num-envs {args.num_envs} --steps {args.steps} --repeats {args.repeats} "
-        f"--warmup {args.warmup} --states {quote(states)} --action-set simple --action noop "
+        f"--warmup {args.warmup} --frame-skip 4 --frame-stack 4 "
+        "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
+        f"--states {quote(states)} --action-set simple --action noop --no-start-game "
         f"--json --output-json "
     )
-    run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-measured.txt'))}"])
+    run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])
     for index in range(args.warmup_invocations):
         output = run_dir / "raw" / f"warmup-pypi-{index:02d}.json"
         run(["bash", "-lc", base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
+    load_before_measured = run_dir / "raw" / "load-before-measured.txt"
+    run(["bash", "-lc", f"uptime > {quote(str(load_before_measured))}"])
+    require_measured_load_gate(args, load_before_measured)
     for index in range(args.measured_invocations):
         output = run_dir / "raw" / f"measured-pypi-{index:02d}.json"
         run(["bash", "-lc", base_cmd + quote(str(output)) + f" > {quote(str(output) + '.stdout')}"])
@@ -211,6 +487,7 @@ def aggregate(
     version_info: dict[str, Any],
     workload_payload: dict[str, Any],
 ) -> dict[str, Any]:
+    require_package_info_matches_workload(version_info, workload_payload)
     measured_files = [
         cache_dir / "raw" / f"measured-pypi-{index:02d}.json"
         for index in range(args.measured_invocations)
@@ -223,7 +500,8 @@ def aggregate(
     all_samples = []
     for path in measured_files:
         result = load_json(path)
-        samples = [run["env_steps_per_sec"] for run in result["runs"]]
+        require_raw_payload_matches_workload(result, workload_payload, path)
+        samples = env_steps_per_sec_samples(result, path)
         all_samples.extend(samples)
         measured.append(
             {
@@ -233,6 +511,8 @@ def aggregate(
                 "samples_env_steps_per_sec": samples,
             }
         )
+    for path in warmup_files:
+        require_raw_payload_matches_workload(load_json(path), workload_payload, path)
     medians = [item["median_env_steps_per_sec"] for item in measured]
     ci = bootstrap_ci_median(medians)
     median_summary = summary(medians)
@@ -252,6 +532,10 @@ def aggregate(
         and not diagnostics["mad_invocation_median_indices"],
         "load_below_4": all(value is not None and value < 4 for value in load_values.values()),
     }
+    load_gate_passed = gates["load_below_4"]
+    validity_passed = all(
+        value for key, value in gates.items() if key != "load_below_4"
+    ) and (load_gate_passed or args.force_busy)
     aggregate_payload = {
         "mode": "pypi_supermariobrosnes_turbo_fixed_local",
         "package": version_info,
@@ -270,8 +554,10 @@ def aggregate(
         "all_sample_summary": all_sample_summary,
         "outlier_diagnostics": diagnostics,
         "load_snapshots": {"texts": {"before": load_before, "after": load_after}, "load1_values": load_values},
+        "load_gate_passed": load_gate_passed,
+        "load_gate_ignored_for_validity": bool(args.force_busy),
         "validity_gates": gates,
-        "validity_passed": all(gates.values()),
+        "validity_passed": validity_passed,
         "tier": "full_official",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -304,6 +590,11 @@ def write_manifest_and_index(args: argparse.Namespace, cache_dir: Path, aggregat
         "official_median_sps": aggregate_payload["official_median_sps"],
         "mean_invocation_median_sps": aggregate_payload["mean_invocation_median_sps"],
         "validity_passed": aggregate_payload["validity_passed"],
+        "load_gate_passed": aggregate_payload.get("load_gate_passed"),
+        "load_gate_ignored_for_validity": aggregate_payload.get("load_gate_ignored_for_validity"),
+        "expected_rom_sha256": aggregate_payload["workload"].get("expected_rom_sha256"),
+        "rom_sha256": aggregate_payload["workload"].get("rom_sha256"),
+        "state_sha256": aggregate_payload["workload"].get("state_sha256"),
     }
     existing = []
     if index_path.exists():
@@ -334,7 +625,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--rom-path",
         default=None,
-        help="ROM path on the benchmark machine. Defaults to SMB_ROM_PATH from the environment or .env.",
+        help="ROM path on the benchmark machine. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument(
         "--state-dir",
@@ -354,21 +645,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--warmup-invocations", type=int, default=2)
     parser.add_argument("--measured-invocations", type=int, default=11)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force-busy", action="store_true")
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args(argv)
-    args.rom_path = require_env_or_dotenv_path("SMB_ROM_PATH", "ROM path", args.rom_path)
+    args.rom_path = require_env_or_dotenv_path("ROM_PATH", "ROM path", args.rom_path)
     return args
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    version_info = pypi_latest()
-    if args.version is not None:
-        version_info["version"] = args.version
+    validate_args(args)
+    args.rom_sha256 = validate_rom_hash(args.rom_path)
+    args.state_sha256 = state_hashes(args.state_dir)
+    version_info = pypi_version_info(args.version)
     workload_payload = workload(args, version_info["version"])
     workload_hash = stable_hash(workload_payload)
     cache_dir, aggregate_path = cache_paths(args, version_info["version"], workload_hash)
-    if aggregate_path.exists() and not args.force:
+    if aggregate_path.exists() and not args.force and cached_aggregate_is_usable(aggregate_path, workload_hash):
         print(json.dumps({"cache_hit": True, "aggregate": str(aggregate_path), "workload_hash": workload_hash}, indent=2))
         return 0
 

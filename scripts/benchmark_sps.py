@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import statistics
@@ -19,6 +21,11 @@ from supermariobrosnes_turbo import (
     resolve_required_rom_path,
 )
 
+try:
+    from benchmark_rom import validate_rom_hash
+except ModuleNotFoundError:
+    from scripts.benchmark_rom import validate_rom_hash
+
 
 DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
@@ -36,6 +43,8 @@ ACTION_BUTTONS = {
     "left": ("LEFT",),
     "start": ("START",),
 }
+PACKAGE_NAME = "supermariobrosnes-turbo"
+IMPORT_PACKAGE = "supermariobrosnes_turbo"
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "--rom-path",
         type=Path,
         default=DEFAULT_ROM,
-        help="Path to the SMB NES ROM. Defaults to SMB_ROM_PATH from the environment or .env.",
+        help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--steps", type=int, default=500)
@@ -197,7 +206,7 @@ def load_preflight(args: argparse.Namespace) -> dict[str, Any]:
             "load_ok": True,
             "unavailable_reason": str(exc),
         }
-    load_ok = start_1min <= max_start_load
+    load_ok = start_1min < max_start_load
     result: dict[str, Any] = {
         "enabled": True,
         "start_1min": start_1min,
@@ -206,11 +215,47 @@ def load_preflight(args: argparse.Namespace) -> dict[str, Any]:
     }
     if not load_ok:
         raise SystemExit(
-            f"Refusing to benchmark: 1-minute load {start_1min:.2f} exceeds "
+            f"Refusing to benchmark: 1-minute load {start_1min:.2f} meets or exceeds "
             f"--max-start-load {max_start_load:.2f}. Use --skip-load-preflight "
             "to override."
         )
     return result
+
+
+def sha256_path(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def package_metadata() -> dict[str, str | None]:
+    try:
+        version = importlib.metadata.version(PACKAGE_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    return {
+        "name": PACKAGE_NAME,
+        "version": version,
+        "import": IMPORT_PACKAGE,
+    }
+
+
+def resolve_verified_rom_path(path: str | Path | None = None) -> Path:
+    resolved = resolve_required_rom_path(path)
+    validate_rom_hash(resolved)
+    return resolved
+
+
+def rayon_num_threads() -> int | str | None:
+    raw = os.environ.get("RAYON_NUM_THREADS")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
 
 
 def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
@@ -284,6 +329,7 @@ def build_result(
     runs: list[dict[str, float]],
     active_states: tuple[str | None, ...],
     load: dict[str, Any],
+    rom_path: Path,
 ) -> dict[str, Any]:
     batch_sps = [run["batch_steps_per_sec"] for run in runs]
     env_sps = [run["env_steps_per_sec"] for run in runs]
@@ -291,7 +337,11 @@ def build_result(
     elapsed = [run["elapsed_s"] for run in runs]
     mean_batch_sps = statistics.fmean(batch_sps)
     return {
+        "package": package_metadata(),
         "config": {
+            "rom_path": str(rom_path),
+            "rom_sha256": sha256_path(rom_path),
+            "rayon_num_threads": rayon_num_threads(),
             "num_envs": args.num_envs,
             "steps": args.steps,
             "repeats": args.repeats,
@@ -303,6 +353,7 @@ def build_result(
             "crop_bottom": args.crop_bottom,
             "resize_width": args.resize_width,
             "resize_height": args.resize_height,
+            "obs_resize_algorithm": "area",
             "action_set": args.action_set,
             "action": args.action,
             "state": args.state,
@@ -393,10 +444,11 @@ def main() -> None:
     action_meanings = ACTION_SETS[action_set]
     if args.state_dir is not None:
         os.environ["SUPERMARIOBROSNES_FASTENV_STATE_DIR"] = str(args.state_dir)
+    rom_path = resolve_verified_rom_path(args.rom_path)
     env = SuperMarioBrosNesTurboVecEnv(
         "SuperMarioBros-Nes-v0",
         state=benchmark_state(args),
-        rom_path=resolve_required_rom_path(args.rom_path),
+        rom_path=rom_path,
         num_envs=args.num_envs,
         use_restricted_actions=Actions.ALL,
         frame_skip=args.frame_skip,
@@ -417,7 +469,7 @@ def main() -> None:
     if args.profile_output is not None:
         env.reset_profiler()
     runs = [run_once(env, actions, args) for _ in range(args.repeats)]
-    result = build_result(args, obs, runs, active_states, load)
+    result = build_result(args, obs, runs, active_states, load, rom_path)
     if args.profile_output is not None:
         result["profiler"] = env.profiler_snapshot()
 
