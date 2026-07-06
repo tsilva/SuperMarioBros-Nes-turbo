@@ -251,6 +251,52 @@ Do not spend benchmark runs merely to generate ideas. Idea generation is analysi
 work; only concrete candidates selected from the queue go through diagnosis,
 triage, and possible `make benchmark` acceptance.
 
+## Trajectory Token Discipline
+
+Spend tokens on decisions and evidence, not narration. Treat
+`.codex/optimization_campaigns/current.json`, `results.tsv`, both ideas queues,
+candidate manifests, and benchmark aggregates as the source of truth. Do not
+restate campaign history in chat unless it changes the next decision.
+
+Use compact phase reports:
+
+```text
+phase: generate | code | freeze | benchmark | merge | next_batch | pause
+inputs: refs/artifacts read
+outputs: manifests/commits/results written
+decision: keep | keep_small_gain | discard | inconclusive | defer | pause
+next: one concrete next action
+```
+
+Keep subagent prompts narrow:
+
+- Idea agents get one perspective, the current baseline SHA, known
+  Done/blocked mechanisms, max idea count, required queue fields, and
+  "Markdown queue entries only".
+- Implementation agents get one `idea_id`, target files, hypothesis, forbidden
+  mechanisms, required checks, manifest schema, and stop conditions.
+- The benchmark coordinator gets imported manifests, current baseline,
+  evaluation order, and acceptance gates.
+
+Output limits:
+
+- Idea agents return Markdown queue entries only; no commentary.
+- Implementation agents return one committed candidate, one manifest, and at
+  most five short notes.
+- Benchmark phase records one result row per candidate plus one decision:
+  `keep`, `keep_small_gain`, `discard`, or `inconclusive`.
+- Final campaign reports are bounded to branch, baseline, accepted/rejected
+  counts, checks, artifacts, cleanup, and next action.
+
+Early-kill rules:
+
+- Mark an implementation `incomplete` when it cannot produce a small committed
+  patch after focused attempts.
+- Workers record only the final blocker, failed check, and next recommended
+  action; do not narrate full debugging history.
+- The coordinator rejects malformed or verbose handoffs unless the candidate is
+  valuable enough to request a corrected manifest.
+
 ## Phased Batch Mode
 
 Use phased batch mode when there are multiple independent, small, high-quality
@@ -315,6 +361,9 @@ The coordinator imports manifests into
 let workers append to a shared repo-local candidate file. If a manifest names an
 uncommitted diff, a missing commit, or an unrecoverable worktree, mark it
 `incomplete` or `discard` rather than reconstructing the candidate by hand.
+An importable manifest must contain recoverable git identity: repo path,
+worktree path, branch, `base_sha`, `candidate_sha`, patch-id if available,
+changed files, checks run, risk, expected speed mechanism, verdict, and notes.
 
 Coordinator candidate evaluation rules:
 
@@ -498,6 +547,19 @@ For a stronger final gate, run:
 Merge only when the accepted batch shows a real measured win versus current
 `main`.
 
+After the merge phase completes, clean up deterministic temporary state:
+
+- Delete campaign-created worker worktrees whose changes are merged, rejected,
+  or explicitly deferred.
+- Prune campaign-created temporary worker and replay branches. Use `git branch
+  -D` only for branches created by this campaign and no longer needed.
+- Purge temporary worker artifacts, scratch outputs, stale replay branches, and
+  incomplete candidate handoff files.
+- Preserve audit and anti-repeat evidence: `current.json`, `results.tsv`, the
+  durable ideas queue, accepted benchmark aggregates, kept commit SHAs, and
+  final candidate manifests or compact archived summaries.
+- Never delete a worktree containing unrecovered useful changes.
+
 On pause, leave accepted commits on the campaign branch, rejected commits out of
 history, update campaign state, and report:
 
@@ -506,6 +568,7 @@ history, update campaign state, and report:
 - accepted commits and discarded count
 - checks run
 - changed files
+- cleanup completed or deferred
 - benchmark runs/remaining limits if provided
 - triage benchmarks used, accepted/escalated count, and triage rejects
 - next plausible experiment
