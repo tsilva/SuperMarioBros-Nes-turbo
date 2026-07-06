@@ -2,6 +2,10 @@
 
 ## Prerequisites
 
+- Terminology note: older entries use "dedicated-machine" for the pre-local-only
+  fixed-host benchmark workflow. Treat those artifacts as historical evidence
+  only. New autoresearch timing should use the local-only benchmark runner and
+  write new outputs under `artifacts/benchmarks/local-results/`.
 - Build a low-overhead hot-path profiler before selecting another speed
   candidate. This is infrastructure for choosing ideas, not itself an
   optimization idea. The profiler should be disabled by default and should not

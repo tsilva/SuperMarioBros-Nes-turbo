@@ -479,22 +479,28 @@ def test_native_turbo_vec_env_mask_crop_terminal_observation_matches_public_layo
         obs_copy=obs_copy,
         frame_skip=4,
         frame_stack=4,
-        done_on=["life_loss"],
+        done_on={"time_tick": ("time", "decrease")},
         info_filter="all",
     )
     try:
         obs = env.reset()
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        for _step in range(1, 3000):
+        for _step in range(1, 20):
             obs, _rewards, dones, infos = env.step(masks)
             if bool(dones[0]):
                 terminal_observation = infos[0]["terminal_observation"]
                 assert terminal_observation.shape == obs.shape[1:]
                 assert terminal_observation.dtype == obs.dtype
                 assert terminal_observation.shape == env.observation_space.shape
+                assert infos[0]["done_on_info"]["time_tick"] == {
+                    "op": "decrease",
+                    "keys": ["time"],
+                    "prev": [400],
+                    "next": [399],
+                }
                 break
         else:
-            pytest.fail("life_loss done_on rule did not fire before step 3000")
+            pytest.fail("time_tick done_on rule did not fire before step 20")
     finally:
         env.close()
 

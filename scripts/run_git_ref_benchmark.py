@@ -13,6 +13,7 @@ import shutil
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -166,7 +167,10 @@ def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
     run_name = make_run_name(mode, refs)
     run_dir = str(root / "runs" / run_name)
     state_dir = str(args.state_dir)
-    checkpoints = DEFAULT_SINGLE_CHECKPOINTS if mode == "single" else DEFAULT_COMPARISON_CHECKPOINTS
+    default_checkpoints = (
+        DEFAULT_SINGLE_CHECKPOINTS if mode == "single" else DEFAULT_COMPARISON_CHECKPOINTS
+    )
+    checkpoints = cap_checkpoints(default_checkpoints, args.max_measured_invocations)
     warmups = args.warmups if args.warmups is not None else 2
     return BenchmarkPlan(
         mode=mode,
@@ -234,6 +238,27 @@ def capture_load(args: argparse.Namespace, plan: BenchmarkPlan, label: str) -> t
 
 def load_ok(load_values: list[float | None], max_load: float) -> bool:
     return all(value is not None and value <= max_load for value in load_values)
+
+
+def load_ok_for_validity(args: argparse.Namespace, load_values: list[float | None]) -> bool:
+    if args.force_busy:
+        return True
+    return load_ok(load_values, args.max_load)
+
+
+def cap_checkpoints(checkpoints: tuple[int, ...], cap: int | None) -> tuple[int, ...]:
+    if cap is None:
+        return checkpoints
+    capped = [checkpoint for checkpoint in checkpoints if checkpoint <= cap]
+    if not capped or capped[-1] != cap:
+        capped.append(cap)
+    return tuple(capped)
+
+
+def wall_clock_limit_exceeded(args: argparse.Namespace, start_time: float) -> bool:
+    if args.max_wall_clock_minutes is None:
+        return False
+    return time.monotonic() - start_time >= args.max_wall_clock_minutes * 60.0
 
 
 def ensure_states(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
@@ -352,7 +377,7 @@ def aggregate_single(
     convergence = single_ref_convergence(
         medians,
         samples,
-        load_ok=load_ok(load_values, args.max_load),
+        load_ok=load_ok_for_validity(args, load_values),
         checkpoints=plan.checkpoints,
     )
     measured = [
@@ -376,6 +401,8 @@ def aggregate_single(
         "warmup_raw_files": [
             f"raw/warmup-ref-{index:02d}.json" for index in range(plan.warmups)
         ],
+        "load_gate_passed": load_ok(load_values, args.max_load),
+        "load_gate_ignored_for_validity": bool(args.force_busy),
         **convergence,
     }
 
@@ -414,7 +441,7 @@ def aggregate_compare(
     pair_ratios = [pair["pair_ratio"] for pair in pairs]
     convergence = comparison_convergence(
         pair_ratios,
-        load_ok=load_ok(load_values, args.max_load),
+        load_ok=load_ok_for_validity(args, load_values),
         checkpoints=plan.checkpoints,
     )
     baseline = next(ref for ref in plan.refs if ref.role == "baseline")
@@ -435,6 +462,8 @@ def aggregate_compare(
         "baseline_all_sample_summary": summary(baseline_samples),
         "candidate_all_sample_summary": summary(candidate_samples),
         "paired_gain_percent": (convergence["median_pair_ratio"] - 1.0) * 100.0,
+        "load_gate_passed": load_ok(load_values, args.max_load),
+        "load_gate_ignored_for_validity": bool(args.force_busy),
         **convergence,
     }
 
@@ -491,6 +520,14 @@ def base_aggregate(
         "rom_sha256": file_hashes.get(plan.rom_path),
         "state_sha256": {name: file_hashes.get(f"{plan.state_dir}/{name}.state") for name in STATE_NAMES},
         "load_1min_values": load_values,
+        "load_policy": {
+            "max_load": args.max_load,
+            "force_busy": bool(args.force_busy),
+        },
+        "benchmark_limits": {
+            "max_measured_invocations": args.max_measured_invocations,
+            "max_wall_clock_minutes": args.max_wall_clock_minutes,
+        },
         "command": {
             "benchmark": "RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py ...",
             "stats_helper": "scripts/benchmark_stats.py",
@@ -503,7 +540,7 @@ def write_aggregate(args: argparse.Namespace, plan: BenchmarkPlan, aggregate: di
     target_write(args, plan, f"{plan.run_dir}/aggregate.json", text)
 
 
-def run_single(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
+def run_single(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float) -> dict[str, Any]:
     run_invocation(args, plan, "ref", "smoke-ref", steps=1000, repeats=1)
     for index in range(plan.warmups):
         run_invocation(args, plan, "ref", f"warmup-ref-{index:02d}", steps=args.steps, repeats=args.repeats)
@@ -513,6 +550,13 @@ def run_single(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
     measured_count = 0
     for checkpoint in plan.checkpoints:
         while measured_count < checkpoint:
+            if wall_clock_limit_exceeded(args, start_time):
+                if measured_count == 0:
+                    raise SystemExit("wall-clock limit exhausted before any measured invocations")
+                aggregate = aggregate_single(args, plan, measured_count=measured_count, load_values=load_values)
+                aggregate["limit_stop_reason"] = "max_wall_clock_minutes"
+                write_aggregate(args, plan, aggregate)
+                return aggregate
             run_invocation(
                 args,
                 plan,
@@ -527,6 +571,9 @@ def run_single(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
         write_aggregate(args, plan, aggregate)
         if aggregate["should_stop"]:
             break
+    if args.max_measured_invocations is not None and measured_count >= plan.measured_cap:
+        aggregate["limit_stop_reason"] = aggregate.get("limit_stop_reason") or "max_measured_invocations"
+        write_aggregate(args, plan, aggregate)
     return aggregate
 
 
@@ -534,7 +581,7 @@ def pair_order(index: int) -> tuple[str, str]:
     return ("baseline", "candidate") if index % 2 == 0 else ("candidate", "baseline")
 
 
-def run_compare(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
+def run_compare(args: argparse.Namespace, plan: BenchmarkPlan, start_time: float) -> dict[str, Any]:
     run_invocation(args, plan, "baseline", "smoke-baseline", steps=1000, repeats=1)
     run_invocation(args, plan, "candidate", "smoke-candidate", steps=1000, repeats=1)
     for index in range(plan.warmups):
@@ -553,6 +600,13 @@ def run_compare(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]
     measured_count = 0
     for checkpoint in plan.checkpoints:
         while measured_count < checkpoint:
+            if wall_clock_limit_exceeded(args, start_time):
+                if measured_count == 0:
+                    raise SystemExit("wall-clock limit exhausted before any measured pairs")
+                aggregate = aggregate_compare(args, plan, measured_count=measured_count, load_values=load_values)
+                aggregate["limit_stop_reason"] = "max_wall_clock_minutes"
+                write_aggregate(args, plan, aggregate)
+                return aggregate
             for role in pair_order(measured_count):
                 run_invocation(
                     args,
@@ -568,6 +622,9 @@ def run_compare(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]
         write_aggregate(args, plan, aggregate)
         if aggregate["should_stop"]:
             break
+    if args.max_measured_invocations is not None and measured_count >= plan.measured_cap:
+        aggregate["limit_stop_reason"] = aggregate.get("limit_stop_reason") or "max_measured_invocations"
+        write_aggregate(args, plan, aggregate)
     return aggregate
 
 
@@ -650,10 +707,19 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
 
 
 def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
+    start_time = time.monotonic()
     if args.dry_run:
         payload = {
             "dry_run": True,
             "plan": plan_to_json(plan),
+            "load_policy": {
+                "max_load": args.max_load,
+                "force_busy": bool(args.force_busy),
+            },
+            "benchmark_limits": {
+                "max_measured_invocations": args.max_measured_invocations,
+                "max_wall_clock_minutes": args.max_wall_clock_minutes,
+            },
             "git_status": run(["git", "status", "--short"]).stdout.splitlines(),
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -680,7 +746,11 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
             "rerun with --force-busy to override"
         )
     prepare_sources(args, plan)
-    aggregate = run_single(args, plan) if plan.mode == "single" else run_compare(args, plan)
+    aggregate = (
+        run_single(args, plan, start_time)
+        if plan.mode == "single"
+        else run_compare(args, plan, start_time)
+    )
     capture_load(args, plan, "after-measured")
     if not args.no_finalize:
         finalize_local(plan)
@@ -700,6 +770,7 @@ def plan_to_json(plan: BenchmarkPlan) -> dict[str, Any]:
         "state_dir": plan.state_dir,
         "warmups": plan.warmups,
         "checkpoints": list(plan.checkpoints),
+        "measured_cap": plan.measured_cap,
     }
 
 
@@ -720,6 +791,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=None)
     parser.add_argument("--max-load", type=float)
     parser.add_argument("--force-busy", action="store_true")
+    parser.add_argument(
+        "--max-measured-invocations",
+        type=int,
+        help="Stop after at most this many measured invocations or comparison pairs.",
+    )
+    parser.add_argument(
+        "--max-wall-clock-minutes",
+        type=float,
+        help="Stop before starting another measured invocation after this many minutes.",
+    )
     parser.add_argument("--no-finalize", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -731,6 +812,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.state_dir = str(LOCAL_STATE_DIR)
     if args.max_load is None:
         args.max_load = max(os.cpu_count() or 1, 1) / 3
+    if args.steps <= 0:
+        raise SystemExit("--steps must be positive")
+    if args.repeats <= 0:
+        raise SystemExit("--repeats must be positive")
+    if args.warmups is not None and args.warmups < 0:
+        raise SystemExit("--warmups must be non-negative")
+    if args.max_measured_invocations is not None and args.max_measured_invocations <= 0:
+        raise SystemExit("--max-measured-invocations must be positive")
+    if args.max_wall_clock_minutes is not None and args.max_wall_clock_minutes <= 0:
+        raise SystemExit("--max-wall-clock-minutes must be positive")
     return args
 
 

@@ -5,8 +5,9 @@
   "root_branch": "main",
   "root_sha": null,
   "created_at": null,
-  "updated_at": "2026-07-06T17:33:49+01:00",
-  "benchmark_command": "make benchmark",
+  "updated_at": "2026-07-06T21:13:22+01:00",
+  "acceptance_command": ".venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3",
+  "triage_command": ".venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 5000 --repeats 1 --warmups 0 --max-measured-invocations 3",
   "allowed_output_root": "artifacts/benchmarks/",
   "ideas_queue": {
     "durable_path": "/Users/tsilva/.codex/autoresearch/SuperMarioBros-Nes-turbo/ideas.md",
@@ -16,11 +17,11 @@
     "rank_by": "expected_roi"
   },
   "run_limits": {
-    "max_total_benchmarks": null,
-    "max_estimated_wall_clock_minutes": null
+    "max_measured_invocations": null,
+    "max_wall_clock_minutes": null
   },
-  "benchmarks_used": 0,
-  "previous_benchmarks_used": 0,
+  "measured_invocations_used": 0,
+  "previous_measured_invocations_used": 0,
   "requires_fresh_baseline": true,
   "previous_initial_baseline_output": null,
   "previous_initial_baseline_mean_env_steps_per_sec": null,
