@@ -2439,17 +2439,30 @@ fn resize_default_gray_area(src: &[u8], dst: &mut [u8]) {
 
         let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
         let y_count = DEFAULT_AREA_Y_COUNT[dy];
-        let denom2 = 2 * y_count;
-        let denom3 = 3 * y_count;
-        for group in 0..12usize {
-            let out = dst_row + group * 7;
-            dst[out] = (sums[group * 7] / denom2) as u8;
-            dst[out + 1] = (sums[group * 7 + 1] / denom3) as u8;
-            dst[out + 2] = (sums[group * 7 + 2] / denom3) as u8;
-            dst[out + 3] = (sums[group * 7 + 3] / denom3) as u8;
-            dst[out + 4] = (sums[group * 7 + 4] / denom3) as u8;
-            dst[out + 5] = (sums[group * 7 + 5] / denom3) as u8;
-            dst[out + 6] = (sums[group * 7 + 6] / denom3) as u8;
+        if y_count == 2 {
+            for group in 0..12usize {
+                let out = dst_row + group * 7;
+                let sum = group * 7;
+                dst[out] = (sums[sum] / 4) as u8;
+                dst[out + 1] = (sums[sum + 1] / 6) as u8;
+                dst[out + 2] = (sums[sum + 2] / 6) as u8;
+                dst[out + 3] = (sums[sum + 3] / 6) as u8;
+                dst[out + 4] = (sums[sum + 4] / 6) as u8;
+                dst[out + 5] = (sums[sum + 5] / 6) as u8;
+                dst[out + 6] = (sums[sum + 6] / 6) as u8;
+            }
+        } else {
+            for group in 0..12usize {
+                let out = dst_row + group * 7;
+                let sum = group * 7;
+                dst[out] = (sums[sum] / 6) as u8;
+                dst[out + 1] = (sums[sum + 1] / 9) as u8;
+                dst[out + 2] = (sums[sum + 2] / 9) as u8;
+                dst[out + 3] = (sums[sum + 3] / 9) as u8;
+                dst[out + 4] = (sums[sum + 4] / 9) as u8;
+                dst[out + 5] = (sums[sum + 5] / 9) as u8;
+                dst[out + 6] = (sums[sum + 6] / 9) as u8;
+            }
         }
     }
 }
@@ -2460,13 +2473,29 @@ fn accumulate_default_area_row(row: &[u8], sums: &mut [u16; DEFAULT_AREA_DST_WID
     for group in 0..12usize {
         let src = group * 20;
         let dst = group * 7;
-        sums[dst] += row[src] as u16 + row[src + 1] as u16;
-        sums[dst + 1] += row[src + 2] as u16 + row[src + 3] as u16 + row[src + 4] as u16;
-        sums[dst + 2] += row[src + 5] as u16 + row[src + 6] as u16 + row[src + 7] as u16;
-        sums[dst + 3] += row[src + 8] as u16 + row[src + 9] as u16 + row[src + 10] as u16;
-        sums[dst + 4] += row[src + 11] as u16 + row[src + 12] as u16 + row[src + 13] as u16;
-        sums[dst + 5] += row[src + 14] as u16 + row[src + 15] as u16 + row[src + 16] as u16;
-        sums[dst + 6] += row[src + 17] as u16 + row[src + 18] as u16 + row[src + 19] as u16;
+        // SAFETY: callers pass exactly one 240-pixel default source row; each
+        // 20-pixel group maps into seven bins and the loop covers 12 groups.
+        unsafe {
+            sums[dst] += *row.get_unchecked(src) as u16 + *row.get_unchecked(src + 1) as u16;
+            sums[dst + 1] += *row.get_unchecked(src + 2) as u16
+                + *row.get_unchecked(src + 3) as u16
+                + *row.get_unchecked(src + 4) as u16;
+            sums[dst + 2] += *row.get_unchecked(src + 5) as u16
+                + *row.get_unchecked(src + 6) as u16
+                + *row.get_unchecked(src + 7) as u16;
+            sums[dst + 3] += *row.get_unchecked(src + 8) as u16
+                + *row.get_unchecked(src + 9) as u16
+                + *row.get_unchecked(src + 10) as u16;
+            sums[dst + 4] += *row.get_unchecked(src + 11) as u16
+                + *row.get_unchecked(src + 12) as u16
+                + *row.get_unchecked(src + 13) as u16;
+            sums[dst + 5] += *row.get_unchecked(src + 14) as u16
+                + *row.get_unchecked(src + 15) as u16
+                + *row.get_unchecked(src + 16) as u16;
+            sums[dst + 6] += *row.get_unchecked(src + 17) as u16
+                + *row.get_unchecked(src + 18) as u16
+                + *row.get_unchecked(src + 19) as u16;
+        }
     }
 }
 
