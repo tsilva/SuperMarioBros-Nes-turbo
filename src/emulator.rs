@@ -677,7 +677,12 @@ impl Ppu {
                     for col in 0..run {
                         let bit = 7 - (fine_x + col);
                         let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                        dst[row_start + out_x + col] = colors[pixel as usize];
+                        // SAFETY: run is clamped to the remaining row width and
+                        // pixel is formed from two bitplanes, so it is in 0..4.
+                        unsafe {
+                            *dst.get_unchecked_mut(row_start + out_x + col) =
+                                *colors.get_unchecked(pixel as usize);
+                        }
                     }
                 }
 
