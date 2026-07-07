@@ -457,6 +457,27 @@ def prepared_source_manifest(path: Path) -> Path:
     return path / ".autoresearch-prepared-source.json"
 
 
+def prepared_source_editable_pths(path: Path) -> list[Path]:
+    site_packages_root = path / ".venv" / "lib"
+    if not site_packages_root.is_dir():
+        return []
+    return list(site_packages_root.glob(f"python*/site-packages/{IMPORT_PACKAGE}.pth"))
+
+
+def prepared_source_has_valid_editable_pth(path: Path) -> bool:
+    pths = prepared_source_editable_pths(path)
+    if not pths:
+        return True
+    expected = str(path / "python")
+    return any(pth.read_text().strip() == expected for pth in pths)
+
+
+def repair_prepared_source_editable_pth(path: Path) -> None:
+    expected = str(path / "python") + "\n"
+    for pth in prepared_source_editable_pths(path):
+        pth.write_text(expected)
+
+
 def prepared_source_is_usable(path: Path, ref: BenchmarkRef) -> bool:
     manifest_path = prepared_source_manifest(path)
     python_path = path / ".venv" / "bin" / "python"
@@ -469,6 +490,7 @@ def prepared_source_is_usable(path: Path, ref: BenchmarkRef) -> bool:
     return (
         manifest.get("sha") == ref.sha
         and manifest.get("archive_sha256") == sha256_path(ref.archive)
+        and prepared_source_has_valid_editable_pth(path)
     )
 
 
@@ -498,6 +520,7 @@ def prepare_source_cache(args: argparse.Namespace, plan: BenchmarkPlan, ref: Ben
     )
     shutil.rmtree(cache_dir, ignore_errors=True)
     tmp_dir.rename(cache_dir)
+    repair_prepared_source_editable_pth(cache_dir)
     return cache_dir
 
 
