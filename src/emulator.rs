@@ -1644,6 +1644,73 @@ impl NesEmulator {
     }
 
     #[inline]
+    pub fn step_frames(&mut self, action: MarioAction, frames: usize) -> f32 {
+        if self.done {
+            return 0.0;
+        }
+
+        let mut reward = 0.0;
+        let mut before = self.xscroll_lo;
+        let buttons = action.buttons();
+        for _ in 0..frames {
+            self.run_frame(buttons);
+            let next = self.ram[0x071c];
+            reward += (next as i16 - before as i16).max(0) as f32;
+            before = next;
+            if sign_extend_u8(self.ram[0x075a]) == -1 {
+                self.done = true;
+                break;
+            }
+            if self.terminate_on_flag {
+                let x_pos = ((self.ram[0x006d] as u16) << 8) | self.ram[0x0086] as u16;
+                if x_pos >= 3160 {
+                    self.done = true;
+                    break;
+                }
+            }
+        }
+        self.refresh_smb_state();
+        reward
+    }
+
+    #[inline]
+    pub fn step_frames_profiled(
+        &mut self,
+        action: MarioAction,
+        frames: usize,
+        profiler: &mut Profiler,
+    ) -> f32 {
+        if self.done {
+            return 0.0;
+        }
+
+        let mut reward = 0.0;
+        let mut before = self.xscroll_lo;
+        let buttons = action.buttons();
+        for _ in 0..frames {
+            let start = Instant::now();
+            self.run_frame_profiled(buttons, profiler);
+            profiler.record_frame_step(start.elapsed());
+            let next = self.ram[0x071c];
+            reward += (next as i16 - before as i16).max(0) as f32;
+            before = next;
+            if sign_extend_u8(self.ram[0x075a]) == -1 {
+                self.done = true;
+                break;
+            }
+            if self.terminate_on_flag {
+                let x_pos = ((self.ram[0x006d] as u16) << 8) | self.ram[0x0086] as u16;
+                if x_pos >= 3160 {
+                    self.done = true;
+                    break;
+                }
+            }
+        }
+        self.refresh_smb_state();
+        reward
+    }
+
+    #[inline]
     #[allow(dead_code)]
     pub fn write_rgb_frame(&self, dst: &mut [u8]) {
         self.ppu.write_rgb_frame(dst);
