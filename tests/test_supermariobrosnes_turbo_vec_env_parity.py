@@ -121,11 +121,6 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         "reward_clip",
         "info_filter",
         "done_on",
-        "copy_observations",
-        "info_mode",
-        "info_keys",
-        "done_on_info",
-        "unsafe_zero_copy",
     ]
 
     native_defaults = {
@@ -172,15 +167,14 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
     assert native_defaults["obs_type"].name == "IMAGE"
     assert native_defaults["obs_type"].value == 0
 
-    sentinel_defaults = (
+    for name in (
         "copy_observations",
         "info_mode",
         "info_keys",
         "done_on_info",
         "unsafe_zero_copy",
-    )
-    for name in sentinel_defaults:
-        assert type(native_defaults[name]) is object
+    ):
+        assert name not in native_signature.parameters
 
 
 def test_native_turbo_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
@@ -497,8 +491,8 @@ def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
         assert env.num_envs == 1
         assert env.num_threads == 1
         assert env.obs_copy == "safe_view"
-        assert env.copy_observations is False
-        assert env.unsafe_zero_copy is False
+        assert not hasattr(env, "copy_observations")
+        assert not hasattr(env, "unsafe_zero_copy")
         assert isinstance(env.action_space, spaces.MultiBinary)
         obs = env.reset()
         assert obs.shape == (1, 4, 84, 84)

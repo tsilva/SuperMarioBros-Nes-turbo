@@ -60,7 +60,6 @@ except ImportError:
             return self.step_wait()
 
 
-_UNSET = object()
 VISIBLE_WIDTH = 240
 VISIBLE_HEIGHT = 224
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
@@ -387,20 +386,7 @@ def _normalize_action_mode(value: Any) -> str:
     return text
 
 
-def _normalize_obs_copy(
-    obs_copy: str,
-    copy_observations: Any = _UNSET,
-    unsafe_zero_copy: Any = _UNSET,
-) -> tuple[str, bool, bool]:
-    if copy_observations is not _UNSET or unsafe_zero_copy is not _UNSET:
-        if obs_copy != "copy":
-            raise ValueError("cannot pass both obs_copy and copy_observations/unsafe_zero_copy")
-        copy = True if copy_observations is _UNSET else bool(copy_observations)
-        unsafe = False if unsafe_zero_copy is _UNSET else bool(unsafe_zero_copy)
-        if copy and unsafe:
-            raise ValueError("unsafe_zero_copy=True is only valid with copy_observations=False")
-        return ("unsafe_view" if unsafe else "copy" if copy else "safe_view", copy, unsafe)
-
+def _normalize_obs_copy(obs_copy: str) -> tuple[str, bool, bool]:
     if isinstance(obs_copy, bool):
         raise ValueError("obs_copy must be 'copy', 'safe_view', or 'unsafe_view'")
     mode = str(obs_copy).lower()
@@ -421,18 +407,7 @@ def _normalize_info_keys(info_keys: Any) -> list[str] | None:
     return [str(key) for key in info_keys]
 
 
-def _normalize_info_filter(
-    info_filter: Any,
-    info_mode: Any = _UNSET,
-    info_keys: Any = _UNSET,
-) -> tuple[str, list[str] | None]:
-    if info_mode is not _UNSET or info_keys is not _UNSET:
-        if info_filter != "all":
-            raise ValueError("cannot pass both info_filter and info_mode/info_keys")
-        mode = "all" if info_mode is _UNSET else str(info_mode)
-        keys = None if info_keys is _UNSET else info_keys
-        return _validate_info_mode(mode), _normalize_info_keys(keys)
-
+def _normalize_info_filter(info_filter: Any) -> tuple[str, list[str] | None]:
     if info_filter is None:
         return "all", None
     if isinstance(info_filter, str):
@@ -789,11 +764,6 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         reward_clip: bool | Sequence[float] = False,
         info_filter: Any = "all",
         done_on: Any = None,
-        copy_observations: Any = _UNSET,
-        info_mode: Any = _UNSET,
-        info_keys: Any = _UNSET,
-        done_on_info: Any = _UNSET,
-        unsafe_zero_copy: Any = _UNSET,
     ) -> None:
         if str(game) != DEFAULT_STABLE_RETRO_GAME:
             raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
@@ -824,12 +794,6 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         source_height = VISIBLE_HEIGHT if mask_crop else VISIBLE_HEIGHT - crop_top - crop_bottom
         resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
         action_mode = _normalize_action_mode(use_restricted_actions)
-        resolved_done_on = _UNSET if done_on_info is _UNSET else done_on_info
-        if done_on is not None:
-            if resolved_done_on is not _UNSET:
-                raise ValueError("cannot pass both done_on and done_on_info")
-            resolved_done_on = done_on
-
         self.game = str(game)
         self.action_meanings = ACTION_SETS["full"]
         self.action_set = "full"
@@ -841,8 +805,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         )
         normalized_done_on_info = (
             None
-            if resolved_done_on is _UNSET
-            else _normalize_done_on_alias(resolved_done_on, scenario=scenario)
+            if done_on is None
+            else _normalize_done_on_alias(done_on, scenario=scenario)
         )
         done_on_info_rules = _normalize_done_on_info(
             normalized_done_on_info,
@@ -858,12 +822,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             num_envs,
         )
         self.obs_layout = _normalize_obs_layout(obs_layout)
-        self.obs_copy, self.copy_observations, self.unsafe_zero_copy = _normalize_obs_copy(
-            obs_copy,
-            copy_observations,
-            unsafe_zero_copy,
-        )
-        self.info_mode, self.info_keys = _normalize_info_filter(info_filter, info_mode, info_keys)
+        self.obs_copy, self._copy_obs, self._unsafe_view = _normalize_obs_copy(obs_copy)
+        self._info_mode, self._info_keys = _normalize_info_filter(info_filter)
         self.reward_clip, self.reward_clip_low, self.reward_clip_high = _normalize_reward_clip(reward_clip)
         self.obs_resize_algorithm = _normalize_resize_algorithm(obs_resize_algorithm)
         self.obs_crop_mode = normalized_crop_mode
@@ -1274,16 +1234,16 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
 
     def _info_dict(self, index: int) -> dict[str, Any]:
         terminal = bool(self._terminated[index]) or bool(self._truncated[index])
-        if self.info_mode == "none":
+        if self._info_mode == "none":
             return {}
-        if self.info_mode == "terminal" and not terminal:
+        if self._info_mode == "terminal" and not terminal:
             return {}
 
         info = self._base_info_dict(index)
-        if self.info_keys is not None:
-            info = {key: info[key] for key in self.info_keys if key in info}
+        if self._info_keys is not None:
+            info = {key: info[key] for key in self._info_keys if key in info}
         if self._done_on_info[index] and (
-            self.info_keys is None or "done_on_info" in self.info_keys
+            self._info_keys is None or "done_on_info" in self._info_keys
         ):
             info["done_on_info"] = self._done_on_info[index]
         if terminal:

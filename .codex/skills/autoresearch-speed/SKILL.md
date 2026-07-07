@@ -35,9 +35,12 @@ Use `scripts/autoresearch.py` as the loop controller. It owns the standard
 diagnosis, screening, acceptance, check, and recording command shapes:
 
 ```bash
+.venv/bin/python scripts/autoresearch.py init
+.venv/bin/python scripts/autoresearch.py status
+.venv/bin/python scripts/autoresearch.py probe [--dry-run]
 .venv/bin/python scripts/autoresearch.py diagnose [--profile]
 .venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [-- <extra runner args>]
-.venv/bin/python scripts/autoresearch.py checks
+.venv/bin/python scripts/autoresearch.py checks [--quick] [--surface auto|native|python|benchmark]
 .venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py record <aggregate.json> [--description "..."] [--artifact <path>]
@@ -47,8 +50,15 @@ diagnosis, screening, acceptance, check, and recording command shapes:
 `RESULTS_TSV_COLUMNS` is the source of truth for `results.tsv`; do not duplicate,
 rename, split, or alias benchmark fields in the skill or ledger.
 
-Use `make benchmark` or `scripts/autoresearch.py diagnose` for the live
-current-checkout loop. `diagnose` matches the default local benchmark scale
+Use `scripts/autoresearch.py init` to create missing mutable state under
+`AUTORESEARCH_ROOT_PATH`, and `scripts/autoresearch.py status` to inspect the
+current ledger, recent benchmark index, git state, and next controller hint.
+
+Use `scripts/autoresearch.py probe`, `make benchmark`, or
+`scripts/autoresearch.py diagnose` for the live current-checkout loop. `probe`
+is the cheapest smoke-sized speed signal and can only justify discarding or
+doing deeper diagnosis; it cannot justify screening, acceptance, or a keep.
+`diagnose` matches the default local benchmark scale
 (`16` envs, `5000` steps, `3` repeats, `500` warmup) and writes a JSON artifact
 under `AUTORESEARCH_ROOT_PATH/benchmarks/`. Use `diagnose --quick` only as a
 smoke-sized falsification pass, and `diagnose --profile` when profiler evidence
@@ -59,14 +69,21 @@ is the cheapest next signal.
 1. `orient`: verify git state/current branch, read `SPECS.md`, inspect
    `AUTORESEARCH_ROOT_PATH/results.tsv` and `ideas.md`, and pick the highest-ROI
    live hypothesis.
-2. `diagnose`: run the cheapest source inspection, profiler, smoke timing, or
-   narrow equivalence check that can falsify the mechanism.
+2. `probe`/`diagnose`: run the cheapest source inspection, profiler, smoke
+   timing, or narrow equivalence check that can falsify the mechanism.
 3. `prototype`: make one small edit; after native edits, rebuild with
    `.venv/bin/python -m maturin develop --release` before Python timings.
-4. `screen`: only committed plausible candidates get exact-ref `local_triage`
+4. `quick-check`: before triage, run
+   `scripts/autoresearch.py checks --quick --surface <surface>` matching the
+   touched surface. Use full `checks` only before acceptance or when the touched
+   surface demands it.
+5. `screen`: only committed plausible candidates get exact-ref `local_triage`
    through `scripts/autoresearch.py screen`. This is the first paired
-   baseline/candidate run, and it is capped at three measured pairs.
-5. `accept`: after a promoted screen or explicit user request, run
+   baseline/candidate run, and it is capped at three measured pairs. The
+   benchmark runner caches prepared exact-ref source trees by commit under
+   `AUTORESEARCH_ROOT_PATH/benchmarks/prepared-sources/` so repeated baselines
+   do not pay repeated archive extraction and `uv sync` setup cost.
+6. `accept`: after a promoted screen or explicit user request, run
    `scripts/autoresearch.py checks`, then `scripts/autoresearch.py accept`.
    On the dedicated quiet host this caps acceptance at the first high-signal
    checkpoint (`11` measured pairs). If all validity and decision gates pass,
@@ -74,9 +91,9 @@ is the cheapest next signal.
    as inconclusive rather than weakening the evidence. Use `accept --full` for
    public claims, baseline resets, noisy contenders that deserve more samples,
    or any case where the user asks for the full ladder.
-6. `record`: write every keep, discard, crash, skip, or inconclusive result with
+7. `record`: write every keep, discard, crash, skip, or inconclusive result with
    `scripts/autoresearch.py record` before starting the next idea.
-7. `retrospect`: append compact lessons to
+8. `retrospect`: append compact lessons to
    `AUTORESEARCH_ROOT_PATH/scratchpad.md` when a mistake, hindsight conclusion,
    friction, missing check, or heuristic would make the next run stronger. The
    user reviews these later; do not update docs or skills from scratchpad notes
@@ -84,9 +101,9 @@ is the cheapest next signal.
 
 ## Decisions
 
-Fast local diagnosis is learning evidence only and may use cached or recent
-baseline numbers for direction. Exact-ref `local_triage` is screening only.
-Only `local_acceptance` can justify `keep`, `keep_small_gain`, accepted
+Fast local probe/diagnosis is learning evidence only and may use cached or
+recent baseline numbers for direction. Exact-ref `local_triage` is screening
+only. Only `local_acceptance` can justify `keep`, `keep_small_gain`, accepted
 speedups, or baseline updates.
 
 Use one default screen per candidate. Escalate to acceptance only for clear

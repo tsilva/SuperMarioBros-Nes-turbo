@@ -7,9 +7,12 @@ from pathlib import Path
 from scripts.autoresearch import (
     BENCHMARK_SCRIPT,
     benchmark_extra_args,
+    build_probe_command,
     build_benchmark_command,
     build_diagnose_command,
+    check_commands,
     event_from_aggregate,
+    infer_next_action,
     infer_status,
     record,
     run_command,
@@ -103,6 +106,33 @@ def test_diagnose_command_writes_under_autoresearch_root(tmp_path: Path) -> None
     assert quick_command[quick_command.index("--steps") + 1] == "1000"
     assert quick_command[quick_command.index("--repeats") + 1] == "1"
     assert quick_command[quick_command.index("--warmup") + 1] == "20"
+
+
+def test_probe_command_is_cheaper_than_diagnose(tmp_path: Path) -> None:
+    command = build_probe_command(tmp_path)
+
+    assert command[command.index("--steps") + 1] == "2000"
+    assert command[command.index("--repeats") + 1] == "1"
+    assert command[command.index("--warmup") + 1] == "50"
+    assert str(tmp_path / "benchmarks" / "local-probe.json") in command
+
+
+def test_quick_checks_are_surface_scoped() -> None:
+    native = check_commands(quick=True, surface="native")
+    benchmark = check_commands(quick=True, surface="benchmark")
+    full = check_commands(quick=False, surface="auto")
+
+    assert native == [["cargo", "fmt", "--check"], ["cargo", "check", "--release"]]
+    assert benchmark[0] == ["cargo", "fmt", "--check"]
+    assert "tests/test_run_git_ref_benchmark.py" in benchmark[1]
+    assert [sys.executable, "-m", "maturin", "develop", "--release"] in full
+    assert ["make", "test"] in full
+
+
+def test_infer_next_action_promotes_screen_results() -> None:
+    assert "probe" in infer_next_action([], [])
+    assert "accept" in infer_next_action([{"status": "triage_promote"}], [])
+    assert "next idea" in infer_next_action([{"status": "discard"}], [])
 
 
 def test_run_command_prints_env_defaults_for_dry_run(capsys, monkeypatch) -> None:

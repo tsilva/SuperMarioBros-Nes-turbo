@@ -40,6 +40,9 @@ PROFILE_WARMUP = "100"
 SCREEN_STEPS = "5000"
 SCREEN_REPEATS = "1"
 SCREEN_MEASURED_PAIRS = "3"
+PROBE_STEPS = "2000"
+PROBE_REPEATS = "1"
+PROBE_WARMUP = "50"
 ACCEPT_STEPS = "50000"
 ACCEPT_REPEATS = "3"
 DEDICATED_ACCEPT_MEASURED_PAIRS = "11"
@@ -139,6 +142,44 @@ def build_diagnose_command(root: Path, *, profile: bool, quick: bool = False) ->
     if profile:
         command += ["--profile-output", str(root / "benchmarks" / "local-profile.json")]
     return command + ["--json", "--output-json", str(output)]
+
+
+def build_probe_command(root: Path) -> list[str]:
+    output = root / "benchmarks" / "local-probe.json"
+    return [
+        sys.executable,
+        str(BENCHMARK_SPS_SCRIPT),
+        "--num-envs",
+        "16",
+        "--steps",
+        PROBE_STEPS,
+        "--repeats",
+        PROBE_REPEATS,
+        "--warmup",
+        PROBE_WARMUP,
+        "--frame-skip",
+        "4",
+        "--frame-stack",
+        "4",
+        "--crop-top",
+        "32",
+        "--crop-bottom",
+        "0",
+        "--resize-width",
+        "84",
+        "--resize-height",
+        "84",
+        "--states",
+        BENCHMARK_STATES,
+        "--action-set",
+        "simple",
+        "--action",
+        "noop",
+        "--no-start-game",
+        "--json",
+        "--output-json",
+        str(output),
+    ]
 
 
 def run_command(
@@ -307,14 +348,165 @@ def record(args: argparse.Namespace) -> int:
     return 0
 
 
-def checks(args: argparse.Namespace) -> int:
-    commands = [
-        ["cargo", "fmt", "--check"],
-        ["cargo", "check", "--release"],
-        [sys.executable, "-m", "maturin", "develop", "--release"],
-        ["make", "test"],
+def init(args: argparse.Namespace) -> int:
+    root = autoresearch_root(args.autoresearch_root)
+    directories = [
+        root / "benchmarks",
+        root / "states" / "SuperMarioBros-Nes-v0",
+        root / "candidates",
     ]
-    for command in commands:
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+    files_written = []
+    current = root / "current.json"
+    if not current.exists():
+        current.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "initialized",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        files_written.append(str(current))
+    ideas = root / "ideas.md"
+    if not ideas.exists():
+        ideas.write_text("# Autoresearch Ideas\n\n")
+        files_written.append(str(ideas))
+    scratchpad = root / "scratchpad.md"
+    if not scratchpad.exists():
+        scratchpad.write_text("# Autoresearch Scratchpad\n\n")
+        files_written.append(str(scratchpad))
+    results = root / "results.tsv"
+    if not results.exists() or results.stat().st_size == 0:
+        results.write_text("\t".join(RESULTS_TSV_COLUMNS) + "\n")
+        files_written.append(str(results))
+    print(
+        json.dumps(
+            {
+                "root": str(root),
+                "directories": [str(directory) for directory in directories],
+                "files_written": files_written,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def read_jsonl_tail(path: Path, limit: int = 5) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        records.append(json.loads(line))
+    return records[-limit:]
+
+
+def read_tsv_tail(path: Path, limit: int = 5) -> list[dict[str, str]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    lines = [line for line in path.read_text().splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return []
+    header = lines[0].split("\t")
+    rows = [dict(zip(header, line.split("\t"), strict=False)) for line in lines[1:]]
+    return rows[-limit:]
+
+
+def status(args: argparse.Namespace) -> int:
+    root = autoresearch_root(args.autoresearch_root)
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        check=False,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    git_status = subprocess.run(
+        ["git", "status", "--short"],
+        check=False,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.splitlines()
+    latest_results = read_tsv_tail(root / "results.tsv", limit=args.limit)
+    local_index = read_jsonl_tail(
+        root / "benchmarks" / "local-results" / "index.jsonl",
+        limit=args.limit,
+    )
+    payload = {
+        "root": str(root),
+        "branch": branch,
+        "git_status_short": git_status,
+        "paths": {
+            "results": str(root / "results.tsv"),
+            "ideas": str(root / "ideas.md"),
+            "scratchpad": str(root / "scratchpad.md"),
+            "current": str(root / "current.json"),
+            "benchmark_index": str(root / "benchmarks" / "local-results" / "index.jsonl"),
+        },
+        "latest_results": latest_results,
+        "latest_benchmarks": local_index,
+        "next": infer_next_action(latest_results, local_index),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def infer_next_action(
+    latest_results: list[dict[str, str]],
+    latest_benchmarks: list[dict[str, Any]],
+) -> str:
+    if not latest_results and not latest_benchmarks:
+        return (
+            "Run `autoresearch.py probe` or `autoresearch.py diagnose --quick` "
+            "before exact-ref screening."
+        )
+    latest_status = latest_results[-1].get("status") if latest_results else None
+    if latest_status == "triage_promote":
+        return "Run `autoresearch.py checks` and then `autoresearch.py accept <baseline> <candidate>`."
+    if latest_status in {"triage_discard", "discard"}:
+        return "Record the lesson, then pick the next idea before another probe."
+    if latest_status in {"keep", "keep_small_gain"}:
+        return "Update the accepted baseline and refresh calibration when the host is quiet."
+    return "Inspect the latest aggregate and decide whether to discard, probe deeper, or screen."
+
+
+def check_commands(*, quick: bool, surface: str) -> list[list[str]]:
+    if not quick:
+        return [
+            ["cargo", "fmt", "--check"],
+            ["cargo", "check", "--release"],
+            [sys.executable, "-m", "maturin", "develop", "--release"],
+            ["make", "test"],
+        ]
+    commands = [["cargo", "fmt", "--check"]]
+    if surface in {"auto", "native"}:
+        commands.append(["cargo", "check", "--release"])
+    if surface in {"auto", "benchmark"}:
+        commands.append(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/test_autoresearch.py",
+                "tests/test_run_git_ref_benchmark.py",
+                "tests/test_benchmark_stats.py",
+            ]
+        )
+    if surface == "python":
+        commands.append([sys.executable, "-m", "pytest", "tests/test_autoresearch.py"])
+    return commands
+
+
+def checks(args: argparse.Namespace) -> int:
+    for command in check_commands(quick=args.quick, surface=args.surface):
         print(shlex.join(command))
         if not args.dry_run:
             completed = subprocess.run(command, check=False)
@@ -339,6 +531,17 @@ def benchmark_extra_args(args: argparse.Namespace) -> list[str]:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser("init")
+    init_parser.add_argument("--autoresearch-root")
+
+    status_parser = subparsers.add_parser("status")
+    status_parser.add_argument("--autoresearch-root")
+    status_parser.add_argument("--limit", type=int, default=5)
+
+    probe_parser = subparsers.add_parser("probe")
+    probe_parser.add_argument("--autoresearch-root")
+    probe_parser.add_argument("--dry-run", action="store_true")
 
     diagnose_parser = subparsers.add_parser("diagnose")
     diagnose_parser.add_argument("--autoresearch-root")
@@ -375,6 +578,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     checks_parser = subparsers.add_parser("checks")
     checks_parser.add_argument("--dry-run", action="store_true")
+    checks_parser.add_argument("--quick", action="store_true")
+    checks_parser.add_argument(
+        "--surface",
+        choices=("auto", "native", "python", "benchmark"),
+        default="auto",
+    )
 
     record_parser = subparsers.add_parser("record")
     record_parser.add_argument("aggregate", type=Path)
@@ -388,6 +597,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.command == "init":
+        return init(args)
+    if args.command == "status":
+        if args.limit <= 0:
+            raise SystemExit("--limit must be positive")
+        return status(args)
+    if args.command == "probe":
+        root = autoresearch_root(args.autoresearch_root)
+        return run_command(
+            build_probe_command(root),
+            dry_run=args.dry_run,
+            env_defaults={"RAYON_NUM_THREADS": "12"},
+        )
     if args.command == "diagnose":
         root = autoresearch_root(args.autoresearch_root)
         return run_command(
