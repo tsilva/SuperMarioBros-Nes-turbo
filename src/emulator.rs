@@ -992,16 +992,24 @@ impl Ppu {
             let tile = self.oam[base + 1] as usize;
             let attr = self.oam[base + 2];
             let sprite_x = self.oam[base + 3] as i16;
+            if sprite_y >= crop_bottom
+                || sprite_y + 8 <= crop_top_i
+                || sprite_x >= crop_right
+                || sprite_x + 8 <= crop_left_i
+            {
+                continue;
+            }
             let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
             let flip_h = attr & 0x40 != 0;
             let flip_v = attr & 0x80 != 0;
             let behind_background = attr & 0x20 != 0;
+            let first_row = (crop_top_i - sprite_y).clamp(0, 8) as usize;
+            let end_row = (crop_bottom - sprite_y).clamp(0, 8) as usize;
+            let first_col = (crop_left_i - sprite_x).clamp(0, 8) as usize;
+            let end_col = (crop_right - sprite_x).clamp(0, 8) as usize;
 
-            for row in 0..8usize {
+            for row in first_row..end_row {
                 let screen_y = sprite_y + row as i16;
-                if screen_y < crop_top_i || screen_y >= crop_bottom {
-                    continue;
-                }
                 if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
                     continue;
                 }
@@ -1009,11 +1017,8 @@ impl Ppu {
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
-                for col in 0..8usize {
+                for col in first_col..end_col {
                     let screen_x = sprite_x + col as i16;
-                    if screen_x < crop_left_i || screen_x >= crop_right {
-                        continue;
-                    }
                     let tile_col = if flip_h { col } else { 7 - col };
                     let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
                     if pixel == 0 {
