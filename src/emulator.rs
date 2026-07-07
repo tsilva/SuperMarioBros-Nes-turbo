@@ -2004,6 +2004,16 @@ impl NesEmulator {
     }
 
     #[inline]
+    fn ram_read(&self, addr: usize) -> u8 {
+        self.ram[addr & 0x07ff]
+    }
+
+    #[inline]
+    fn ram_write(&mut self, addr: usize, value: u8) {
+        self.ram[addr & 0x07ff] = value;
+    }
+
+    #[inline]
     fn controller_write(&mut self, value: u8) {
         self.controller_strobe = value & 1 != 0;
         if self.controller_strobe {
@@ -2050,18 +2060,18 @@ impl NesEmulator {
     }
 
     #[inline]
-    fn zp(&mut self) -> u16 {
-        self.fetch_u8() as u16
+    fn zp_index(&mut self) -> usize {
+        self.fetch_u8() as usize
     }
 
     #[inline]
-    fn zpx(&mut self) -> u16 {
-        self.fetch_u8().wrapping_add(self.cpu.x) as u16
+    fn zpx_index(&mut self) -> usize {
+        self.fetch_u8().wrapping_add(self.cpu.x) as usize
     }
 
     #[inline]
-    fn zpy(&mut self) -> u16 {
-        self.fetch_u8().wrapping_add(self.cpu.y) as u16
+    fn zpy_index(&mut self) -> usize {
+        self.fetch_u8().wrapping_add(self.cpu.y) as usize
     }
 
     #[inline]
@@ -2086,16 +2096,16 @@ impl NesEmulator {
     #[inline]
     fn indx(&mut self) -> u16 {
         let ptr = self.fetch_u8().wrapping_add(self.cpu.x);
-        let lo = self.cpu_read(ptr as u16) as u16;
-        let hi = self.cpu_read(ptr.wrapping_add(1) as u16) as u16;
+        let lo = self.ram_read(ptr as usize) as u16;
+        let hi = self.ram_read(ptr.wrapping_add(1) as usize) as u16;
         lo | (hi << 8)
     }
 
     #[inline]
     fn indy(&mut self) -> (u16, bool) {
         let ptr = self.fetch_u8();
-        let lo = self.cpu_read(ptr as u16) as u16;
-        let hi = self.cpu_read(ptr.wrapping_add(1) as u16) as u16;
+        let lo = self.ram_read(ptr as usize) as u16;
+        let hi = self.ram_read(ptr.wrapping_add(1) as usize) as u16;
         let base = lo | (hi << 8);
         let addr = base.wrapping_add(self.cpu.y as u16);
         (addr, page_crossed(base, addr))
@@ -2130,15 +2140,14 @@ impl NesEmulator {
 
     #[inline]
     fn push(&mut self, value: u8) {
-        let addr = 0x0100 | self.cpu.sp as u16;
-        self.cpu_write(addr, value);
+        self.ram_write(0x0100 | self.cpu.sp as usize, value);
         self.cpu.sp = self.cpu.sp.wrapping_sub(1);
     }
 
     #[inline]
     fn pop(&mut self) -> u8 {
         self.cpu.sp = self.cpu.sp.wrapping_add(1);
-        self.cpu_read(0x0100 | self.cpu.sp as u16)
+        self.ram_read(0x0100 | self.cpu.sp as usize)
     }
 
     #[inline]
@@ -2195,14 +2204,14 @@ impl NesEmulator {
                 6
             }
             0x05 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.ora(v);
                 3
             }
             0x06 => {
-                let a = self.zp();
-                self.asl_mem(a);
+                let a = self.zp_index();
+                self.asl_ram(a);
                 5
             }
             0x08 => {
@@ -2237,14 +2246,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0x15 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.ora(v);
                 4
             }
             0x16 => {
-                let a = self.zpx();
-                self.asl_mem(a);
+                let a = self.zpx_index();
+                self.asl_ram(a);
                 6
             }
             0x18 => {
@@ -2281,20 +2290,20 @@ impl NesEmulator {
                 6
             }
             0x24 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.bit(v);
                 3
             }
             0x25 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.and(v);
                 3
             }
             0x26 => {
-                let a = self.zp();
-                self.rol_mem(a);
+                let a = self.zp_index();
+                self.rol_ram(a);
                 5
             }
             0x28 => {
@@ -2335,14 +2344,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0x35 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.and(v);
                 4
             }
             0x36 => {
-                let a = self.zpx();
-                self.rol_mem(a);
+                let a = self.zpx_index();
+                self.rol_ram(a);
                 6
             }
             0x38 => {
@@ -2378,14 +2387,14 @@ impl NesEmulator {
                 6
             }
             0x45 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.eor(v);
                 3
             }
             0x46 => {
-                let a = self.zp();
-                self.lsr_mem(a);
+                let a = self.zp_index();
+                self.lsr_ram(a);
                 5
             }
             0x48 => {
@@ -2425,14 +2434,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0x55 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.eor(v);
                 4
             }
             0x56 => {
-                let a = self.zpx();
-                self.lsr_mem(a);
+                let a = self.zpx_index();
+                self.lsr_ram(a);
                 6
             }
             0x58 => {
@@ -2467,14 +2476,14 @@ impl NesEmulator {
                 6
             }
             0x65 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.adc(v);
                 3
             }
             0x66 => {
-                let a = self.zp();
-                self.ror_mem(a);
+                let a = self.zp_index();
+                self.ror_ram(a);
                 5
             }
             0x68 => {
@@ -2518,14 +2527,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0x75 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.adc(v);
                 4
             }
             0x76 => {
-                let a = self.zpx();
-                self.ror_mem(a);
+                let a = self.zpx_index();
+                self.ror_ram(a);
                 6
             }
             0x78 => {
@@ -2555,18 +2564,18 @@ impl NesEmulator {
                 6
             }
             0x84 => {
-                let a = self.zp();
-                self.cpu_write(a, self.cpu.y);
+                let a = self.zp_index();
+                self.ram_write(a, self.cpu.y);
                 3
             }
             0x85 => {
-                let a = self.zp();
-                self.cpu_write(a, self.cpu.a);
+                let a = self.zp_index();
+                self.ram_write(a, self.cpu.a);
                 3
             }
             0x86 => {
-                let a = self.zp();
-                self.cpu_write(a, self.cpu.x);
+                let a = self.zp_index();
+                self.ram_write(a, self.cpu.x);
                 3
             }
             0x88 => {
@@ -2601,18 +2610,18 @@ impl NesEmulator {
                 6
             }
             0x94 => {
-                let a = self.zpx();
-                self.cpu_write(a, self.cpu.y);
+                let a = self.zpx_index();
+                self.ram_write(a, self.cpu.y);
                 4
             }
             0x95 => {
-                let a = self.zpx();
-                self.cpu_write(a, self.cpu.a);
+                let a = self.zpx_index();
+                self.ram_write(a, self.cpu.a);
                 4
             }
             0x96 => {
-                let a = self.zpy();
-                self.cpu_write(a, self.cpu.x);
+                let a = self.zpy_index();
+                self.ram_write(a, self.cpu.x);
                 4
             }
             0x98 => {
@@ -2654,22 +2663,22 @@ impl NesEmulator {
                 2
             }
             0xa4 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cpu.y = v;
                 self.set_zn(v);
                 3
             }
             0xa5 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cpu.a = v;
                 self.set_zn(v);
                 3
             }
             0xa6 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cpu.x = v;
                 self.set_zn(v);
                 3
@@ -2720,22 +2729,22 @@ impl NesEmulator {
                 5 + p as u16
             }
             0xb4 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.cpu.y = v;
                 self.set_zn(v);
                 4
             }
             0xb5 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.cpu.a = v;
                 self.set_zn(v);
                 4
             }
             0xb6 => {
-                let a = self.zpy();
-                let v = self.cpu_read(a);
+                let a = self.zpy_index();
+                let v = self.ram_read(a);
                 self.cpu.x = v;
                 self.set_zn(v);
                 4
@@ -2789,20 +2798,20 @@ impl NesEmulator {
                 6
             }
             0xc4 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cmp(self.cpu.y, v);
                 3
             }
             0xc5 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cmp(self.cpu.a, v);
                 3
             }
             0xc6 => {
-                let a = self.zp();
-                self.dec_mem(a);
+                let a = self.zp_index();
+                self.dec_ram(a);
                 5
             }
             0xc8 => {
@@ -2845,14 +2854,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0xd5 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.cmp(self.cpu.a, v);
                 4
             }
             0xd6 => {
-                let a = self.zpx();
-                self.dec_mem(a);
+                let a = self.zpx_index();
+                self.dec_ram(a);
                 6
             }
             0xd8 => {
@@ -2888,20 +2897,20 @@ impl NesEmulator {
                 6
             }
             0xe4 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.cmp(self.cpu.x, v);
                 3
             }
             0xe5 => {
-                let a = self.zp();
-                let v = self.cpu_read(a);
+                let a = self.zp_index();
+                let v = self.ram_read(a);
                 self.sbc(v);
                 3
             }
             0xe6 => {
-                let a = self.zp();
-                self.inc_mem(a);
+                let a = self.zp_index();
+                self.inc_ram(a);
                 5
             }
             0xe8 => {
@@ -2940,14 +2949,14 @@ impl NesEmulator {
                 5 + p as u16
             }
             0xf5 => {
-                let a = self.zpx();
-                let v = self.cpu_read(a);
+                let a = self.zpx_index();
+                let v = self.ram_read(a);
                 self.sbc(v);
                 4
             }
             0xf6 => {
-                let a = self.zpx();
-                self.inc_mem(a);
+                let a = self.zpx_index();
+                self.inc_ram(a);
                 6
             }
             0xf8 => {
@@ -3136,10 +3145,24 @@ impl NesEmulator {
     }
 
     #[inline]
+    fn asl_ram(&mut self, addr: usize) {
+        let value = self.ram_read(addr);
+        let result = self.asl(value);
+        self.ram_write(addr, result);
+    }
+
+    #[inline]
     fn lsr_mem(&mut self, addr: u16) {
         let value = self.cpu_read(addr);
         let result = self.lsr(value);
         self.cpu_write(addr, result);
+    }
+
+    #[inline]
+    fn lsr_ram(&mut self, addr: usize) {
+        let value = self.ram_read(addr);
+        let result = self.lsr(value);
+        self.ram_write(addr, result);
     }
 
     #[inline]
@@ -3150,10 +3173,24 @@ impl NesEmulator {
     }
 
     #[inline]
+    fn rol_ram(&mut self, addr: usize) {
+        let value = self.ram_read(addr);
+        let result = self.rol(value);
+        self.ram_write(addr, result);
+    }
+
+    #[inline]
     fn ror_mem(&mut self, addr: u16) {
         let value = self.cpu_read(addr);
         let result = self.ror(value);
         self.cpu_write(addr, result);
+    }
+
+    #[inline]
+    fn ror_ram(&mut self, addr: usize) {
+        let value = self.ram_read(addr);
+        let result = self.ror(value);
+        self.ram_write(addr, result);
     }
 
     #[inline]
@@ -3164,9 +3201,23 @@ impl NesEmulator {
     }
 
     #[inline]
+    fn dec_ram(&mut self, addr: usize) {
+        let result = self.ram_read(addr).wrapping_sub(1);
+        self.ram_write(addr, result);
+        self.set_zn(result);
+    }
+
+    #[inline]
     fn inc_mem(&mut self, addr: u16) {
         let result = self.cpu_read(addr).wrapping_add(1);
         self.cpu_write(addr, result);
+        self.set_zn(result);
+    }
+
+    #[inline]
+    fn inc_ram(&mut self, addr: usize) {
+        let result = self.ram_read(addr).wrapping_add(1);
+        self.ram_write(addr, result);
         self.set_zn(result);
     }
 }
