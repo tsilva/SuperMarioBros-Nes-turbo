@@ -539,6 +539,54 @@ impl RetroVecEnv {
         });
         Ok(())
     }
+
+    pub fn step_fast_into<'py>(
+        &mut self,
+        py: Python<'py>,
+        actions: PyReadonlyArray1<'py, u8>,
+        mut obs: PyReadwriteArray4<'py, u8>,
+        mut rewards: PyReadwriteArray1<'py, f32>,
+        mut terminated: PyReadwriteArray1<'py, bool>,
+        mut truncated: PyReadwriteArray1<'py, bool>,
+    ) -> PyResult<()> {
+        self.validate_obs_shape(&obs)?;
+        self.validate_vec_len(actions.len(), "actions")?;
+        self.validate_vec_len(rewards.len(), "rewards")?;
+        self.validate_vec_len(terminated.len(), "terminated")?;
+        self.validate_vec_len(truncated.len(), "truncated")?;
+
+        let actions_ro = actions.as_array();
+        let actions_slice = actions_ro
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("actions must be C-contiguous"))?;
+        let mut obs_rw = obs.as_array_mut();
+        let obs_slice = obs_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("obs must be C-contiguous"))?;
+        let mut rewards_rw = rewards.as_array_mut();
+        let rewards_slice = rewards_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("rewards must be C-contiguous"))?;
+        let mut terminated_rw = terminated.as_array_mut();
+        let terminated_slice = terminated_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("terminated must be C-contiguous"))?;
+        let mut truncated_rw = truncated.as_array_mut();
+        let truncated_slice = truncated_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("truncated must be C-contiguous"))?;
+
+        py.allow_threads(|| {
+            self.inner.step_fast_into(
+                actions_slice,
+                obs_slice,
+                rewards_slice,
+                terminated_slice,
+                truncated_slice,
+            );
+        });
+        Ok(())
+    }
 }
 
 impl RetroVecEnv {
