@@ -2071,21 +2071,6 @@ impl NesEmulator {
 
     fn oam_dma(&mut self, page: u8) {
         let base = (page as u16) << 8;
-        if base < 0x2000 {
-            let src_start = base as usize & 0x07ff;
-            if self.ppu.oam_addr == 0 {
-                self.ppu
-                    .oam
-                    .copy_from_slice(&self.ram[src_start..src_start + 256]);
-            } else {
-                for i in 0..256usize {
-                    let idx = self.ppu.oam_addr.wrapping_add(i as u8) as usize;
-                    self.ppu.oam[idx] = self.ram[(src_start + i) & 0x07ff];
-                }
-            }
-            self.extra_cycles = self.extra_cycles.wrapping_add(513);
-            return;
-        }
         for i in 0..256u16 {
             let value = self.cpu_read(base | i);
             let idx = self.ppu.oam_addr.wrapping_add(i as u8) as usize;
@@ -3480,29 +3465,6 @@ mod tests {
         assert_eq!(emu.cpu.pc, SMB_OAM_CLEAR_PC);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
-    }
-
-    #[test]
-    fn oam_dma_ram_fast_path_preserves_wrapping_semantics() {
-        let mut emu =
-            NesEmulator::new_with_options(make_test_cart_with_prg(vec![0xea; 32768]), true);
-        for (idx, value) in emu.ram.iter_mut().enumerate() {
-            *value = ((idx * 31 + idx / 3 + 11) & 0xff) as u8;
-        }
-
-        emu.ppu.oam_addr = 0;
-        emu.oam_dma(0x02);
-        assert_eq!(&emu.ppu.oam[..], &emu.ram[0x0200..0x0300]);
-        assert_eq!(emu.extra_cycles, 513);
-
-        emu.ppu.oam.fill(0);
-        emu.ppu.oam_addr = 0xf0;
-        emu.oam_dma(0x07);
-        for i in 0..256usize {
-            let dst = 0xf0u8.wrapping_add(i as u8) as usize;
-            assert_eq!(emu.ppu.oam[dst], emu.ram[0x0700 + i]);
-        }
-        assert_eq!(emu.extra_cycles, 1026);
     }
 
     #[test]
