@@ -1,4 +1,4 @@
-.PHONY: benchmark benchmark-local develop release test test-python test-rust test-retro-oracle
+.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop release test test-python test-rust test-retro-oracle
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -13,6 +13,9 @@ BENCHMARK_STEPS ?= 5000
 BENCHMARK_REPEATS ?= 3
 BENCHMARK_WARMUP ?= 500
 BENCHMARK_ARGS ?=
+BASELINE_REF ?=
+CANDIDATE_REF ?=
+CALIBRATE_REF ?= HEAD
 PYTEST_ARGS ?=
 
 develop:
@@ -22,6 +25,30 @@ benchmark: benchmark-local
 
 benchmark-local:
 	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_ARGS)
+
+autoresearch-diagnose:
+	$(PYTHON) scripts/autoresearch.py diagnose
+
+autoresearch-profile:
+	$(PYTHON) scripts/autoresearch.py diagnose --profile
+
+autoresearch-screen:
+	test -n "$(BASELINE_REF)" && test -n "$(CANDIDATE_REF)"
+	$(PYTHON) scripts/autoresearch.py screen $(BASELINE_REF) $(CANDIDATE_REF)
+
+autoresearch-accept:
+	test -n "$(BASELINE_REF)" && test -n "$(CANDIDATE_REF)"
+	$(PYTHON) scripts/autoresearch.py accept $(BASELINE_REF) $(CANDIDATE_REF)
+
+autoresearch-accept-full:
+	test -n "$(BASELINE_REF)" && test -n "$(CANDIDATE_REF)"
+	$(PYTHON) scripts/autoresearch.py accept $(BASELINE_REF) $(CANDIDATE_REF) --full
+
+autoresearch-calibrate:
+	$(PYTHON) scripts/autoresearch.py calibrate $(CALIBRATE_REF)
+
+autoresearch-checks:
+	$(PYTHON) scripts/autoresearch.py checks
 
 release:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev --group dev

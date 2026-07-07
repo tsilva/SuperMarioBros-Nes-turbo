@@ -38,13 +38,21 @@ diagnosis, screening, acceptance, check, and recording command shapes:
 .venv/bin/python scripts/autoresearch.py diagnose [--profile]
 .venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py checks
-.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--dry-run] [-- <extra runner args>]
+.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [-- <extra runner args>]
+.venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py record <aggregate.json> [--description "..."] [--artifact <path>]
 ```
 
 `scripts/run_git_ref_benchmark.py` owns official benchmark semantics.
 `RESULTS_TSV_COLUMNS` is the source of truth for `results.tsv`; do not duplicate,
 rename, split, or alias benchmark fields in the skill or ledger.
+
+Use `make benchmark` or `scripts/autoresearch.py diagnose` for the live
+current-checkout loop. `diagnose` matches the default local benchmark scale
+(`16` envs, `5000` steps, `3` repeats, `500` warmup) and writes a JSON artifact
+under `AUTORESEARCH_ROOT_PATH/benchmarks/`. Use `diagnose --quick` only as a
+smoke-sized falsification pass, and `diagnose --profile` when profiler evidence
+is the cheapest next signal.
 
 ## Loop
 
@@ -56,9 +64,16 @@ rename, split, or alias benchmark fields in the skill or ledger.
 3. `prototype`: make one small edit; after native edits, rebuild with
    `.venv/bin/python -m maturin develop --release` before Python timings.
 4. `screen`: only committed plausible candidates get exact-ref `local_triage`
-   through `scripts/autoresearch.py screen`.
+   through `scripts/autoresearch.py screen`. This is the first paired
+   baseline/candidate run, and it is capped at three measured pairs.
 5. `accept`: after a promoted screen or explicit user request, run
    `scripts/autoresearch.py checks`, then `scripts/autoresearch.py accept`.
+   On the dedicated quiet host this caps acceptance at the first high-signal
+   checkpoint (`11` measured pairs). If all validity and decision gates pass,
+   the result is accepted; if the cap is reached without valid gates, record it
+   as inconclusive rather than weakening the evidence. Use `accept --full` for
+   public claims, baseline resets, noisy contenders that deserve more samples,
+   or any case where the user asks for the full ladder.
 6. `record`: write every keep, discard, crash, skip, or inconclusive result with
    `scripts/autoresearch.py record` before starting the next idea.
 7. `retrospect`: append compact lessons to
@@ -69,15 +84,18 @@ rename, split, or alias benchmark fields in the skill or ledger.
 
 ## Decisions
 
-Fast local diagnosis is learning evidence only. Exact-ref `local_triage` is
-screening only. Only `local_acceptance` can justify `keep`, `keep_small_gain`,
-accepted speedups, or baseline updates.
+Fast local diagnosis is learning evidence only and may use cached or recent
+baseline numbers for direction. Exact-ref `local_triage` is screening only.
+Only `local_acceptance` can justify `keep`, `keep_small_gain`, accepted
+speedups, or baseline updates.
 
 Use one default screen per candidate. Escalate to acceptance only for clear
 wins, low-risk small wins, contract-sensitive questions that need official
-evidence, or direct user requests. Discard ideas quickly when profile share,
-prior rejects, smoke timings, tests, or benchmark noise make the plausible gain
-smaller than the cost of proving it.
+evidence, or direct user requests. Use `calibrate <ref>` periodically on the
+dedicated host to refresh single-ref variance for the accepted baseline; this is
+background context, not a substitute for paired acceptance. Discard ideas
+quickly when profile share, prior rejects, smoke timings, tests, or benchmark
+noise make the plausible gain smaller than the cost of proving it.
 
 Before triage, run the cheapest checks matching the touched surface. Before
 acceptance, run the controller checks. Add targeted tests before triage when
