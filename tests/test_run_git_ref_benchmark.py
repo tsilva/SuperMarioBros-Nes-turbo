@@ -418,14 +418,13 @@ def test_campaign_results_header_tracks_benchmark_identity_and_rom_digest(
     assert record["state_sha256"] == {"Level1-1": "state-sha"}
 
 
-def test_skill_results_tsv_header_matches_benchmark_record_names() -> None:
+def test_skill_delegates_results_tsv_header_to_benchmark_record_names() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     skill_text = (repo_root / ".codex" / "skills" / "autoresearch-speed" / "SKILL.md").read_text()
-    marker = "Preferred `results.tsv` header for new rows:"
-    after_marker = skill_text.split(marker, 1)[1]
-    header_line = after_marker.split("```text", 1)[1].split("```", 1)[0].strip()
 
-    assert tuple(header_line.split("\t")) == RESULTS_TSV_COLUMNS
+    assert "scripts/autoresearch.py record" in skill_text
+    assert "RESULTS_TSV_COLUMNS" in skill_text
+    assert "\t".join(RESULTS_TSV_COLUMNS) not in skill_text
 
 
 def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
