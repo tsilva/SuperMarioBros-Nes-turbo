@@ -627,7 +627,9 @@ impl Ppu {
 
         for out_y in 0..height {
             let y = crop_top + out_y;
-            let world_y = if y < 32 { y } else { y + scroll_y };
+            let scroll_row = y >= 32;
+            let world_y = if scroll_row { y + scroll_y } else { y };
+            let world_x_offset = if scroll_row { scroll_x } else { 0 };
             let table_y = (world_y / 240) & 1;
             let local_y = world_y % 240;
             let tile_y = local_y / 8;
@@ -637,11 +639,7 @@ impl Ppu {
 
             while out_x < width {
                 let screen_x = crop_left + out_x;
-                let world_x = if y < 32 {
-                    screen_x
-                } else {
-                    screen_x + scroll_x
-                };
+                let world_x = screen_x + world_x_offset;
                 let table_x = (world_x / 256) & 1;
                 let table = table_y * 2 + table_x;
                 let local_x = world_x & 0xff;
