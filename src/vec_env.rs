@@ -8,6 +8,22 @@ use rayon::prelude::*;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const PARALLEL_ENV_THRESHOLD: usize = 4;
+const DEFAULT_AREA_SRC_WIDTH: usize = VISIBLE_FRAME_WIDTH;
+const DEFAULT_AREA_SRC_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - 32;
+const DEFAULT_AREA_DST_WIDTH: usize = 84;
+const DEFAULT_AREA_DST_HEIGHT: usize = 84;
+const DEFAULT_AREA_X0: [usize; DEFAULT_AREA_DST_WIDTH] =
+    build_default_area_axis_start(DEFAULT_AREA_SRC_WIDTH);
+const DEFAULT_AREA_X1: [usize; DEFAULT_AREA_DST_WIDTH] =
+    build_default_area_axis_end(DEFAULT_AREA_SRC_WIDTH);
+const DEFAULT_AREA_X_COUNT: [u16; DEFAULT_AREA_DST_WIDTH] =
+    build_default_area_axis_count(DEFAULT_AREA_SRC_WIDTH);
+const DEFAULT_AREA_Y0: [usize; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_start(DEFAULT_AREA_SRC_HEIGHT);
+const DEFAULT_AREA_Y1: [usize; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_end(DEFAULT_AREA_SRC_HEIGHT);
+const DEFAULT_AREA_Y_COUNT: [u16; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_count(DEFAULT_AREA_SRC_HEIGHT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct VecEnvConfig {
@@ -2395,12 +2411,48 @@ fn scratch_len(config: VecEnvConfig) -> usize {
 fn resize_frame_area(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], dst: &mut [u8]) {
     debug_assert_eq!(config.resize_algorithm, ResizeAlgorithm::Area);
     if config.grayscale {
+        if plan.src_width == DEFAULT_AREA_SRC_WIDTH
+            && plan.src_height == DEFAULT_AREA_SRC_HEIGHT
+            && plan.dst_width == DEFAULT_AREA_DST_WIDTH
+            && plan.dst_height == DEFAULT_AREA_DST_HEIGHT
+        {
+            resize_default_gray_area(src, dst);
+            return;
+        }
         resize_plane_area(src, dst, plan, 0, 0);
     } else {
         let src_plane = plan.src_width * plan.src_height;
         let dst_plane = plan.dst_width * plan.dst_height;
         for channel in 0..RGB_CHANNELS {
             resize_plane_area(src, dst, plan, channel * src_plane, channel * dst_plane);
+        }
+    }
+}
+
+fn resize_default_gray_area(src: &[u8], dst: &mut [u8]) {
+    debug_assert!(src.len() >= DEFAULT_AREA_SRC_WIDTH * DEFAULT_AREA_SRC_HEIGHT);
+    debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH * DEFAULT_AREA_DST_HEIGHT);
+
+    for dy in 0..DEFAULT_AREA_DST_HEIGHT {
+        let mut sums = [0u16; DEFAULT_AREA_DST_WIDTH];
+        for sy in DEFAULT_AREA_Y0[dy]..DEFAULT_AREA_Y1[dy] {
+            let row_start = sy * DEFAULT_AREA_SRC_WIDTH;
+            for dx in 0..DEFAULT_AREA_DST_WIDTH {
+                let x0 = DEFAULT_AREA_X0[dx];
+                let x1 = DEFAULT_AREA_X1[dx];
+                let mut sum = src[row_start + x0] as u16 + src[row_start + x0 + 1] as u16;
+                if x1 - x0 == 3 {
+                    sum += src[row_start + x0 + 2] as u16;
+                }
+                sums[dx] += sum;
+            }
+        }
+
+        let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
+        let y_count = DEFAULT_AREA_Y_COUNT[dy];
+        for dx in 0..DEFAULT_AREA_DST_WIDTH {
+            let count = DEFAULT_AREA_X_COUNT[dx] * y_count;
+            dst[dst_row + dx] = (sums[dx] / count) as u8;
         }
     }
 }
@@ -2663,6 +2715,52 @@ struct AreaResizeBin {
     y0: usize,
     y1: usize,
     count: u32,
+}
+
+const fn build_default_area_axis_start(src_len: usize) -> [usize; DEFAULT_AREA_DST_WIDTH] {
+    let mut out = [0usize; DEFAULT_AREA_DST_WIDTH];
+    let mut idx = 0usize;
+    while idx < DEFAULT_AREA_DST_WIDTH {
+        out[idx] = (idx * src_len) / DEFAULT_AREA_DST_WIDTH;
+        idx += 1;
+    }
+    out
+}
+
+const fn build_default_area_axis_end(src_len: usize) -> [usize; DEFAULT_AREA_DST_WIDTH] {
+    let mut out = [0usize; DEFAULT_AREA_DST_WIDTH];
+    let mut idx = 0usize;
+    while idx < DEFAULT_AREA_DST_WIDTH {
+        let start = (idx * src_len) / DEFAULT_AREA_DST_WIDTH;
+        let mut end = ((idx + 1) * src_len) / DEFAULT_AREA_DST_WIDTH;
+        if end < start + 1 {
+            end = start + 1;
+        }
+        if end > src_len {
+            end = src_len;
+        }
+        out[idx] = end;
+        idx += 1;
+    }
+    out
+}
+
+const fn build_default_area_axis_count(src_len: usize) -> [u16; DEFAULT_AREA_DST_WIDTH] {
+    let mut out = [0u16; DEFAULT_AREA_DST_WIDTH];
+    let mut idx = 0usize;
+    while idx < DEFAULT_AREA_DST_WIDTH {
+        let start = (idx * src_len) / DEFAULT_AREA_DST_WIDTH;
+        let mut end = ((idx + 1) * src_len) / DEFAULT_AREA_DST_WIDTH;
+        if end < start + 1 {
+            end = start + 1;
+        }
+        if end > src_len {
+            end = src_len;
+        }
+        out[idx] = (end - start) as u16;
+        idx += 1;
+    }
+    out
 }
 
 #[cfg(test)]
