@@ -20,6 +20,10 @@ from scripts.run_git_ref_benchmark import RESULTS_TSV_COLUMNS
 def test_screen_and_accept_commands_are_canonical() -> None:
     screen = build_benchmark_command("screen", ["base", "cand"], [])
     accept = build_benchmark_command("accept", ["base", "cand"], ["--force-busy"])
+    accept_full = build_benchmark_command(
+        "accept", ["base", "cand"], ["--force-busy"], full=True
+    )
+    calibrate = build_benchmark_command("calibrate", ["main"], [])
 
     assert screen == [
         sys.executable,
@@ -44,25 +48,61 @@ def test_screen_and_accept_commands_are_canonical() -> None:
         "50000",
         "--repeats",
         "3",
+        "--max-measured-invocations",
+        "11",
         "--force-busy",
+    ]
+    assert accept_full == [
+        sys.executable,
+        str(BENCHMARK_SCRIPT),
+        "base",
+        "cand",
+        "--steps",
+        "50000",
+        "--repeats",
+        "3",
+        "--force-busy",
+    ]
+    assert calibrate == [
+        sys.executable,
+        str(BENCHMARK_SCRIPT),
+        "main",
+        "--single",
+        "--steps",
+        "50000",
+        "--repeats",
+        "3",
+        "--max-measured-invocations",
+        "11",
     ]
 
 
 def test_benchmark_extra_args_accepts_dry_run_after_refs() -> None:
     class Args:
-        extra_args = ["--dry-run", "--", "--force-busy"]
+        extra_args = ["--dry-run", "--full", "--", "--force-busy"]
         dry_run = False
+        full = False
 
     assert benchmark_extra_args(Args) == ["--force-busy"]
     assert Args.dry_run is True
+    assert Args.full is True
 
 
 def test_diagnose_command_writes_under_autoresearch_root(tmp_path: Path) -> None:
     command = build_diagnose_command(tmp_path, profile=True)
+    default_command = build_diagnose_command(tmp_path, profile=False)
+    quick_command = build_diagnose_command(tmp_path, profile=False, quick=True)
 
     assert "--profile-output" in command
     assert str(tmp_path / "benchmarks" / "local-profile.json") in command
     assert str(tmp_path / "benchmarks" / "local-profile-benchmark.json") in command
+    assert "--steps" in default_command
+    assert default_command[default_command.index("--steps") + 1] == "5000"
+    assert default_command[default_command.index("--repeats") + 1] == "3"
+    assert default_command[default_command.index("--warmup") + 1] == "500"
+    assert quick_command[quick_command.index("--steps") + 1] == "1000"
+    assert quick_command[quick_command.index("--repeats") + 1] == "1"
+    assert quick_command[quick_command.index("--warmup") + 1] == "20"
 
 
 def test_run_command_prints_env_defaults_for_dry_run(capsys, monkeypatch) -> None:

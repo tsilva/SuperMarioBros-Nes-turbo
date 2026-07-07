@@ -31,6 +31,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_SCRIPT = REPO_ROOT / "scripts" / "run_git_ref_benchmark.py"
 BENCHMARK_SPS_SCRIPT = REPO_ROOT / "scripts" / "benchmark_sps.py"
 BENCHMARK_STATES = "Level1-1,Level1-2,Level1-3,Level1-4"
+DIAGNOSE_STEPS = "5000"
+DIAGNOSE_REPEATS = "3"
+DIAGNOSE_WARMUP = "500"
+PROFILE_STEPS = "2000"
+PROFILE_REPEATS = "1"
+PROFILE_WARMUP = "100"
+SCREEN_STEPS = "5000"
+SCREEN_REPEATS = "1"
+SCREEN_MEASURED_PAIRS = "3"
+ACCEPT_STEPS = "50000"
+ACCEPT_REPEATS = "3"
+DEDICATED_ACCEPT_MEASURED_PAIRS = "11"
 
 
 def autoresearch_root(value: str | Path | None = None) -> Path:
@@ -42,43 +54,68 @@ def autoresearch_root(value: str | Path | None = None) -> Path:
     )
 
 
-def build_benchmark_command(kind: str, refs: list[str], extra_args: list[str]) -> list[str]:
-    if len(refs) != 2:
-        raise SystemExit(f"{kind} requires baseline_ref and candidate_ref")
-    command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], refs[1]]
+def build_benchmark_command(
+    kind: str,
+    refs: list[str],
+    extra_args: list[str],
+    *,
+    full: bool = False,
+) -> list[str]:
     if kind == "screen":
+        if len(refs) != 2:
+            raise SystemExit("screen requires baseline_ref and candidate_ref")
+        command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], refs[1]]
         command += [
             "--steps",
-            "5000",
+            SCREEN_STEPS,
             "--repeats",
-            "1",
+            SCREEN_REPEATS,
             "--warmups",
             "0",
             "--max-measured-invocations",
-            "3",
+            SCREEN_MEASURED_PAIRS,
         ]
     elif kind == "accept":
-        command += ["--steps", "50000", "--repeats", "3"]
+        if len(refs) != 2:
+            raise SystemExit("accept requires baseline_ref and candidate_ref")
+        command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], refs[1]]
+        command += ["--steps", ACCEPT_STEPS, "--repeats", ACCEPT_REPEATS]
+        if not full:
+            command += ["--max-measured-invocations", DEDICATED_ACCEPT_MEASURED_PAIRS]
+    elif kind == "calibrate":
+        if len(refs) != 1:
+            raise SystemExit("calibrate requires exactly one ref")
+        command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], "--single"]
+        command += ["--steps", ACCEPT_STEPS, "--repeats", ACCEPT_REPEATS]
+        if not full:
+            command += ["--max-measured-invocations", DEDICATED_ACCEPT_MEASURED_PAIRS]
     else:
         raise SystemExit(f"unknown benchmark kind: {kind}")
     return command + extra_args
 
 
-def build_diagnose_command(root: Path, *, profile: bool) -> list[str]:
+def build_diagnose_command(root: Path, *, profile: bool, quick: bool = False) -> list[str]:
     output = root / "benchmarks" / (
         "local-profile-benchmark.json" if profile else "local-diagnosis.json"
     )
+    steps = "1000" if quick else DIAGNOSE_STEPS
+    repeats = "1" if quick else DIAGNOSE_REPEATS
+    warmup = "20" if quick else DIAGNOSE_WARMUP
+    if profile:
+        steps = PROFILE_STEPS
+        repeats = PROFILE_REPEATS
+        warmup = PROFILE_WARMUP
     command = [
         sys.executable,
         str(BENCHMARK_SPS_SCRIPT),
         "--num-envs",
         "16",
         "--steps",
-        "2000" if profile else "1000",
+        steps,
         "--repeats",
-        "1",
+        repeats,
         "--warmup",
-        "100" if profile else "20",
+        warmup,
         "--frame-skip",
         "4",
         "--frame-stack",
@@ -291,6 +328,9 @@ def benchmark_extra_args(args: argparse.Namespace) -> list[str]:
     if "--dry-run" in extra_args:
         args.dry_run = True
         extra_args = [arg for arg in extra_args if arg != "--dry-run"]
+    if "--full" in extra_args:
+        args.full = True
+        extra_args = [arg for arg in extra_args if arg != "--full"]
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
     return extra_args
@@ -303,14 +343,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     diagnose_parser = subparsers.add_parser("diagnose")
     diagnose_parser.add_argument("--autoresearch-root")
     diagnose_parser.add_argument("--profile", action="store_true")
+    diagnose_parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Use the old smoke-sized 1000-step single-repeat diagnosis.",
+    )
     diagnose_parser.add_argument("--dry-run", action="store_true")
 
     for name in ("screen", "accept"):
         benchmark_parser = subparsers.add_parser(name)
         benchmark_parser.add_argument("baseline_ref")
         benchmark_parser.add_argument("candidate_ref")
+        if name == "accept":
+            benchmark_parser.add_argument(
+                "--full",
+                action="store_true",
+                help="Run the full uncapped acceptance ladder instead of the dedicated-host cap.",
+            )
         benchmark_parser.add_argument("--dry-run", action="store_true")
         benchmark_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
+
+    calibrate_parser = subparsers.add_parser("calibrate")
+    calibrate_parser.add_argument("ref")
+    calibrate_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Run the full uncapped single-ref ladder instead of the dedicated-host cap.",
+    )
+    calibrate_parser.add_argument("--dry-run", action="store_true")
+    calibrate_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
     checks_parser = subparsers.add_parser("checks")
     checks_parser.add_argument("--dry-run", action="store_true")
@@ -330,7 +391,7 @@ def main(argv: list[str]) -> int:
     if args.command == "diagnose":
         root = autoresearch_root(args.autoresearch_root)
         return run_command(
-            build_diagnose_command(root, profile=args.profile),
+            build_diagnose_command(root, profile=args.profile, quick=args.quick),
             dry_run=args.dry_run,
             env_defaults={"RAYON_NUM_THREADS": "12"},
         )
@@ -339,6 +400,15 @@ def main(argv: list[str]) -> int:
             args.command,
             [args.baseline_ref, args.candidate_ref],
             benchmark_extra_args(args),
+            full=getattr(args, "full", False),
+        )
+        return run_command(command, dry_run=args.dry_run)
+    if args.command == "calibrate":
+        command = build_benchmark_command(
+            args.command,
+            [args.ref],
+            benchmark_extra_args(args),
+            full=args.full,
         )
         return run_command(command, dry_run=args.dry_run)
     if args.command == "checks":

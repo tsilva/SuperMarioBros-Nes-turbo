@@ -182,6 +182,32 @@ audits, and publishes the wheels to PyPI via trusted publishing.
 
 Use `stable-retro-turbo==1.0.1.post7` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the dedicated local CPU machine.
 
+For autoresearch throughput work, use the lightweight path first:
+
+```bash
+make benchmark
+.venv/bin/python scripts/autoresearch.py diagnose
+```
+
+These benchmark the current checkout and are intended for direction, profiling,
+and quick rejection. Promising committed candidates move to exact-ref paired
+screening:
+
+```bash
+.venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref>
+```
+
+Acceptance uses the same official exact-ref runner, but the controller defaults
+to the dedicated-host cap of `11` measured pairs. This accepts only when the
+normal validity and decision gates pass; otherwise the result is inconclusive.
+Use the full ladder only when the extra time is warranted:
+
+```bash
+.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref>
+.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> --full
+.venv/bin/python scripts/autoresearch.py calibrate <baseline_ref>
+```
+
 Historical local benchmark results:
 
 | Environment | Version / Ref | Official median env steps/sec | Mean invocation-median env steps/sec | Run-median CV | Notes |
