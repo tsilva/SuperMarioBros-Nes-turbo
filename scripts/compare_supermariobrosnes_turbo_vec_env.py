@@ -93,9 +93,25 @@ class ComparisonConfig:
     termination_matrix: bool
 
 
+def json_safe(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return array_summary(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return repr(value)
+
+
 class ComparisonFailure(AssertionError):
     def __init__(self, payload: dict[str, Any]) -> None:
-        super().__init__(json.dumps(payload, indent=2, sort_keys=True))
+        super().__init__(json.dumps(json_safe(payload), indent=2, sort_keys=True))
         self.payload = payload
 
 
@@ -974,7 +990,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
 
 
 def emit_result(result: dict[str, Any], output_json: Path | None) -> None:
-    text = json.dumps(result, indent=2, sort_keys=True)
+    text = json.dumps(json_safe(result), indent=2, sort_keys=True)
     if output_json is not None:
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(text + "\n", encoding="utf-8")

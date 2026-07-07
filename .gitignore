@@ -8,6 +8,7 @@
 /.venv314/
 /.mypy_cache/
 /.pytest_cache/
+/.pytest-tmp/
 *.egg-info/
 __pycache__/
 *.py[cod]

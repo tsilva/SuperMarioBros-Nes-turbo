@@ -77,7 +77,12 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
     repo_id, source_filename, revision = hf_source
     target_filename = filename or source_filename
     if target_filename is None:
-        target_filename = find_hf_zip_filename(repo_id, revision=revision) or DEFAULT_HF_FILENAME
+        cached_filename = find_cached_hf_zip_filename(repo_id, revision=revision, cache_dir=cache_dir)
+        target_filename = cached_filename or find_hf_zip_filename(repo_id, revision=revision) or DEFAULT_HF_FILENAME
+
+    cached_path = cached_hf_file(repo_id, filename=target_filename, revision=revision, cache_dir=cache_dir)
+    if cached_path is not None:
+        return cached_path
 
     try:
         from huggingface_hub import hf_hub_download
@@ -96,6 +101,67 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
         cache_dir=cache_dir,
     )
     return Path(path)
+
+
+def cached_hf_file(repo_id: str, filename: str, revision: str | None, cache_dir: Path) -> Path | None:
+    repo_cache = cache_dir.expanduser() / f"models--{repo_id.replace('/', '--')}"
+    snapshot_dirs: list[Path] = []
+    if revision is not None:
+        snapshot_dirs.append(repo_cache / "snapshots" / revision)
+    else:
+        ref = repo_cache / "refs" / "main"
+        try:
+            main_revision = ref.read_text().strip()
+        except FileNotFoundError:
+            main_revision = ""
+        if main_revision:
+            snapshot_dirs.append(repo_cache / "snapshots" / main_revision)
+        snapshot_root = repo_cache / "snapshots"
+        if snapshot_root.exists():
+            snapshot_dirs.extend(sorted(path for path in snapshot_root.iterdir() if path.is_dir()))
+
+    seen: set[Path] = set()
+    for snapshot_dir in snapshot_dirs:
+        path = snapshot_dir / filename
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.exists():
+            return path
+    return None
+
+
+def find_cached_hf_zip_filename(repo_id: str, revision: str | None, cache_dir: Path) -> str | None:
+    repo_cache = cache_dir.expanduser() / f"models--{repo_id.replace('/', '--')}"
+    snapshot_dirs: list[Path] = []
+    if revision is not None:
+        snapshot_dirs.append(repo_cache / "snapshots" / revision)
+    else:
+        ref = repo_cache / "refs" / "main"
+        try:
+            main_revision = ref.read_text().strip()
+        except FileNotFoundError:
+            main_revision = ""
+        if main_revision:
+            snapshot_dirs.append(repo_cache / "snapshots" / main_revision)
+        snapshot_root = repo_cache / "snapshots"
+        if snapshot_root.exists():
+            snapshot_dirs.extend(sorted(path for path in snapshot_root.iterdir() if path.is_dir()))
+
+    zip_files: list[str] = []
+    seen_dirs: set[Path] = set()
+    for snapshot_dir in snapshot_dirs:
+        if snapshot_dir in seen_dirs or not snapshot_dir.exists():
+            continue
+        seen_dirs.add(snapshot_dir)
+        zip_files.extend(str(path.relative_to(snapshot_dir)) for path in snapshot_dir.rglob("*.zip"))
+
+    unique_zip_files = sorted(set(zip_files))
+    if len(unique_zip_files) == 1:
+        return unique_zip_files[0]
+    if DEFAULT_HF_FILENAME in unique_zip_files:
+        return DEFAULT_HF_FILENAME
+    return None
 
 
 def find_hf_zip_filename(repo_id: str, revision: str | None) -> str | None:
