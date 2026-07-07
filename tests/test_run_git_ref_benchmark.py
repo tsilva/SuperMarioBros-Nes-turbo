@@ -10,6 +10,7 @@ from scripts.run_git_ref_benchmark import (
     BenchmarkPlan,
     BenchmarkRef,
     EXPECTED_SMB_ROM_SHA256,
+    RESULTS_TSV_COLUMNS,
     STATE_NAMES,
     append_index,
     aggregate_with_extra_load_snapshot,
@@ -94,6 +95,15 @@ def valid_package_metadata() -> dict[str, object]:
     }
 
 
+def write_benchmark_dotenv(tmp_path: Path, rom_path: Path) -> None:
+    autoresearch_root = tmp_path / "autoresearch"
+    autoresearch_root.mkdir()
+    (tmp_path / ".env").write_text(
+        f"ROM_PATH={rom_path}\n"
+        f"AUTORESEARCH_ROOT_PATH={autoresearch_root}\n"
+    )
+
+
 def test_decide_mode_rejects_multi_ref_single() -> None:
     try:
         decide_mode(["a", "b"], single=True)
@@ -110,7 +120,7 @@ def test_parse_args_reads_rom_path_from_dotenv(
     monkeypatch.delenv("ROM_PATH", raising=False)
     rom_path = tmp_path / "SuperMarioBros.nes"
     rom_path.write_bytes(b"placeholder")
-    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+    write_benchmark_dotenv(tmp_path, rom_path)
 
     args = parse_args(["--single", "HEAD", "--dry-run"])
 
@@ -123,7 +133,7 @@ def test_parse_args_dry_run_allows_planned_missing_rom_path(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ROM_PATH", raising=False)
     rom_path = tmp_path / "planned" / "SuperMarioBros.nes"
-    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+    write_benchmark_dotenv(tmp_path, rom_path)
 
     args = parse_args(["--single", "HEAD", "--dry-run"])
 
@@ -136,7 +146,7 @@ def test_parse_args_real_run_rejects_missing_rom_path(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ROM_PATH", raising=False)
     rom_path = tmp_path / "planned" / "SuperMarioBros.nes"
-    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+    write_benchmark_dotenv(tmp_path, rom_path)
 
     with pytest.raises(SystemExit, match="ROM path does not exist"):
         parse_args(["--single", "HEAD"])
@@ -163,7 +173,7 @@ def test_parse_args_rejects_invalid_benchmark_limits(
     monkeypatch.delenv("ROM_PATH", raising=False)
     rom_path = tmp_path / "SuperMarioBros.nes"
     rom_path.write_bytes(b"placeholder")
-    (tmp_path / ".env").write_text(f"ROM_PATH={rom_path}\n")
+    write_benchmark_dotenv(tmp_path, rom_path)
 
     with pytest.raises(SystemExit, match=message):
         parse_args(["--single", "HEAD", "--dry-run", flag, value])
@@ -382,20 +392,40 @@ def test_validate_rom_hash_rejects_wrong_rom_bytes(tmp_path: Path) -> None:
         validate_rom_hash(str(rom_path))
 
 
-def test_campaign_results_header_tracks_benchmark_identity_and_rom_digest() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    header = (
-        repo_root / ".codex" / "optimization_campaigns" / "results.tsv"
-    ).read_text().splitlines()[0].split("\t")
+def test_campaign_results_header_tracks_benchmark_identity_and_rom_digest(
+    tmp_path: Path,
+) -> None:
+    aggregate = {
+        "benchmark_tier": "local_acceptance",
+        "workload_hash": "workload-sha",
+        "measured_pair_details": [],
+        "expected_rom_sha256": "expected-rom-sha",
+        "rom_sha256": "actual-rom-sha",
+        "state_sha256": {"Level1-1": "state-sha"},
+    }
+    append_index(
+        "header-contract-test",
+        tmp_path / "runs" / "header-contract-test",
+        aggregate,
+        tmp_path,
+    )
+    record = json.loads((tmp_path / "index.jsonl").read_text())
 
-    assert "benchmark_tier" in header
-    assert "workload_hash" in header
-    assert header.index("workload_hash") == header.index("benchmark_tier") + 1
-    assert "expected_rom_sha256" in header
-    assert "rom_sha256" in header
-    assert header.index("rom_sha256") == header.index("expected_rom_sha256") + 1
-    assert "state_sha256" in header
-    assert header.index("state_sha256") == header.index("rom_sha256") + 1
+    assert record["benchmark_tier"] == "local_acceptance"
+    assert record["workload_hash"] == "workload-sha"
+    assert record["expected_rom_sha256"] == "expected-rom-sha"
+    assert record["rom_sha256"] == "actual-rom-sha"
+    assert record["state_sha256"] == {"Level1-1": "state-sha"}
+
+
+def test_skill_results_tsv_header_matches_benchmark_record_names() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_text = (repo_root / ".codex" / "skills" / "autoresearch-speed" / "SKILL.md").read_text()
+    marker = "Preferred `results.tsv` header for new rows:"
+    after_marker = skill_text.split(marker, 1)[1]
+    header_line = after_marker.split("```text", 1)[1].split("```", 1)[0].strip()
+
+    assert tuple(header_line.split("\t")) == RESULTS_TSV_COLUMNS
 
 
 def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
@@ -932,18 +962,20 @@ def test_aggregate_with_extra_load_snapshot_refreshes_validity(
     assert refreshed["previous_limit_stop_reason"] == "max_measured_invocations"
 
 
-def test_append_index_preserves_validity_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("scripts.run_git_ref_benchmark.LOCAL_RESULTS_ROOT", tmp_path)
+def test_append_index_preserves_validity_metadata(tmp_path: Path) -> None:
     aggregate = {
         "mode": "paired_compare_fixed_local",
         "benchmark_tier": "local_acceptance",
         "refs": {"baseline": "main", "candidate": "HEAD"},
         "shas": {"baseline": "1" * 40, "candidate": "2" * 40},
         "workload_hash": "abcdef",
+        "measured_pairs": 2,
         "measured_pair_details": [{"pair_index": 0}, {"pair_index": 1}],
         "median_pair_ratio": 1.02,
+        "mean_pair_ratio": 1.01,
+        "pair_ratio_bootstrap_ci95": [1.0, 1.03],
+        "candidate_faster_pairs": 2,
+        "candidate_faster_pairs_required_for_win": 2,
         "validity_passed": True,
         "load_gate_passed": False,
         "load_gate_ignored_for_validity": True,
@@ -957,7 +989,12 @@ def test_append_index_preserves_validity_metadata(
         "decision": "needs_more_samples",
     }
 
-    append_index("metadata-test", tmp_path / "runs" / "metadata-test", aggregate)
+    append_index(
+        "metadata-test",
+        tmp_path / "runs" / "metadata-test",
+        aggregate,
+        tmp_path,
+    )
 
     records = [
         json.loads(line)
@@ -967,7 +1004,11 @@ def test_append_index_preserves_validity_metadata(
     assert records[0]["load_gate_passed"] is False
     assert records[0]["benchmark_tier"] == "local_acceptance"
     assert records[0]["workload_hash"] == "abcdef"
-    assert records[0]["measured_pair_count"] == 2
+    assert records[0]["measured_pairs"] == 2
+    assert records[0]["mean_pair_ratio"] == 1.01
+    assert records[0]["pair_ratio_bootstrap_ci95"] == [1.0, 1.03]
+    assert records[0]["candidate_faster_pairs"] == 2
+    assert records[0]["candidate_faster_pairs_required_for_win"] == 2
     assert records[0]["load_gate_ignored_for_validity"] is True
     assert records[0]["limit_stop_reason"] == "max_measured_invocations"
     assert records[0]["previous_limit_stop_reason"] == "load_gate_failed"

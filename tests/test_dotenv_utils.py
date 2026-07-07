@@ -278,7 +278,12 @@ def test_pypi_benchmark_wrappers_read_rom_path_from_dotenv(
     monkeypatch.delenv("ROM_PATH", raising=False)
     rom_path = tmp_path / "from-dotenv.nes"
     rom_path.write_bytes(b"placeholder")
-    (tmp_path / ".env").write_text(f'ROM_PATH="{rom_path}"\n')
+    autoresearch_root = tmp_path / "autoresearch"
+    autoresearch_root.mkdir()
+    (tmp_path / ".env").write_text(
+        f'ROM_PATH="{rom_path}"\n'
+        f'AUTORESEARCH_ROOT_PATH="{autoresearch_root}"\n'
+    )
 
     assert parse_stable_pypi_args(["--version", "1.0.0"]).rom_path == str(rom_path)
     assert parse_smb_pypi_args(["--version", "1.0.0"]).rom_path == str(rom_path)

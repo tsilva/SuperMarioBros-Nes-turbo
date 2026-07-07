@@ -21,8 +21,26 @@ pub struct VecEnvConfig {
     pub terminate_on_flag: bool,
     pub crop_top: usize,
     pub crop_bottom: usize,
+    pub crop_left: usize,
+    pub crop_right: usize,
+    pub crop_mode: CropMode,
+    pub crop_fill: u8,
     pub resize_width: usize,
     pub resize_height: usize,
+    pub resize_algorithm: ResizeAlgorithm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CropMode {
+    Remove,
+    Mask,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResizeAlgorithm {
+    Area,
+    Nearest,
+    Bilinear,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,11 +180,17 @@ impl InfoSnapshot {
 
 impl VecEnvConfig {
     pub fn source_width(&self) -> usize {
-        VISIBLE_FRAME_WIDTH
+        match self.crop_mode {
+            CropMode::Remove => VISIBLE_FRAME_WIDTH - self.crop_left - self.crop_right,
+            CropMode::Mask => VISIBLE_FRAME_WIDTH,
+        }
     }
 
     pub fn source_height(&self) -> usize {
-        VISIBLE_FRAME_HEIGHT - self.crop_top - self.crop_bottom
+        match self.crop_mode {
+            CropMode::Remove => VISIBLE_FRAME_HEIGHT - self.crop_top - self.crop_bottom,
+            CropMode::Mask => VISIBLE_FRAME_HEIGHT,
+        }
     }
 
     pub fn obs_width(&self) -> usize {
@@ -2184,7 +2208,7 @@ fn write_current_frame(
         let native_len = native_frame_len(config);
         let native = &mut scratch[..native_len];
         write_native_frame(config, env, native);
-        resize_frame_area(config, resize_plan, native, dst);
+        resize_frame(config, resize_plan, native, dst);
     } else {
         write_native_frame(config, env, dst);
     }
@@ -2212,7 +2236,7 @@ fn write_current_frame_profiled(
         write_native_frame(config, env, native);
         profiler.record_render(render_start.elapsed());
         let resize_start = Instant::now();
-        resize_frame_area(config, resize_plan, native, dst);
+        resize_frame(config, resize_plan, native, dst);
         profiler.record_resize(resize_start.elapsed());
     } else {
         let start = Instant::now();
@@ -2222,16 +2246,33 @@ fn write_current_frame_profiled(
 }
 
 fn write_native_frame(config: VecEnvConfig, env: &NesEmulator, dst: &mut [u8]) {
+    let crop_top = native_crop_top(config);
+    let crop_left = native_crop_left(config);
+    let width = config.source_width();
     let height = config.source_height();
     if config.grayscale {
-        env.write_gray_visible_frame_cropped(dst, config.crop_top, height);
+        env.write_gray_visible_frame_region(dst, crop_top, crop_left, width, height);
     } else {
-        env.write_rgb_visible_frame_cropped(dst, config.crop_top, height);
+        env.write_rgb_visible_frame_region(dst, crop_top, crop_left, width, height);
+    }
+    if config.crop_mode == CropMode::Mask {
+        mask_native_frame(config, dst);
     }
 }
 
 fn write_rgb_source_frame(config: VecEnvConfig, env: &NesEmulator, dst: &mut [u8]) {
-    env.write_rgb_visible_frame_cropped(dst, config.crop_top, config.source_height());
+    let crop_top = native_crop_top(config);
+    let crop_left = native_crop_left(config);
+    env.write_rgb_visible_frame_region(
+        dst,
+        crop_top,
+        crop_left,
+        config.source_width(),
+        config.source_height(),
+    );
+    if config.crop_mode == CropMode::Mask {
+        mask_native_rgb_frame(config, dst);
+    }
 }
 
 fn process_rgb_source_frame(
@@ -2242,14 +2283,71 @@ fn process_rgb_source_frame(
 ) {
     if config.grayscale {
         if config.needs_resize() {
-            resize_gray_from_rgb_source(src, dst, plan);
+            resize_gray_from_rgb_source(config, src, dst, plan);
         } else {
             gray_from_rgb_source(src, dst);
         }
     } else if config.needs_resize() {
-        resize_frame_area(config, plan, src, dst);
+        resize_frame(config, plan, src, dst);
     } else {
         dst.copy_from_slice(&src[..frame_len(config)]);
+    }
+}
+
+#[inline]
+fn native_crop_top(config: VecEnvConfig) -> usize {
+    match config.crop_mode {
+        CropMode::Remove => config.crop_top,
+        CropMode::Mask => 0,
+    }
+}
+
+#[inline]
+fn native_crop_left(config: VecEnvConfig) -> usize {
+    match config.crop_mode {
+        CropMode::Remove => config.crop_left,
+        CropMode::Mask => 0,
+    }
+}
+
+fn mask_native_frame(config: VecEnvConfig, dst: &mut [u8]) {
+    if config.grayscale {
+        mask_native_plane(config, dst, 0);
+    } else {
+        mask_native_rgb_frame(config, dst);
+    }
+}
+
+fn mask_native_rgb_frame(config: VecEnvConfig, dst: &mut [u8]) {
+    let plane = config.source_width() * config.source_height();
+    for channel in 0..RGB_CHANNELS {
+        mask_native_plane(config, dst, channel * plane);
+    }
+}
+
+fn mask_native_plane(config: VecEnvConfig, dst: &mut [u8], offset: usize) {
+    let width = config.source_width();
+    let height = config.source_height();
+    let fill = config.crop_fill;
+    let plane = &mut dst[offset..offset + width * height];
+
+    if config.crop_top > 0 {
+        plane[..config.crop_top * width].fill(fill);
+    }
+    if config.crop_bottom > 0 {
+        let start = (height - config.crop_bottom) * width;
+        plane[start..].fill(fill);
+    }
+    if config.crop_left > 0 || config.crop_right > 0 {
+        for row in plane.chunks_exact_mut(width) {
+            if config.crop_left > 0 {
+                row[..config.crop_left].fill(fill);
+            }
+            if config.crop_right > 0 {
+                let start = width - config.crop_right;
+                row[start..].fill(fill);
+            }
+        }
     }
 }
 
@@ -2295,6 +2393,7 @@ fn scratch_len(config: VecEnvConfig) -> usize {
 }
 
 fn resize_frame_area(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], dst: &mut [u8]) {
+    debug_assert_eq!(config.resize_algorithm, ResizeAlgorithm::Area);
     if config.grayscale {
         resize_plane_area(src, dst, plan, 0, 0);
     } else {
@@ -2306,6 +2405,14 @@ fn resize_frame_area(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], ds
     }
 }
 
+fn resize_frame(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], dst: &mut [u8]) {
+    match config.resize_algorithm {
+        ResizeAlgorithm::Area => resize_frame_area(config, plan, src, dst),
+        ResizeAlgorithm::Nearest => resize_frame_nearest(config, plan, src, dst),
+        ResizeAlgorithm::Bilinear => resize_frame_bilinear(config, plan, src, dst),
+    }
+}
+
 fn gray_from_rgb_source(src: &[u8], dst: &mut [u8]) {
     let plane = dst.len();
     for idx in 0..plane {
@@ -2313,7 +2420,20 @@ fn gray_from_rgb_source(src: &[u8], dst: &mut [u8]) {
     }
 }
 
-fn resize_gray_from_rgb_source(src: &[u8], dst: &mut [u8], plan: &AreaResizePlan) {
+fn resize_gray_from_rgb_source(
+    config: VecEnvConfig,
+    src: &[u8],
+    dst: &mut [u8],
+    plan: &AreaResizePlan,
+) {
+    match config.resize_algorithm {
+        ResizeAlgorithm::Area => resize_gray_from_rgb_source_area(src, dst, plan),
+        ResizeAlgorithm::Nearest => resize_gray_from_rgb_source_nearest(src, dst, plan),
+        ResizeAlgorithm::Bilinear => resize_gray_from_rgb_source_bilinear(src, dst, plan),
+    }
+}
+
+fn resize_gray_from_rgb_source_area(src: &[u8], dst: &mut [u8], plan: &AreaResizePlan) {
     let src_plane = plan.src_width * plan.src_height;
     for (dst_idx, bin) in plan.bins.iter().enumerate() {
         let mut sum = 0u32;
@@ -2331,6 +2451,86 @@ fn resize_gray_from_rgb_source(src: &[u8], dst: &mut [u8], plan: &AreaResizePlan
 #[inline]
 fn rgb_to_gray(r: u8, g: u8, b: u8) -> u8 {
     (((r as u32) * 77 + (g as u32) * 150 + (b as u32) * 29 + 128) >> 8) as u8
+}
+
+fn resize_frame_nearest(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], dst: &mut [u8]) {
+    let channels = if config.grayscale { 1 } else { RGB_CHANNELS };
+    for channel in 0..channels {
+        resize_plane_nearest(
+            src,
+            dst,
+            plan,
+            channel * plan.src_width * plan.src_height,
+            channel * plan.dst_width * plan.dst_height,
+        );
+    }
+}
+
+fn resize_frame_bilinear(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], dst: &mut [u8]) {
+    let channels = if config.grayscale { 1 } else { RGB_CHANNELS };
+    for channel in 0..channels {
+        resize_plane_bilinear(
+            src,
+            dst,
+            plan,
+            channel * plan.src_width * plan.src_height,
+            channel * plan.dst_width * plan.dst_height,
+        );
+    }
+}
+
+fn resize_gray_from_rgb_source_nearest(src: &[u8], dst: &mut [u8], plan: &AreaResizePlan) {
+    let src_plane = plan.src_width * plan.src_height;
+    for dy in 0..plan.dst_height {
+        let sy = (dy * plan.src_height / plan.dst_height).min(plan.src_height - 1);
+        for dx in 0..plan.dst_width {
+            let sx = (dx * plan.src_width / plan.dst_width).min(plan.src_width - 1);
+            let src_idx = sy * plan.src_width + sx;
+            let dst_idx = dy * plan.dst_width + dx;
+            dst[dst_idx] = rgb_to_gray(
+                src[src_idx],
+                src[src_plane + src_idx],
+                src[2 * src_plane + src_idx],
+            );
+        }
+    }
+}
+
+fn resize_gray_from_rgb_source_bilinear(src: &[u8], dst: &mut [u8], plan: &AreaResizePlan) {
+    let src_plane = plan.src_width * plan.src_height;
+    for dy in 0..plan.dst_height {
+        let (y0, y1, wy) = bilinear_axis(dy, plan.dst_height, plan.src_height);
+        for dx in 0..plan.dst_width {
+            let (x0, x1, wx) = bilinear_axis(dx, plan.dst_width, plan.src_width);
+            let top = rgb_gray_lerp(src, src_plane, y0, x0, x1, plan.src_width, wx);
+            let bottom = rgb_gray_lerp(src, src_plane, y1, x0, x1, plan.src_width, wx);
+            dst[dy * plan.dst_width + dx] = round_u8(top * (1.0 - wy) + bottom * wy);
+        }
+    }
+}
+
+fn rgb_gray_lerp(
+    src: &[u8],
+    src_plane: usize,
+    y: usize,
+    x0: usize,
+    x1: usize,
+    width: usize,
+    wx: f32,
+) -> f32 {
+    let left_idx = y * width + x0;
+    let right_idx = y * width + x1;
+    let left = rgb_to_gray(
+        src[left_idx],
+        src[src_plane + left_idx],
+        src[2 * src_plane + left_idx],
+    ) as f32;
+    let right = rgb_to_gray(
+        src[right_idx],
+        src[src_plane + right_idx],
+        src[2 * src_plane + right_idx],
+    ) as f32;
+    left * (1.0 - wx) + right * wx
 }
 
 fn resize_plane_area(
@@ -2357,6 +2557,64 @@ fn resize_plane_area(
             *dst.get_unchecked_mut(dst_offset + dst_i) = (sum / bin.count) as u8;
         }
     }
+}
+
+fn resize_plane_nearest(
+    src: &[u8],
+    dst: &mut [u8],
+    plan: &AreaResizePlan,
+    src_offset: usize,
+    dst_offset: usize,
+) {
+    debug_assert!(src.len() >= src_offset + plan.src_width * plan.src_height);
+    debug_assert!(dst.len() >= dst_offset + plan.dst_width * plan.dst_height);
+
+    for dy in 0..plan.dst_height {
+        let sy = (dy * plan.src_height / plan.dst_height).min(plan.src_height - 1);
+        for dx in 0..plan.dst_width {
+            let sx = (dx * plan.src_width / plan.dst_width).min(plan.src_width - 1);
+            dst[dst_offset + dy * plan.dst_width + dx] = src[src_offset + sy * plan.src_width + sx];
+        }
+    }
+}
+
+fn resize_plane_bilinear(
+    src: &[u8],
+    dst: &mut [u8],
+    plan: &AreaResizePlan,
+    src_offset: usize,
+    dst_offset: usize,
+) {
+    debug_assert!(src.len() >= src_offset + plan.src_width * plan.src_height);
+    debug_assert!(dst.len() >= dst_offset + plan.dst_width * plan.dst_height);
+
+    for dy in 0..plan.dst_height {
+        let (y0, y1, wy) = bilinear_axis(dy, plan.dst_height, plan.src_height);
+        for dx in 0..plan.dst_width {
+            let (x0, x1, wx) = bilinear_axis(dx, plan.dst_width, plan.src_width);
+            let top_left = src[src_offset + y0 * plan.src_width + x0] as f32;
+            let top_right = src[src_offset + y0 * plan.src_width + x1] as f32;
+            let bottom_left = src[src_offset + y1 * plan.src_width + x0] as f32;
+            let bottom_right = src[src_offset + y1 * plan.src_width + x1] as f32;
+            let top = top_left * (1.0 - wx) + top_right * wx;
+            let bottom = bottom_left * (1.0 - wx) + bottom_right * wx;
+            dst[dst_offset + dy * plan.dst_width + dx] = round_u8(top * (1.0 - wy) + bottom * wy);
+        }
+    }
+}
+
+fn bilinear_axis(dst_index: usize, dst_len: usize, src_len: usize) -> (usize, usize, f32) {
+    if dst_len == 1 {
+        return (0, 0, 0.0);
+    }
+    let pos = (dst_index as f32) * ((src_len - 1) as f32) / ((dst_len - 1) as f32);
+    let lo = pos.floor() as usize;
+    let hi = (lo + 1).min(src_len - 1);
+    (lo, hi, pos - lo as f32)
+}
+
+fn round_u8(value: f32) -> u8 {
+    value.clamp(0.0, 255.0).round() as u8
 }
 
 struct AreaResizePlan {
@@ -2447,8 +2705,13 @@ mod tests {
             terminate_on_flag: true,
             crop_top: 32,
             crop_bottom: 0,
+            crop_left: 0,
+            crop_right: 0,
+            crop_mode: CropMode::Remove,
+            crop_fill: 0,
             resize_width: 84,
             resize_height: 84,
+            resize_algorithm: ResizeAlgorithm::Area,
         };
         let plan = AreaResizePlan::new(config.source_width(), config.source_height(), 84, 84);
         let src_len = config.source_width() * config.source_height();
@@ -2490,8 +2753,13 @@ mod tests {
             terminate_on_flag: true,
             crop_top: 32,
             crop_bottom: 0,
+            crop_left: 0,
+            crop_right: 0,
+            crop_mode: CropMode::Remove,
+            crop_fill: 0,
             resize_width: dst_width,
             resize_height: dst_height,
+            resize_algorithm: ResizeAlgorithm::Area,
         };
         let plan = AreaResizePlan::new(src_width, src_height, dst_width, dst_height);
         let src_plane = src_width * src_height;
@@ -2517,5 +2785,80 @@ mod tests {
         }
 
         assert_eq!(optimized, reference);
+    }
+
+    #[test]
+    fn mask_native_frame_fills_crop_margins_without_changing_visible_center() {
+        let config = VecEnvConfig {
+            num_envs: 1,
+            frame_skip: 4,
+            grayscale: true,
+            frame_stack: 1,
+            frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
+            terminate_on_flag: true,
+            crop_top: 3,
+            crop_bottom: 5,
+            crop_left: 7,
+            crop_right: 11,
+            crop_mode: CropMode::Mask,
+            crop_fill: 42,
+            resize_width: VISIBLE_FRAME_WIDTH,
+            resize_height: VISIBLE_FRAME_HEIGHT,
+            resize_algorithm: ResizeAlgorithm::Area,
+        };
+        let width = config.source_width();
+        let height = config.source_height();
+        let mut frame = (0..width * height)
+            .map(|idx| (idx % 251) as u8)
+            .collect::<Vec<_>>();
+        let center_idx = config.crop_top * width + config.crop_left;
+        let center_before = frame[center_idx];
+
+        mask_native_frame(config, &mut frame);
+
+        assert_eq!(config.source_width(), VISIBLE_FRAME_WIDTH);
+        assert_eq!(config.source_height(), VISIBLE_FRAME_HEIGHT);
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = frame[y * width + x];
+                let masked = y < config.crop_top
+                    || y >= height - config.crop_bottom
+                    || x < config.crop_left
+                    || x >= width - config.crop_right;
+                if masked {
+                    assert_eq!(pixel, config.crop_fill);
+                }
+            }
+        }
+        assert_eq!(frame[center_idx], center_before);
+    }
+
+    #[test]
+    fn remove_crop_source_geometry_accounts_for_all_sides() {
+        let config = VecEnvConfig {
+            num_envs: 1,
+            frame_skip: 4,
+            grayscale: true,
+            frame_stack: 1,
+            frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
+            terminate_on_flag: true,
+            crop_top: 32,
+            crop_bottom: 4,
+            crop_left: 10,
+            crop_right: 6,
+            crop_mode: CropMode::Remove,
+            crop_fill: 0,
+            resize_width: VISIBLE_FRAME_WIDTH - 16,
+            resize_height: VISIBLE_FRAME_HEIGHT - 36,
+            resize_algorithm: ResizeAlgorithm::Area,
+        };
+
+        assert_eq!(config.source_width(), VISIBLE_FRAME_WIDTH - 16);
+        assert_eq!(config.source_height(), VISIBLE_FRAME_HEIGHT - 36);
+        assert!(!config.needs_resize());
     }
 }

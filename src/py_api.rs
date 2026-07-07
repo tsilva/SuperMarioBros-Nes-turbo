@@ -8,7 +8,8 @@ use crate::emulator::{
     NES_HEIGHT, NES_WIDTH, RGB_CHANNELS, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH,
 };
 use crate::vec_env::{
-    DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, VecEnvConfig,
+    CropMode, DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, ResizeAlgorithm,
+    VecEnvConfig,
 };
 
 #[pyclass(name = "_RetroVecEnv")]
@@ -19,7 +20,7 @@ pub struct RetroVecEnv {
 #[pymethods]
 impl RetroVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0, crop_left=0, crop_right=0, crop_mode="remove", crop_fill=0, resize_algorithm="area"))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -41,6 +42,11 @@ impl RetroVecEnv {
         frame_maxpool: bool,
         noop_reset_max: isize,
         sticky_action_prob: f64,
+        crop_left: usize,
+        crop_right: usize,
+        crop_mode: &str,
+        crop_fill: u8,
+        resize_algorithm: &str,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -57,6 +63,12 @@ impl RetroVecEnv {
                 crop_top + crop_bottom
             )));
         }
+        if crop_left + crop_right >= VISIBLE_FRAME_WIDTH {
+            return Err(PyValueError::new_err(format!(
+                "crop_left + crop_right must be less than {VISIBLE_FRAME_WIDTH}, got {}",
+                crop_left + crop_right
+            )));
+        }
         if resize_width == 0 || resize_height == 0 {
             return Err(PyValueError::new_err(
                 "resize_width and resize_height must be > 0",
@@ -70,6 +82,8 @@ impl RetroVecEnv {
                 "sticky_action_prob must be between 0.0 and 1.0",
             ));
         }
+        let crop_mode = build_crop_mode(&crop_mode)?;
+        let resize_algorithm = build_resize_algorithm(&resize_algorithm)?;
 
         let cart = Cartridge::load_ines(rom_path)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -93,8 +107,13 @@ impl RetroVecEnv {
             terminate_on_flag,
             crop_top,
             crop_bottom,
+            crop_left,
+            crop_right,
+            crop_mode,
+            crop_fill,
             resize_width,
             resize_height,
+            resize_algorithm,
             noop_reset_max: noop_reset_max as usize,
             sticky_action_prob,
         };
@@ -641,6 +660,27 @@ fn build_initial_states(
             .collect(),
         false,
     ))
+}
+
+fn build_crop_mode(mode: &str) -> PyResult<CropMode> {
+    match mode {
+        "remove" => Ok(CropMode::Remove),
+        "mask" => Ok(CropMode::Mask),
+        _ => Err(PyValueError::new_err(
+            "crop_mode must be 'remove' or 'mask'",
+        )),
+    }
+}
+
+fn build_resize_algorithm(algorithm: &str) -> PyResult<ResizeAlgorithm> {
+    match algorithm {
+        "area" => Ok(ResizeAlgorithm::Area),
+        "nearest" => Ok(ResizeAlgorithm::Nearest),
+        "bilinear" => Ok(ResizeAlgorithm::Bilinear),
+        _ => Err(PyValueError::new_err(
+            "resize_algorithm must be one of: nearest, bilinear, area",
+        )),
+    }
 }
 
 fn build_done_on_info_rules(

@@ -107,7 +107,7 @@ env.step_async(actions)
 obs, rewards, dones, infos = env.step_wait()
 ```
 
-`obs_crop` removes source pixels by default before resizing, matching Stable Retro's crop behavior and keeping the fastest training path for HUD removal. For finetuning-friendly crop masking, pass `obs_crop_mode="mask"` to keep the full source canvas geometry while filling the cropped regions with `obs_crop_fill` before resize, layout conversion, and frame stacking:
+`obs_crop` removes source pixels by default before resizing, matching Stable Retro's crop behavior and keeping the fastest training path for HUD removal. All crop, mask-fill, grayscale, resize, and frame-stack preprocessing happens in the native Rust vector env. For finetuning-friendly crop masking, pass `obs_crop_mode="mask"` to keep the full source canvas geometry while filling the cropped regions with `obs_crop_fill` before resize, layout conversion, and frame stacking:
 
 ```python
 env = SuperMarioBrosNesTurboVecEnv(
@@ -189,8 +189,9 @@ Historical local benchmark results:
 | `SuperMarioBros-Nes-turbo` | `main` | `47,611.14` | `47,605.89` | `0.28%` | Full official local benchmark run; all validity gates passed. |
 | `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Historical only; superseded by `1.0.1.post7` for new comparisons. Statistical gates passed, but the post-run load gate failed because the 1-minute load was sampled immediately after the benchmark's own CPU-heavy timing. |
 
-New local benchmark runs are stored under `artifacts/benchmarks/local-results/`
-with matching source archives under `artifacts/benchmarks/local-archives/`.
+New local benchmark runs, result caches, indexes, and matching source archives
+default under `AUTORESEARCH_ROOT_PATH/benchmarks/` so benchmark state stays
+outside the repository and can move cleanly across commits.
 
 ## Notes
 
@@ -200,7 +201,7 @@ with matching source archives under `artifacts/benchmarks/local-archives/`.
 - `use_restricted_actions=Actions.ALL` and `Actions.FILTERED` consume per-button `MultiBinary` masks; `Actions.DISCRETE` consumes Stable Retro's 36-way discrete action encoding.
 - `scripts/play_policy.py` loads Stable Baselines3 PPO checkpoints from a local `.zip`, a Hugging Face repo id, or a `https://huggingface.co/...` URL and displays raw RGB gameplay in the SDL2 GUI while feeding the model its preprocessed observation stack. It defaults to a Stable Retro playback backend so public SB3/Hugging Face checkpoints use the preprocessing they were trained with; pass `--view preprocessed` to inspect the model input or `--backend native` when checking this repo's fast-env parity. The SB3, PyTorch, and Hugging Face Hub dependencies are included in the repo's `uv` dev environment.
 - By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin. Use `--state Level1-1` or another packaged stable-retro state to start every lane from one saved level state. This package includes the stable Super Mario Bros NES states from `Level1-1` through `Level8-4`, plus `Level1-1-99lives`, `Level2-1-clouds`, and `Level2-1-clouds-easy`. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. Mapping weights may be zero when the total weight is positive. `set_state(...)` accepts the same forms and updates only future explicit resets or per-lane autoresets. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. `state_sampling_weights()` reports the current future reset policy. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
-- For `SuperMarioBrosNesTurboVecEnv`, `done_on` accepts named terminal rules like `{"life_loss": ("lives", "decrease")}`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired rules are reported in `info["done_on_info"]` with `op`, `keys`, `prev`, and `next`.
+- For `SuperMarioBrosNesTurboVecEnv`, `done_on` accepts stable-retro-style compact rules like `{"life_loss": ("lives", "decrease")}`, named events such as `["life_loss"]`, and verbose event objects with `variables`/`keys`, `op`, `compare`, and `triggers`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired rules are reported in `info["done_on_info"]` with stable-retro-compatible `trigger`, `op`, `compare`, `keys`, `variables`, `prev`, `next`, and `triggers` fields.
 - Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post7` for new benchmarks and comparisons, and constructs the upstream vector env with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
 - Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.

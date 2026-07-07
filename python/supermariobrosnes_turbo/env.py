@@ -83,8 +83,28 @@ ACTION_BUTTONS = {
     "start": ("START",),
 }
 SMB_EVENT_SPECS = {
-    "life_loss": ("lives", "decrease"),
-    "level_change": (("levelHi", "levelLo"), "change"),
+    "life_loss": {
+        "description": "Player lost a life.",
+        "triggers": [
+            {
+                "id": "lives_decrease",
+                "variables": ["lives"],
+                "op": "decrease",
+                "compare": "reset",
+            },
+        ],
+    },
+    "level_change": {
+        "description": "Current level identifier changed.",
+        "triggers": [
+            {
+                "id": "level_bytes_changed",
+                "variables": ["levelHi", "levelLo"],
+                "op": "change",
+                "compare": "reset",
+            },
+        ],
+    },
 }
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
 ROM_PATH_ENV_VAR = "ROM_PATH"
@@ -102,8 +122,8 @@ INFO_KEYS = (
     "xscrollLo",
 )
 StateSpec = str | Path | bytes | bytearray | memoryview
-DoneOnInfoSpec = Mapping[str, Sequence[Any]]
-DoneOnInfoRule = tuple[str, tuple[str, ...], str]
+DoneOnInfoSpec = Mapping[str, Any]
+DoneOnInfoRule = tuple[str, str, tuple[str, ...], str, str]
 
 
 class Actions(Enum):
@@ -481,30 +501,68 @@ def _normalize_obs_crop_fill(obs_crop_fill: int) -> int:
     return fill
 
 
-def _normalize_done_on_alias(done_on: Any) -> DoneOnInfoSpec | None:
+def _scenario_events(scenario: str | Path | None) -> Mapping[str, Any]:
+    if scenario is None:
+        return SMB_EVENT_SPECS
+    if not str(scenario).endswith(".json"):
+        return SMB_EVENT_SPECS
+    try:
+        with Path(scenario).expanduser().open(encoding="utf-8") as handle:
+            scenario_data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return SMB_EVENT_SPECS
+    events = scenario_data.get("events", {})
+    return events if isinstance(events, Mapping) else {}
+
+
+def _resolve_done_on_event_rules(
+    names: Sequence[Any],
+    *,
+    scenario: str | Path | None,
+    label: str,
+) -> dict[str, Any]:
+    event_rules = _scenario_events(scenario)
+    resolved: dict[str, Any] = {}
+    missing: list[str] = []
+    for raw_name in names:
+        name = str(raw_name)
+        if not name:
+            raise ValueError(f"{label} event names must not be empty")
+        if name not in event_rules:
+            missing.append(name)
+            continue
+        resolved[name] = event_rules[name]
+    if missing:
+        available = ", ".join(sorted(str(name) for name in event_rules)) or "none"
+        raise ValueError(
+            f"{label} unknown configured event(s): {', '.join(missing)}. "
+            f"Available events: {available}"
+        )
+    return resolved
+
+
+def _normalize_done_on_alias(
+    done_on: Any,
+    *,
+    scenario: str | Path | None = None,
+    label: str = "done_on",
+) -> DoneOnInfoSpec | None:
     if done_on is None:
         return None
     if isinstance(done_on, Sequence) and not isinstance(done_on, (str, bytes, bytearray)):
-        resolved = {}
-        for raw_name in done_on:
-            name = str(raw_name)
-            try:
-                resolved[name] = SMB_EVENT_SPECS[name]
-            except KeyError as exc:
-                available = ", ".join(sorted(SMB_EVENT_SPECS))
-                raise ValueError(f"done_on unknown configured event {name!r}. Available events: {available}") from exc
-        return resolved
+        return _resolve_done_on_event_rules(done_on, scenario=scenario, label=label)
     if not isinstance(done_on, Mapping):
-        raise ValueError("done_on must be a mapping or a sequence of configured SMB event names")
-    resolved: dict[str, Sequence[Any]] = {}
+        raise ValueError(
+            f"{label} must be a mapping of rule names to event specs "
+            "or a sequence of configured event names"
+        )
+    resolved: dict[str, Any] = {}
     for raw_name, spec in done_on.items():
         name = str(raw_name)
+        if not name:
+            raise ValueError(f"{label} rule names must not be empty")
         if spec is None:
-            try:
-                spec = SMB_EVENT_SPECS[name]
-            except KeyError as exc:
-                available = ", ".join(sorted(SMB_EVENT_SPECS))
-                raise ValueError(f"done_on unknown configured event {name!r}. Available events: {available}") from exc
+            spec = _resolve_done_on_event_rules((name,), scenario=scenario, label=label)[name]
         resolved[name] = spec
     return resolved
 
@@ -537,118 +595,160 @@ def _normalize_retro_resize(
     return width, height
 
 
-def _resize_chw_batch(src: np.ndarray, width: int, height: int, algorithm: str) -> np.ndarray:
-    if src.shape[-2:] == (height, width):
-        return src
-    if algorithm == "nearest":
-        return _resize_chw_nearest(src, width, height)
-    if algorithm == "bilinear":
-        return _resize_chw_bilinear(src, width, height)
-    return _resize_chw_area(src, width, height)
-
-
-def _resize_chw_nearest(src: np.ndarray, width: int, height: int) -> np.ndarray:
-    src_h, src_w = src.shape[-2:]
-    y_idx = np.minimum((np.arange(height) * src_h // height), src_h - 1)
-    x_idx = np.minimum((np.arange(width) * src_w // width), src_w - 1)
-    return src[:, :, y_idx][:, :, :, x_idx].copy()
-
-
-def _resize_chw_bilinear(src: np.ndarray, width: int, height: int) -> np.ndarray:
-    src_h, src_w = src.shape[-2:]
-    if height == 1:
-        y = np.zeros((1,), dtype=np.float32)
-    else:
-        y = np.linspace(0, src_h - 1, height, dtype=np.float32)
-    if width == 1:
-        x = np.zeros((1,), dtype=np.float32)
-    else:
-        x = np.linspace(0, src_w - 1, width, dtype=np.float32)
-    y0 = np.floor(y).astype(np.intp)
-    x0 = np.floor(x).astype(np.intp)
-    y1 = np.minimum(y0 + 1, src_h - 1)
-    x1 = np.minimum(x0 + 1, src_w - 1)
-    wy = (y - y0).reshape(1, 1, height, 1)
-    wx = (x - x0).reshape(1, 1, 1, width)
-    top = src[:, :, y0][:, :, :, x0] * (1.0 - wx) + src[:, :, y0][:, :, :, x1] * wx
-    bottom = src[:, :, y1][:, :, :, x0] * (1.0 - wx) + src[:, :, y1][:, :, :, x1] * wx
-    out = top * (1.0 - wy) + bottom * wy
-    return np.rint(np.clip(out, 0, 255)).astype(np.uint8)
-
-
-def _resize_chw_area(src: np.ndarray, width: int, height: int) -> np.ndarray:
-    src_h, src_w = src.shape[-2:]
-    out = np.empty((*src.shape[:-2], height, width), dtype=np.uint8)
-    y_scale = src_h / height
-    x_scale = src_w / width
-    for out_y in range(height):
-        y0 = out_y * y_scale
-        y1 = (out_y + 1) * y_scale
-        src_y0 = int(np.floor(y0))
-        src_y1 = int(np.ceil(y1))
-        y_weights = np.asarray(
-            [max(0.0, min(y1, y + 1) - max(y0, y)) for y in range(src_y0, src_y1)],
-            dtype=np.float32,
-        )
-        for out_x in range(width):
-            x0 = out_x * x_scale
-            x1 = (out_x + 1) * x_scale
-            src_x0 = int(np.floor(x0))
-            src_x1 = int(np.ceil(x1))
-            x_weights = np.asarray(
-                [max(0.0, min(x1, x + 1) - max(x0, x)) for x in range(src_x0, src_x1)],
-                dtype=np.float32,
-            )
-            patch = src[:, :, src_y0:src_y1, src_x0:src_x1].astype(np.float32)
-            weighted = patch * y_weights.reshape(1, 1, -1, 1) * x_weights.reshape(1, 1, 1, -1)
-            value = weighted.sum(axis=(-2, -1)) / (y_weights.sum() * x_weights.sum())
-            out[:, :, out_y, out_x] = np.rint(np.clip(value, 0, 255)).astype(np.uint8)
-    return out
-
-
 def _normalize_done_on_info(
     done_on_info: DoneOnInfoSpec | None,
     terminate_on_life_loss: bool,
     terminate_on_level_change: bool,
 ) -> tuple[DoneOnInfoRule, ...]:
-    rules: dict[str, tuple[tuple[str, ...], str]] = {}
+    rules: list[DoneOnInfoRule] = []
     if done_on_info is not None:
         if not isinstance(done_on_info, Mapping):
-            raise ValueError("done_on_info must be a mapping of rule names to (key_or_keys, op)")
+            raise ValueError(
+                "done_on_info must be a mapping of rule names to event specs"
+            )
         for raw_name, spec in done_on_info.items():
             name = str(raw_name)
             if not name:
                 raise ValueError("done_on_info rule names must not be empty")
-            if (
-                not isinstance(spec, Sequence)
-                or isinstance(spec, (str, bytes, bytearray))
-                or len(spec) != 2
-            ):
-                raise ValueError("done_on_info values must be (key_or_keys, op) pairs")
-            raw_keys, raw_op = spec
-            op = str(raw_op)
-            if op not in {"change", "increase", "decrease"}:
-                raise ValueError("done_on_info ops must be 'change', 'increase', or 'decrease'")
-            if isinstance(raw_keys, str):
-                keys = (raw_keys,)
-            elif isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (bytes, bytearray)):
-                keys = tuple(str(key) for key in raw_keys)
-            else:
-                raise ValueError("done_on_info keys must be a string or sequence of strings")
-            if not keys or any(not key for key in keys):
-                raise ValueError("done_on_info rules must reference at least one key")
-            unknown = [key for key in keys if key not in INFO_KEYS]
-            if unknown:
-                valid = ", ".join(INFO_KEYS)
-                raise ValueError(f"unknown done_on_info key(s) {unknown!r}; valid keys: {valid}")
-            rules[name] = (keys, op)
+            rules.extend(_normalize_event_spec(name, spec, label="done_on_info"))
 
-    if terminate_on_life_loss and "life_loss" not in rules:
-        rules["life_loss"] = (("lives",), "decrease")
-    if terminate_on_level_change and "level_change" not in rules:
-        rules["level_change"] = (("levelHi", "levelLo"), "change")
+    event_names = {name for name, _trigger, _keys, _op, _compare in rules}
+    if terminate_on_life_loss and "life_loss" not in event_names:
+        rules.extend(_normalize_event_spec("life_loss", SMB_EVENT_SPECS["life_loss"], label="done_on_info"))
+    if terminate_on_level_change and "level_change" not in event_names:
+        rules.extend(_normalize_event_spec("level_change", SMB_EVENT_SPECS["level_change"], label="done_on_info"))
 
-    return tuple((name, keys, op) for name, (keys, op) in rules.items())
+    return tuple(rules)
+
+
+def _normalize_event_spec(name: str, spec: Any, *, label: str) -> tuple[DoneOnInfoRule, ...]:
+    if _is_compact_event_spec(spec):
+        return (_normalize_event_trigger(name, spec, label=label),)
+
+    if not isinstance(spec, Mapping):
+        raise ValueError(
+            f"{label} values must be compact (variables, op) pairs or "
+            "mappings with variables/op or triggers"
+        )
+
+    allowed = {"description", "triggers", "id", "variables", "keys", "op", "compare"}
+    unknown = set(spec) - allowed
+    if unknown:
+        names = ", ".join(sorted(str(key) for key in unknown))
+        raise ValueError(f"{label} event {name!r} has unknown keys: {names}")
+
+    if "triggers" not in spec:
+        return (_normalize_event_trigger(name, spec, label=label),)
+
+    raw_triggers = spec["triggers"]
+    if isinstance(raw_triggers, (str, bytes, bytearray)) or not isinstance(raw_triggers, Sequence):
+        raise ValueError(f"{label} event {name!r} triggers must be a sequence")
+    if not raw_triggers:
+        raise ValueError(f"{label} event {name!r} must contain at least one trigger")
+
+    trigger_count = len(raw_triggers)
+    return tuple(
+        _normalize_event_trigger(
+            name,
+            raw_trigger,
+            label=label,
+            index=index,
+            trigger_count=trigger_count,
+        )
+        for index, raw_trigger in enumerate(raw_triggers)
+    )
+
+
+def _is_compact_event_spec(spec: Any) -> bool:
+    return (
+        isinstance(spec, Sequence)
+        and not isinstance(spec, (str, bytes, bytearray))
+        and len(spec) == 2
+    )
+
+
+def _normalize_event_trigger(
+    event_name: str,
+    trigger: Any,
+    *,
+    label: str,
+    index: int = 0,
+    trigger_count: int = 1,
+) -> DoneOnInfoRule:
+    if _is_compact_event_spec(trigger):
+        raw_keys, raw_op = trigger
+        trigger_id = "default" if trigger_count == 1 else f"trigger_{index + 1}"
+        compare = "reset"
+    elif isinstance(trigger, Mapping):
+        allowed = {"description", "id", "variables", "keys", "op", "compare"}
+        unknown = set(trigger) - allowed
+        if unknown:
+            names = ", ".join(sorted(str(key) for key in unknown))
+            raise ValueError(f"{label} event {event_name!r} trigger has unknown keys: {names}")
+        if "variables" in trigger and "keys" in trigger:
+            raise ValueError(
+                f"{label} event {event_name!r} trigger cannot use both variables and keys"
+            )
+        raw_keys = trigger.get("variables", trigger.get("keys"))
+        raw_op = trigger.get("op")
+        trigger_id = str(
+            trigger.get("id", "default" if trigger_count == 1 else f"trigger_{index + 1}")
+        )
+        compare = str(trigger.get("compare", "reset"))
+    else:
+        raise ValueError(
+            f"{label} event {event_name!r} triggers must be compact pairs or mappings"
+        )
+
+    if not trigger_id:
+        raise ValueError(f"{label} event {event_name!r} trigger ids must not be empty")
+    keys = _normalize_event_variables(raw_keys, label=label)
+    op = _normalize_event_op(raw_op, label=label)
+    compare = _normalize_event_compare(compare, label=label)
+    return event_name, trigger_id, keys, op, compare
+
+
+def _normalize_event_variables(raw_keys: Any, *, label: str) -> tuple[str, ...]:
+    if isinstance(raw_keys, str):
+        keys = (raw_keys,)
+    elif isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (bytes, bytearray)):
+        keys = tuple(str(key) for key in raw_keys)
+    else:
+        raise ValueError(f"{label} variables must be a string or sequence of strings")
+    if not keys or any(not key for key in keys):
+        raise ValueError(f"{label} rules must reference at least one variable")
+    unknown = [key for key in keys if key not in INFO_KEYS]
+    if unknown:
+        valid = ", ".join(INFO_KEYS)
+        raise ValueError(f"unknown {label} key(s) {unknown!r}; valid keys: {valid}")
+    return keys
+
+
+def _normalize_event_op(raw_op: Any, *, label: str) -> str:
+    op = str(raw_op)
+    if op not in {"change", "increase", "decrease"}:
+        raise ValueError(f"{label} ops must be 'change', 'increase', or 'decrease'")
+    return op
+
+
+def _normalize_event_compare(raw_compare: Any, *, label: str) -> str:
+    compare = str(raw_compare)
+    if compare != "reset":
+        raise ValueError(f"{label} compare must be 'reset'")
+    return compare
+
+
+def _native_done_on_info_rules(
+    rules: Sequence[DoneOnInfoRule],
+) -> tuple[list[tuple[str, list[str], str]], dict[str, DoneOnInfoRule]]:
+    native_rules: list[tuple[str, list[str], str]] = []
+    metadata: dict[str, DoneOnInfoRule] = {}
+    for index, rule in enumerate(rules):
+        event_name, _trigger_id, keys, op, _compare = rule
+        internal_name = f"__event_rule_{index}__{event_name}"
+        native_rules.append((internal_name, list(keys), op))
+        metadata[internal_name] = rule
+    return native_rules, metadata
 
 
 class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
@@ -742,12 +842,15 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         normalized_done_on_info = (
             None
             if resolved_done_on is _UNSET
-            else _normalize_done_on_alias(resolved_done_on)
+            else _normalize_done_on_alias(resolved_done_on, scenario=scenario)
         )
         done_on_info_rules = _normalize_done_on_info(
             normalized_done_on_info,
             False,
             False,
+        )
+        native_done_on_info_rules, done_on_info_metadata = _native_done_on_info_rules(
+            done_on_info_rules
         )
         initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
             state,
@@ -771,22 +874,7 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self._output_resize_height = int(resize_height)
         if self._output_resize_width <= 0 or self._output_resize_height <= 0:
             raise ValueError("resize_width and resize_height must be > 0")
-        self._needs_python_postprocess = (
-            mask_crop
-            or self.obs_resize_algorithm != "area"
-            or crop_left != 0
-            or crop_right != 0
-        )
-        core_crop_top = 0 if mask_crop else crop_top
-        core_crop_bottom = 0 if mask_crop else crop_bottom
-        core_resize_width = VISIBLE_WIDTH if self._needs_python_postprocess else self._output_resize_width
-        core_resize_height = (
-            VISIBLE_HEIGHT
-            if mask_crop
-            else source_height
-            if self._needs_python_postprocess
-            else self._output_resize_height
-        )
+        self._needs_python_postprocess = False
         self._core = _CoreRetroVecEnv(
             _expand_rom_path(_resolve_rom_path(str(game), rom_path)),
             num_envs,
@@ -794,20 +882,25 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             bool(obs_grayscale),
             frame_stack,
             False,
-            core_crop_top,
-            core_crop_bottom,
-            core_resize_width,
-            core_resize_height,
+            crop_top,
+            crop_bottom,
+            self._output_resize_width,
+            self._output_resize_height,
             initial_states,
             list(initial_state_names),
             initial_state_weights,
             0,
             False,
             False,
-            [(name, list(keys), op) for name, keys, op in done_on_info_rules],
+            native_done_on_info_rules,
             bool(maxpool_last_two),
             noop_reset_max,
             sticky_action_prob,
+            crop_left,
+            crop_right,
+            normalized_crop_mode,
+            normalized_crop_fill,
+            self.obs_resize_algorithm,
         )
         self.initial_state_names = tuple(self._core.initial_state_names)
         self._state_policy_names = tuple(self._core.initial_state_policy_names())
@@ -823,6 +916,7 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self.frame_stack = self._core.frame_stack
         self.maxpool_last_two = self._core.frame_maxpool
         self.done_on_info_rules = done_on_info_rules
+        self._done_on_info_metadata = done_on_info_metadata
         self.noop_reset_max = self._core.noop_reset_max
         self.sticky_action_prob = self._core.sticky_action_prob
         self.crop_top = crop_top
@@ -1069,14 +1163,36 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         reports = self._core.done_on_info()
         self._done_on_info = []
         for lane_reports in reports:
-            lane_done_on_info = {}
+            lane_done_on_info: dict[str, dict[str, Any]] = {}
             for name, keys, op, prev, next_values in lane_reports:
-                lane_done_on_info[str(name)] = {
+                metadata = self._done_on_info_metadata.get(str(name))
+                if metadata is None:
+                    event_name = str(name)
+                    trigger_id = "default"
+                    compare = "reset"
+                    variables = list(keys)
+                else:
+                    event_name, trigger_id, variables_tuple, _metadata_op, compare = metadata
+                    variables = list(variables_tuple)
+                trigger_payload = {
+                    "trigger": trigger_id,
                     "op": str(op),
+                    "compare": compare,
                     "keys": list(keys),
+                    "variables": variables,
                     "prev": list(prev),
                     "next": list(next_values),
                 }
+                if event_name not in lane_done_on_info:
+                    lane_done_on_info[event_name] = dict(trigger_payload)
+                    continue
+                existing = lane_done_on_info[event_name]
+                first_trigger = {
+                    key: existing[key]
+                    for key in ("trigger", "op", "compare", "keys", "variables", "prev", "next")
+                }
+                triggers = existing.setdefault("triggers", [first_trigger])
+                triggers.append(trigger_payload)
             self._done_on_info.append(lane_done_on_info)
 
     def _write_terminal_observations(self) -> None:
@@ -1137,37 +1253,9 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
 
     def _public_obs_view(self) -> np.ndarray:
         chw = self._obs
-        if self._needs_python_postprocess:
-            if self.obs_crop_mode == "mask" and any(
-                (self.crop_top, self.crop_bottom, self.crop_left, self.crop_right)
-            ):
-                chw = self._masked_chw(chw)
-            elif self.crop_left or self.crop_right:
-                right = VISIBLE_WIDTH - self.crop_right if self.crop_right else VISIBLE_WIDTH
-                chw = chw[:, :, :, self.crop_left:right]
-            chw = _resize_chw_batch(
-                chw,
-                self._output_resize_width,
-                self._output_resize_height,
-                self.obs_resize_algorithm,
-            )
-            self._unsafe_public_obs = chw
         if self.obs_layout == "chw":
             return chw
         return np.transpose(chw, (0, 2, 3, 1))
-
-    def _masked_chw(self, chw: np.ndarray) -> np.ndarray:
-        masked = chw.copy()
-        fill = self.obs_crop_fill
-        if self.crop_top:
-            masked[:, :, : self.crop_top, :] = fill
-        if self.crop_bottom:
-            masked[:, :, VISIBLE_HEIGHT - self.crop_bottom :, :] = fill
-        if self.crop_left:
-            masked[:, :, :, : self.crop_left] = fill
-        if self.crop_right:
-            masked[:, :, :, VISIBLE_WIDTH - self.crop_right :] = fill
-        return masked
 
     def _public_single_obs(self, obs: np.ndarray) -> np.ndarray:
         batch = obs.reshape((1, *obs.shape))
