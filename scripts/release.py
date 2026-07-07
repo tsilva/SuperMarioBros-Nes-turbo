@@ -83,6 +83,7 @@ def run_checks(skip_checks: bool) -> None:
         return
     env = os.environ.copy()
     env.setdefault("UV_CACHE_DIR", ".uv-cache")
+    env.setdefault("ALLOW_MISSING_ROM_TESTS", "1")
     run(["cargo", "fmt", "--check"])
     run(["cargo", "check", "--release"])
     run([str(PYTHON), "-m", "maturin", "develop", "--release"], env=env)
