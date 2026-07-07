@@ -133,7 +133,6 @@ struct Ppu {
     oam: [u8; 256],
     vram: [u8; 2048],
     palette: [u8; 32],
-    palette_gray: [u8; 32],
     data_buffer: u8,
     addr: u16,
     temp_addr: u16,
@@ -164,7 +163,6 @@ impl Ppu {
             oam: [0; 256],
             vram: [0; 2048],
             palette: [0; 32],
-            palette_gray: [NES_GRAY_PALETTE[0]; 32],
             data_buffer: 0,
             addr: 0,
             temp_addr: 0,
@@ -190,7 +188,6 @@ impl Ppu {
         self.oam = [0; 256];
         self.vram = [0; 2048];
         self.palette = [0; 32];
-        self.palette_gray = [NES_GRAY_PALETTE[0]; 32];
         self.data_buffer = 0;
         self.addr = 0;
         self.temp_addr = 0;
@@ -227,7 +224,6 @@ impl Ppu {
     ) {
         self.vram.copy_from_slice(ntar);
         self.palette.copy_from_slice(pram);
-        self.refresh_palette_gray();
         self.oam.copy_from_slice(spra);
         self.ctrl = ppur[0];
         self.mask = ppur[1];
@@ -446,7 +442,6 @@ impl Ppu {
             0x3f00..=0x3fff => {
                 let idx = self.mirror_palette_addr(addr);
                 self.palette[idx] = value;
-                self.palette_gray[idx] = NES_GRAY_PALETTE[value as usize];
             }
             _ => {}
         }
@@ -1269,15 +1264,12 @@ impl Ppu {
     }
 
     #[inline]
-    fn palette_gray(&self) -> &[u8; 32] {
-        &self.palette_gray
-    }
-
-    #[inline]
-    fn refresh_palette_gray(&mut self) {
-        for (dst, &color) in self.palette_gray.iter_mut().zip(self.palette.iter()) {
+    fn palette_gray(&self) -> [u8; 32] {
+        let mut out = [0; 32];
+        for (dst, &color) in out.iter_mut().zip(self.palette.iter()) {
             *dst = NES_GRAY_PALETTE[color as usize];
         }
+        out
     }
 
     #[inline]
