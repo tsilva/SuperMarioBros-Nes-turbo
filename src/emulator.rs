@@ -2276,7 +2276,7 @@ impl NesEmulator {
                 self.asl_mem(a);
                 6
             }
-            0x10 => self.branch(self.cpu.p & FLAG_N == 0),
+            0x10 => self.branch(!self.flag(FLAG_N)),
             0x11 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2374,7 +2374,7 @@ impl NesEmulator {
                 self.rol_mem(a);
                 6
             }
-            0x30 => self.branch(self.cpu.p & FLAG_N != 0),
+            0x30 => self.branch(self.flag(FLAG_N)),
             0x31 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2464,7 +2464,7 @@ impl NesEmulator {
                 self.lsr_mem(a);
                 6
             }
-            0x50 => self.branch(self.cpu.p & FLAG_V == 0),
+            0x50 => self.branch(!self.flag(FLAG_V)),
             0x51 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2557,7 +2557,7 @@ impl NesEmulator {
                 self.ror_mem(a);
                 6
             }
-            0x70 => self.branch(self.cpu.p & FLAG_V != 0),
+            0x70 => self.branch(self.flag(FLAG_V)),
             0x71 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2641,7 +2641,7 @@ impl NesEmulator {
                 self.cpu_write(a, self.cpu.x);
                 4
             }
-            0x90 => self.branch(self.cpu.p & FLAG_C == 0),
+            0x90 => self.branch(!self.flag(FLAG_C)),
             0x91 => {
                 let (a, _) = self.indy();
                 self.cpu_write(a, self.cpu.a);
@@ -2758,7 +2758,7 @@ impl NesEmulator {
                 self.set_zn(v);
                 4
             }
-            0xb0 => self.branch(self.cpu.p & FLAG_C != 0),
+            0xb0 => self.branch(self.flag(FLAG_C)),
             0xb1 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2884,7 +2884,7 @@ impl NesEmulator {
                 self.dec_mem(a);
                 6
             }
-            0xd0 => self.branch(self.cpu.p & FLAG_Z == 0),
+            0xd0 => self.branch(!self.flag(FLAG_Z)),
             0xd1 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
@@ -2979,7 +2979,7 @@ impl NesEmulator {
                 self.inc_mem(a);
                 6
             }
-            0xf0 => self.branch(self.cpu.p & FLAG_Z != 0),
+            0xf0 => self.branch(self.flag(FLAG_Z)),
             0xf1 => {
                 let (a, p) = self.indy();
                 let v = self.cpu_read(a);
