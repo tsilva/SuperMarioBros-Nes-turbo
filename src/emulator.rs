@@ -50,7 +50,6 @@ const BUTTON_B: u8 = 1 << 1;
 const BUTTON_START: u8 = 1 << 3;
 const BUTTON_LEFT: u8 = 1 << 6;
 const BUTTON_RIGHT: u8 = 1 << 7;
-const ZN_FLAGS: [u8; 256] = build_zn_flags();
 
 #[derive(Debug, Error)]
 pub enum StateLoadError {
@@ -1300,17 +1299,6 @@ const fn build_nes_gray_palette() -> [u8; 64] {
     table
 }
 
-const fn build_zn_flags() -> [u8; 256] {
-    let mut table = [0; 256];
-    table[0] = FLAG_Z;
-    let mut value = 128;
-    while value < 256 {
-        table[value] = FLAG_N;
-        value += 1;
-    }
-    table
-}
-
 #[inline]
 fn nes_rgb(color: u8) -> [u8; 3] {
     NES_RGB_PALETTE[(color as usize) & 0x3f]
@@ -2178,7 +2166,14 @@ impl NesEmulator {
 
     #[inline]
     fn set_zn(&mut self, value: u8) {
-        self.cpu.p = (self.cpu.p & !(FLAG_Z | FLAG_N)) | ZN_FLAGS[value as usize] | FLAG_U;
+        let mut p = self.cpu.p & !(FLAG_Z | FLAG_N);
+        if value == 0 {
+            p |= FLAG_Z;
+        }
+        if value & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
