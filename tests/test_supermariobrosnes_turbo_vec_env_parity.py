@@ -23,6 +23,20 @@ NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
 BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 
 
+def resize_chw_area_native_reference(src: np.ndarray, width: int, height: int) -> np.ndarray:
+    src_h, src_w = src.shape[-2:]
+    out = np.empty((*src.shape[:-2], height, width), dtype=np.uint8)
+    for out_y in range(height):
+        y0 = (out_y * src_h) // height
+        y1 = min(max(((out_y + 1) * src_h) // height, y0 + 1), src_h)
+        for out_x in range(width):
+            x0 = (out_x * src_w) // width
+            x1 = min(max(((out_x + 1) * src_w) // width, x0 + 1), src_w)
+            patch = src[:, :, y0:y1, x0:x1].astype(np.uint32)
+            out[:, :, out_y, out_x] = patch.mean(axis=(-2, -1)).astype(np.uint8)
+    return out
+
+
 def require_stable_retro_oracle() -> None:
     require_rom()
     try:
@@ -187,6 +201,93 @@ def test_native_turbo_vec_env_rejects_invalid_crop_mode_and_fill() -> None:
         SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_fill=256)
 
 
+def test_native_turbo_done_on_normalization_matches_stable_retro_shape() -> None:
+    assert env_module._normalize_done_on_info(
+        {"level_change": [["levelHi", "levelLo"], "change"]},
+        False,
+        False,
+    ) == (("level_change", "default", ("levelHi", "levelLo"), "change", "reset"),)
+
+    assert env_module._normalize_done_on_info(
+        {"life_loss": ("lives", "decrease")},
+        False,
+        False,
+    ) == (("life_loss", "default", ("lives",), "decrease", "reset"),)
+
+    assert env_module._normalize_done_on_info(
+        {
+            "life_loss": {
+                "triggers": [
+                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
+                    {"id": "lives_change", "variables": "lives", "op": "change"},
+                ],
+            },
+        },
+        False,
+        False,
+    ) == (
+        ("life_loss", "lives_decrease", ("lives",), "decrease", "reset"),
+        ("life_loss", "lives_change", ("lives",), "change", "reset"),
+    )
+
+
+def test_native_turbo_done_on_info_writer_groups_triggers_without_rom() -> None:
+    rules = env_module._normalize_done_on_info(
+        {
+            "life_loss": {
+                "triggers": [
+                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
+                    {"id": "lives_change", "variables": "lives", "op": "change"},
+                ],
+            },
+        },
+        False,
+        False,
+    )
+    native_rules, metadata = env_module._native_done_on_info_rules(rules)
+
+    class FakeCore:
+        def done_on_info(self):
+            return [
+                [
+                    (
+                        native_rules[0][0],
+                        ["lives"],
+                        "decrease",
+                        [2],
+                        [1],
+                    ),
+                    (
+                        native_rules[1][0],
+                        ["lives"],
+                        "change",
+                        [2],
+                        [1],
+                    ),
+                ],
+            ]
+
+    env = SuperMarioBrosNesTurboVecEnv.__new__(SuperMarioBrosNesTurboVecEnv)
+    env._core = FakeCore()
+    env._done_on_info_metadata = metadata
+
+    env._write_done_on_info()
+
+    payload = env._done_on_info[0]["life_loss"]
+    assert payload["trigger"] == "lives_decrease"
+    assert payload["op"] == "decrease"
+    assert payload["compare"] == "reset"
+    assert payload["keys"] == ["lives"]
+    assert payload["variables"] == ["lives"]
+    assert payload["prev"] == [2]
+    assert payload["next"] == [1]
+    assert [trigger["trigger"] for trigger in payload["triggers"]] == [
+        "lives_decrease",
+        "lives_change",
+    ]
+    assert [trigger["op"] for trigger in payload["triggers"]] == ["decrease", "change"]
+
+
 def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypatch) -> None:
     core_calls = []
 
@@ -203,27 +304,51 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
             crop_bottom,
             resize_width,
             resize_height,
-            *_args,
+            initial_states,
+            initial_state_names,
+            initial_state_weights,
+            seed,
+            terminate_on_life_loss,
+            terminate_on_level_change,
+            done_on_info,
+            frame_maxpool,
+            noop_reset_max,
+            sticky_action_prob,
+            crop_left,
+            crop_right,
+            crop_mode,
+            crop_fill,
+            resize_algorithm,
         ):
             core_calls.append(
                 {
                     "crop_top": crop_top,
                     "crop_bottom": crop_bottom,
+                    "crop_left": crop_left,
+                    "crop_right": crop_right,
+                    "crop_mode": crop_mode,
+                    "crop_fill": crop_fill,
                     "resize_width": resize_width,
                     "resize_height": resize_height,
+                    "resize_algorithm": resize_algorithm,
                 }
             )
             self.num_envs = num_envs
             self.frame_skip = frame_skip
             self.grayscale = grayscale
             self.frame_stack = frame_stack
-            self.frame_maxpool = False
-            self.noop_reset_max = 0
-            self.sticky_action_prob = 0.0
+            self.frame_maxpool = frame_maxpool
+            self.noop_reset_max = noop_reset_max
+            self.sticky_action_prob = sticky_action_prob
             self.crop_top = crop_top
             self.crop_bottom = crop_bottom
+            self.crop_left = crop_left
+            self.crop_right = crop_right
+            self.crop_mode = crop_mode
+            self.crop_fill = crop_fill
             self.resize_width = resize_width
             self.resize_height = resize_height
+            self.resize_algorithm = resize_algorithm
             self.initial_state_names = ()
 
         def initial_state_policy_names(self):
@@ -261,11 +386,33 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
     )
     try:
         assert core_calls == [
-            {"crop_top": 32, "crop_bottom": 0, "resize_width": 240, "resize_height": 192},
-            {"crop_top": 0, "crop_bottom": 0, "resize_width": 240, "resize_height": 224},
+            {
+                "crop_top": 32,
+                "crop_bottom": 0,
+                "crop_left": 10,
+                "crop_right": 0,
+                "crop_mode": "remove",
+                "crop_fill": 0,
+                "resize_width": 230,
+                "resize_height": 192,
+                "resize_algorithm": "nearest",
+            },
+            {
+                "crop_top": 32,
+                "crop_bottom": 0,
+                "crop_left": 10,
+                "crop_right": 0,
+                "crop_mode": "mask",
+                "crop_fill": 7,
+                "resize_width": 240,
+                "resize_height": 224,
+                "resize_algorithm": "nearest",
+            },
         ]
         assert remove_env.observation_space.shape == (1, 192, 230)
         assert mask_env.observation_space.shape == (1, 224, 240)
+        assert not remove_env._needs_python_postprocess
+        assert not mask_env._needs_python_postprocess
 
         remove_env._obs = np.arange(np.prod(remove_env._obs.shape), dtype=np.uint8).reshape(remove_env._obs.shape)
         mask_env._obs = np.arange(np.prod(mask_env._obs.shape), dtype=np.uint8).reshape(mask_env._obs.shape)
@@ -273,10 +420,8 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
         remove_obs = remove_env._return_obs()
         mask_obs = mask_env._return_obs()
 
-        np.testing.assert_array_equal(remove_obs, remove_env._obs[:, :, :, 10:])
-        assert np.all(mask_obs[:, :, :32, :] == 7)
-        assert np.all(mask_obs[:, :, :, :10] == 7)
-        np.testing.assert_array_equal(mask_obs[:, :, 32:, 10:], mask_env._obs[:, :, 32:, 10:])
+        np.testing.assert_array_equal(remove_obs, remove_env._obs)
+        np.testing.assert_array_equal(mask_obs, mask_env._obs)
     finally:
         remove_env.close()
         mask_env.close()
@@ -419,7 +564,7 @@ def test_native_turbo_vec_env_mask_crop_preserves_full_canvas_shape_and_masks_be
 
         expected_source = full_source.copy()
         expected_source[:, :, : crop[0], :] = 0
-        expected_mask = env_module._resize_chw_batch(expected_source, 84, 84, "area")
+        expected_mask = resize_chw_area_native_reference(expected_source, 84, 84)
         np.testing.assert_array_equal(mask_obs, expected_mask)
         assert np.any(mask_obs != full_obs)
     finally:
@@ -493,8 +638,11 @@ def test_native_turbo_vec_env_mask_crop_terminal_observation_matches_public_layo
                 assert terminal_observation.dtype == obs.dtype
                 assert terminal_observation.shape == env.observation_space.shape
                 assert infos[0]["done_on_info"]["time_tick"] == {
+                    "trigger": "default",
                     "op": "decrease",
+                    "compare": "reset",
                     "keys": ["time"],
+                    "variables": ["time"],
                     "prev": [400],
                     "next": [399],
                 }
@@ -546,12 +694,54 @@ def test_native_turbo_vec_env_life_loss_done_on_is_additive_and_earlier() -> Non
             assert step == 2456
             assert infos[0]["done_on_info"] == {
                 "life_loss": {
+                    "trigger": "lives_decrease",
                     "op": "decrease",
+                    "compare": "reset",
                     "keys": ["lives"],
+                    "variables": ["lives"],
                     "prev": [2],
                     "next": [1],
                 },
             }
+            break
+        else:
+            pytest.fail("life_loss done_on rule did not fire before game-over")
+    finally:
+        env.close()
+
+
+def test_native_turbo_vec_env_reports_multiple_done_on_triggers_same_event() -> None:
+    env = make_level1_1_noop_probe(
+        done_on={
+            "life_loss": {
+                "triggers": [
+                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
+                    {"id": "lives_change", "variables": "lives", "op": "change"},
+                ],
+            },
+        },
+    )
+    try:
+        env.reset()
+        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
+
+        for _step in range(1, 3000):
+            _obs, _rewards, dones, infos = env.step(masks)
+            if not bool(dones[0]):
+                continue
+            payload = infos[0]["done_on_info"]["life_loss"]
+            assert payload["trigger"] == "lives_decrease"
+            assert payload["op"] == "decrease"
+            assert payload["compare"] == "reset"
+            assert payload["variables"] == ["lives"]
+            assert [trigger["trigger"] for trigger in payload["triggers"]] == [
+                "lives_decrease",
+                "lives_change",
+            ]
+            assert [trigger["op"] for trigger in payload["triggers"]] == [
+                "decrease",
+                "change",
+            ]
             break
         else:
             pytest.fail("life_loss done_on rule did not fire before game-over")

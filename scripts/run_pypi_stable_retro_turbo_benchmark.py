@@ -20,13 +20,19 @@ from typing import Any
 
 try:
     from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
-    from dotenv_utils import require_env_or_dotenv_path
+    from dotenv_utils import require_arg_or_env_or_dotenv_path, require_env_or_dotenv_path
 except ModuleNotFoundError:
     from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
-    from scripts.dotenv_utils import require_env_or_dotenv_path
+    from scripts.dotenv_utils import (
+        require_arg_or_env_or_dotenv_path,
+        require_env_or_dotenv_path,
+    )
 
 
-LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
+AUTORESEARCH_ROOT_ENV = "AUTORESEARCH_ROOT_PATH"
+BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
+LOCAL_RESULTS_SUBDIR = Path("local-results")
+PYPI_CACHE_SUBDIR = LOCAL_RESULTS_SUBDIR / "pypi-stable-retro-turbo"
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE = "stable-retro-turbo"
 IMPORT_PACKAGE = "stable_retro"
@@ -547,9 +553,9 @@ def write_manifest_and_index(args: argparse.Namespace, cache_dir: Path, aggregat
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def purge_local(run_dir: Path) -> None:
+def purge_local(run_root: Path, run_dir: Path) -> None:
     try:
-        run_dir.relative_to(LOCAL_ROOT / "runs")
+        run_dir.relative_to(run_root / "runs")
     except ValueError as exc:
         raise SystemExit(f"Refusing to purge path outside benchmark runs: {run_dir}") from exc
     shutil.rmtree(run_dir, ignore_errors=True)
@@ -564,7 +570,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="ROM path on the benchmark machine. Defaults to ROM_PATH from the environment or .env.",
     )
-    parser.add_argument("--local-cache-root", type=Path, default=Path("artifacts/benchmarks/local-results/pypi-stable-retro-turbo"))
+    parser.add_argument(
+        "--run-root",
+        default=None,
+        help=(
+            "Root for temporary benchmark runs. Defaults to "
+            f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_ROOT_SUBDIR}."
+        ),
+    )
+    parser.add_argument(
+        "--local-cache-root",
+        type=Path,
+        default=None,
+        help=(
+            "Durable cache for copied PyPI benchmark results. Defaults to "
+            f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_ROOT_SUBDIR}/{PYPI_CACHE_SUBDIR}."
+        ),
+    )
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-threads", type=int, default=12)
     parser.add_argument("--steps", type=int, default=50000)
@@ -577,6 +599,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--keep-run-dir", action="store_true")
     args = parser.parse_args(argv)
     args.rom_path = require_env_or_dotenv_path("ROM_PATH", "ROM path", args.rom_path)
+    autoresearch_root = require_arg_or_env_or_dotenv_path(
+        AUTORESEARCH_ROOT_ENV,
+        "autoresearch root",
+        must_be_dir=True,
+    )
+    args.run_root = (
+        Path(args.run_root).expanduser()
+        if args.run_root
+        else autoresearch_root / BENCHMARK_ROOT_SUBDIR
+    ).resolve(strict=False)
+    args.local_cache_root = (
+        args.local_cache_root.expanduser()
+        if args.local_cache_root
+        else args.run_root / PYPI_CACHE_SUBDIR
+    ).resolve(strict=False)
     return args
 
 
@@ -593,7 +630,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     run_name = make_local_run_name(version_info["version"], workload_hash)
-    run_dir = LOCAL_ROOT / "runs" / run_name
+    run_dir = args.run_root / "runs" / run_name
     try:
         local_setup(args, run_dir, version_info["version"])
         run_invocations(args, run_dir)
@@ -603,12 +640,12 @@ def main(argv: list[str]) -> int:
     except BaseException:
         if not args.keep_run_dir:
             try:
-                purge_local(run_dir)
+                purge_local(args.run_root, run_dir)
             except Exception as cleanup_error:
                 print(f"warning: failed to purge interrupted local run {run_dir}: {cleanup_error}", file=sys.stderr)
         raise
     if not args.keep_run_dir:
-        purge_local(run_dir)
+        purge_local(args.run_root, run_dir)
     print(json.dumps({"cache_hit": False, "aggregate": str(cache_dir / "aggregate.json"), "workload_hash": workload_hash, "validity_passed": aggregate_payload["validity_passed"]}, indent=2))
     return 0
 

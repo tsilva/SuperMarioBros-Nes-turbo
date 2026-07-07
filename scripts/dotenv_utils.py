@@ -31,6 +31,38 @@ def env_or_dotenv_path(name: str, dotenv_path: Path = Path(".env")) -> Path | No
     return Path(value).expanduser() if value else None
 
 
+def arg_or_env_or_dotenv_path(
+    name: str,
+    value: str | Path | None = None,
+    dotenv_path: Path = Path(".env"),
+) -> Path | None:
+    return Path(value).expanduser() if value else env_or_dotenv_path(name, dotenv_path)
+
+
+def require_arg_or_env_or_dotenv_path(
+    name: str,
+    label: str,
+    value: str | Path | None = None,
+    dotenv_path: Path = Path(".env"),
+    *,
+    must_exist: bool = False,
+    must_be_file: bool = False,
+    must_be_dir: bool = False,
+) -> Path:
+    path = arg_or_env_or_dotenv_path(name, value, dotenv_path)
+    if path is None:
+        raise SystemExit(
+            f"{label} required; pass the CLI option or set {name} in the environment or .env"
+        )
+    if must_exist and not path.exists():
+        raise SystemExit(f"{label} does not exist: {path}")
+    if must_be_file and not path.is_file():
+        raise SystemExit(f"{label} is not a file: {path}")
+    if must_be_dir and not path.is_dir():
+        raise SystemExit(f"{label} is not a directory: {path}")
+    return path.resolve() if path.exists() else path.resolve(strict=False)
+
+
 def require_env_or_dotenv_path(name: str, label: str, value: str | Path | None = None) -> str:
     path = Path(value).expanduser() if value else env_or_dotenv_path(name)
     if path is None:

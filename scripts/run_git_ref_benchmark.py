@@ -30,7 +30,11 @@ try:
         summary,
     )
     from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
-    from dotenv_utils import env_or_dotenv_path, require_env_or_dotenv_path
+    from dotenv_utils import (
+        env_or_dotenv_path,
+        require_arg_or_env_or_dotenv_path,
+        require_env_or_dotenv_path,
+    )
 except ModuleNotFoundError:
     from scripts.benchmark_stats import (
         DEFAULT_COMPARISON_CHECKPOINTS,
@@ -41,20 +45,53 @@ except ModuleNotFoundError:
         summary,
     )
     from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
-    from scripts.dotenv_utils import env_or_dotenv_path, require_env_or_dotenv_path
+    from scripts.dotenv_utils import (
+        env_or_dotenv_path,
+        require_arg_or_env_or_dotenv_path,
+        require_env_or_dotenv_path,
+    )
 
 
-LOCAL_ROOT = Path("/Users/tsilva/SuperMarioBros-Nes-turbo-benchmarks")
-LOCAL_STATE_DIR = LOCAL_ROOT / "states" / "SuperMarioBros-Nes-v0"
+AUTORESEARCH_ROOT_ENV = "AUTORESEARCH_ROOT_PATH"
+BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
+BENCHMARK_STATE_SUBDIR = Path("states") / "SuperMarioBros-Nes-v0"
 STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
-DEFAULT_STATE_SOURCE = Path(
-    "/Users/tsilva/repos/tsilva/stable-retro-turbo/"
-    "stable_retro/data/stable/SuperMarioBros-Nes-v0"
+ARCHIVE_SUBDIR = Path("local-archives")
+LOCAL_RESULTS_SUBDIR = Path("local-results")
+RESULTS_TSV_COLUMNS = (
+    "epoch",
+    "commit",
+    "baseline_commit",
+    "mode",
+    "benchmark_tier",
+    "workload_hash",
+    "measured_invocation_count",
+    "measured_pairs",
+    "official_median_sps",
+    "mean_invocation_median_sps",
+    "bootstrap_ci95_invocation_median_sps",
+    "median_pair_ratio",
+    "mean_pair_ratio",
+    "pair_ratio_bootstrap_ci95",
+    "candidate_faster_pairs",
+    "candidate_faster_pairs_required_for_win",
+    "validity_passed",
+    "load_gate_passed",
+    "load_gate_ignored_for_validity",
+    "limit_stop_reason",
+    "previous_limit_stop_reason",
+    "benchmark_limits",
+    "discarded_incomplete_pair_raw_files",
+    "expected_rom_sha256",
+    "rom_sha256",
+    "state_sha256",
+    "decision",
+    "status",
+    "description",
+    "artifact",
 )
-ARCHIVE_DIR = Path("artifacts/benchmarks/local-archives")
-LOCAL_RESULTS_ROOT = Path("artifacts/benchmarks/local-results")
 
 Mode = Literal["single", "compare"]
 
@@ -147,7 +184,7 @@ def default_main_ref() -> str:
     return run(["git", "rev-parse", "--verify", "main^{commit}"]).stdout.strip()
 
 
-def archive_ref(role: str, sha: str, archive_dir: Path = ARCHIVE_DIR) -> Path:
+def archive_ref(role: str, sha: str, archive_dir: Path) -> Path:
     archive_dir.mkdir(parents=True, exist_ok=True)
     path = archive_dir / f"{role}-{sha[:12]}.tar.gz"
     completed = subprocess.run(
@@ -185,13 +222,14 @@ def make_run_name(mode: Mode, refs: list[BenchmarkRef]) -> str:
 
 def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
     mode, role_refs = decide_mode(args.refs, single=args.single)
+    root = Path(args.run_root)
+    archive_dir = root / ARCHIVE_SUBDIR
     refs = []
     for role, ref in role_refs:
         sha = ref if re.fullmatch(r"[0-9a-fA-F]{40}", ref) else resolve_ref(ref)
-        archive = ARCHIVE_DIR / f"{role}-{sha[:12]}.tar.gz"
+        archive = archive_dir / f"{role}-{sha[:12]}.tar.gz"
         refs.append(BenchmarkRef(role=role, ref=ref, sha=sha, archive=archive))
 
-    root = Path(args.run_root)
     run_name = make_run_name(mode, refs)
     run_dir = str(root / "runs" / run_name)
     state_dir = str(args.state_dir)
@@ -338,6 +376,14 @@ def ensure_states(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
     ]
     if not missing:
         return
+    if args.state_source is None:
+        missing_files = ", ".join(f"{name}.state" for name in missing)
+        raise SystemExit(
+            f"missing benchmark state files in {plan.state_dir}: {missing_files}. "
+            f"Populate the state cache under {AUTORESEARCH_ROOT_ENV} or pass --state-source."
+        )
+    if not args.state_source.is_dir():
+        raise SystemExit(f"benchmark state source is not a directory: {args.state_source}")
     for name in missing:
         source = args.state_source / f"{name}.state"
         if not source.exists():
@@ -349,7 +395,7 @@ def ensure_states(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
 def create_archives(plan: BenchmarkPlan) -> list[BenchmarkRef]:
     archived = []
     for ref in plan.refs:
-        path = archive_ref(ref.role, ref.sha)
+        path = archive_ref(ref.role, ref.sha, ref.archive.parent)
         archived.append(BenchmarkRef(ref.role, ref.ref, ref.sha, path))
     return archived
 
@@ -932,7 +978,8 @@ def run_compare(
 
 def finalize_local(plan: BenchmarkPlan) -> Path:
     run_dir = Path(plan.run_dir)
-    local_dir = LOCAL_RESULTS_ROOT / plan.run_name
+    local_results_root = local_results_root_for_plan(plan)
+    local_dir = local_results_root / plan.run_name
     if local_dir.exists():
         shutil.rmtree(local_dir)
     raw_dir = local_dir / "raw"
@@ -969,7 +1016,7 @@ def finalize_local(plan: BenchmarkPlan) -> Path:
     }
     (local_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     aggregate = json.loads((local_dir / "aggregate.json").read_text())
-    append_index(plan.run_name, local_dir, aggregate)
+    append_index(plan.run_name, local_dir, aggregate, local_results_root)
     shutil.rmtree(run_dir / "sources", ignore_errors=True)
     shutil.rmtree(run_dir / "archives", ignore_errors=True)
     for path in (run_dir / "raw").glob("*.stdout.json"):
@@ -977,8 +1024,20 @@ def finalize_local(plan: BenchmarkPlan) -> Path:
     return local_dir
 
 
-def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> None:
-    LOCAL_RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+def local_results_root_for_plan(plan: BenchmarkPlan) -> Path:
+    run_dir = Path(plan.run_dir)
+    if run_dir.parent.name == "runs":
+        return run_dir.parent.parent / LOCAL_RESULTS_SUBDIR
+    return run_dir.parent / LOCAL_RESULTS_SUBDIR
+
+
+def append_index(
+    run_name: str,
+    local_dir: Path,
+    aggregate: dict[str, Any],
+    local_results_root: Path,
+) -> None:
+    local_results_root.mkdir(parents=True, exist_ok=True)
     record = {
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "run_name": run_name,
@@ -989,11 +1048,21 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
         "shas": aggregate.get("shas"),
         "workload_hash": aggregate.get("workload_hash"),
         "measured_invocation_count": aggregate.get("measured_invocation_count"),
-        "measured_pair_count": len(aggregate.get("measured_pair_details", [])),
+        "measured_pairs": aggregate.get(
+            "measured_pairs", len(aggregate.get("measured_pair_details", []))
+        ),
         "official_median_sps": aggregate.get("official_median_sps"),
         "mean_invocation_median_sps": aggregate.get("mean_invocation_median_sps"),
+        "bootstrap_ci95_invocation_median_sps": aggregate.get(
+            "bootstrap_ci95_invocation_median_sps"
+        ),
         "median_pair_ratio": aggregate.get("median_pair_ratio"),
         "mean_pair_ratio": aggregate.get("mean_pair_ratio"),
+        "pair_ratio_bootstrap_ci95": aggregate.get("pair_ratio_bootstrap_ci95"),
+        "candidate_faster_pairs": aggregate.get("candidate_faster_pairs"),
+        "candidate_faster_pairs_required_for_win": aggregate.get(
+            "candidate_faster_pairs_required_for_win"
+        ),
         "validity_passed": aggregate.get("validity_passed"),
         "load_gate_passed": aggregate.get("load_gate_passed"),
         "load_gate_ignored_for_validity": aggregate.get("load_gate_ignored_for_validity"),
@@ -1009,7 +1078,7 @@ def append_index(run_name: str, local_dir: Path, aggregate: dict[str, Any]) -> N
         "state_sha256": aggregate.get("state_sha256"),
         "decision": aggregate.get("decision"),
     }
-    index_path = LOCAL_RESULTS_ROOT / "index.jsonl"
+    index_path = local_results_root / "index.jsonl"
     existing = []
     if index_path.exists():
         for line in index_path.read_text().splitlines():
@@ -1166,9 +1235,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="ROM path on the benchmark machine. Defaults to ROM_PATH from the environment or .env.",
     )
-    parser.add_argument("--state-dir")
-    parser.add_argument("--state-source", type=Path, default=DEFAULT_STATE_SOURCE)
-    parser.add_argument("--run-root")
+    parser.add_argument(
+        "--state-dir",
+        help=(
+            "State directory on the benchmark machine. Defaults to "
+            f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_STATE_SUBDIR}."
+        ),
+    )
+    parser.add_argument(
+        "--state-source",
+        type=Path,
+        help=(
+            "Optional source directory for missing state files. By default, "
+            f"states are read from {AUTORESEARCH_ROOT_ENV}/{BENCHMARK_STATE_SUBDIR}."
+        ),
+    )
+    parser.add_argument(
+        "--run-root",
+        help=(
+            "Root for temporary benchmark runs. Defaults to "
+            f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_ROOT_SUBDIR}."
+        ),
+    )
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=None)
@@ -1189,10 +1277,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     args.rom_path = resolve_rom_path_for_args(args)
 
-    if args.run_root is None:
-        args.run_root = str(LOCAL_ROOT)
-    if args.state_dir is None:
-        args.state_dir = str(LOCAL_STATE_DIR)
+    autoresearch_root = require_arg_or_env_or_dotenv_path(
+        AUTORESEARCH_ROOT_ENV,
+        "autoresearch root",
+        must_be_dir=True,
+    )
+    run_root = Path(args.run_root).expanduser() if args.run_root else autoresearch_root / BENCHMARK_ROOT_SUBDIR
+    args.run_root = str(run_root.resolve(strict=False))
+    state_dir = Path(args.state_dir).expanduser() if args.state_dir else autoresearch_root / BENCHMARK_STATE_SUBDIR
+    args.state_dir = str(state_dir.resolve(strict=False))
+    args.state_source = args.state_source.resolve(strict=False) if args.state_source else None
     if args.max_load is None:
         args.max_load = max(os.cpu_count() or 1, 1) / 3
     if args.steps <= 0:

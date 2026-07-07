@@ -1619,11 +1619,23 @@ impl NesEmulator {
 
     #[inline]
     pub fn write_rgb_visible_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        self.write_rgb_visible_frame_region(dst, crop_top, 0, VISIBLE_FRAME_WIDTH, height);
+    }
+
+    #[inline]
+    pub fn write_rgb_visible_frame_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
         self.ppu.write_rgb_frame_region(
             dst,
             VISIBLE_FRAME_TOP + crop_top,
-            VISIBLE_FRAME_LEFT,
-            VISIBLE_FRAME_WIDTH,
+            VISIBLE_FRAME_LEFT + crop_left,
+            width,
             height,
         );
     }
@@ -1641,12 +1653,25 @@ impl NesEmulator {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn write_gray_visible_frame_cropped(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        self.write_gray_visible_frame_region(dst, crop_top, 0, VISIBLE_FRAME_WIDTH, height);
+    }
+
+    #[inline]
+    pub fn write_gray_visible_frame_region(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        crop_left: usize,
+        width: usize,
+        height: usize,
+    ) {
         self.ppu.write_gray_frame_region(
             dst,
             VISIBLE_FRAME_TOP + crop_top,
-            VISIBLE_FRAME_LEFT,
-            VISIBLE_FRAME_WIDTH,
+            VISIBLE_FRAME_LEFT + crop_left,
+            width,
             height,
         );
     }
