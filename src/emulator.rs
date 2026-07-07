@@ -2033,12 +2033,16 @@ impl NesEmulator {
 
     #[inline]
     fn ram_read(&self, addr: usize) -> u8 {
-        self.ram[addr & 0x07ff]
+        // SAFETY: Masking to 0x07ff keeps the index within the 2 KiB internal RAM.
+        unsafe { *self.ram.get_unchecked(addr & 0x07ff) }
     }
 
     #[inline]
     fn ram_write(&mut self, addr: usize, value: u8) {
-        self.ram[addr & 0x07ff] = value;
+        // SAFETY: Masking to 0x07ff keeps the index within the 2 KiB internal RAM.
+        unsafe {
+            *self.ram.get_unchecked_mut(addr & 0x07ff) = value;
+        }
     }
 
     #[inline]

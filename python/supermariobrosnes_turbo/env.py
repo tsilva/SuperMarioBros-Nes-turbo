@@ -878,6 +878,8 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._pending_options: dict[str, Any] | list[dict[str, Any]] | None = None
 
         self._actions = np.zeros((self.num_envs,), dtype=np.uint8)
+        self._last_action_masks: np.ndarray | None = None
+        self._last_action_ids = np.empty((self.num_envs,), dtype=np.uint8)
         self._obs = np.empty(self._core.obs_shape(), dtype=np.uint8)
         self._unsafe_public_obs: np.ndarray | None = None
         self._safe_public_obs = [
@@ -1011,7 +1013,11 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
                 raise ValueError(
                     f"actions must have shape {(self.num_envs, self.num_buttons)}, got {masks.shape}",
                 )
-        return np.asarray([self._mask_to_core_action(mask) for mask in masks], dtype=np.uint8)
+        if self._last_action_masks is not None and np.array_equal(masks, self._last_action_masks):
+            return self._last_action_ids
+        self._last_action_ids[:] = [self._mask_to_core_action(mask) for mask in masks]
+        self._last_action_masks = masks.copy()
+        return self._last_action_ids
 
     def _discrete_actions_to_masks(self, actions: Any) -> np.ndarray:
         values = np.asarray(actions, dtype=np.int64).reshape(-1)
