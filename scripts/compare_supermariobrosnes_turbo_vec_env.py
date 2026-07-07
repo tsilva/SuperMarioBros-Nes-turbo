@@ -23,7 +23,7 @@ from supermariobrosnes_turbo.env import DEFAULT_STABLE_RETRO_GAME
 
 
 DEFAULT_ROM = default_rom_path()
-EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post7"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post8"
 STABLE_VISIBLE_WIDTH = 240
 STABLE_VISIBLE_HEIGHT = 224
 INFO_KEY_MAP = {
@@ -572,16 +572,56 @@ def normalize_info(info: dict[str, Any]) -> dict[str, Any]:
     return {str(key): normalize_info_value(value) for key, value in info.items()}
 
 
+def normalize_infos(infos: Any) -> Any:
+    if isinstance(infos, dict):
+        return normalize_info(infos)
+    if isinstance(infos, (list, tuple)):
+        return [
+            normalize_info(info) if isinstance(info, dict) else normalize_info_value(info)
+            for info in infos
+        ]
+    return normalize_info_value(infos)
+
+
+def lane_info(infos: Any, lane: int) -> dict[str, Any]:
+    if isinstance(infos, (list, tuple)):
+        return dict(infos[lane])
+    if not isinstance(infos, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key, value in infos.items():
+        key = str(key)
+        if key.startswith("_"):
+            continue
+        mask = infos.get(f"_{key}")
+        if mask is not None and not bool(np.asarray(mask, dtype=np.bool_)[lane]):
+            continue
+        if isinstance(value, dict):
+            result[key] = lane_info(value, lane)
+            continue
+        if isinstance(value, np.ndarray):
+            if value.ndim > 0 and len(value) > lane:
+                result[key] = value[lane]
+            else:
+                result[key] = value
+            continue
+        if isinstance(value, (list, tuple)) and len(value) > lane:
+            result[key] = value[lane]
+            continue
+        result[key] = value
+    return result
+
+
 def compare_infos(
     *,
     phase: str,
     step: int | None,
-    fast_infos: list[dict[str, Any]],
-    retro_infos: list[dict[str, Any]],
+    fast_infos: Any,
+    retro_infos: Any,
     action_names: list[str] | None = None,
 ) -> None:
-    fast = [normalize_info(info) for info in fast_infos]
-    retro = [normalize_info(info) for info in retro_infos]
+    fast = normalize_infos(fast_infos)
+    retro = normalize_infos(retro_infos)
     if fast == retro:
         return
     payload: dict[str, Any] = {
@@ -615,7 +655,7 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
     retro_env = make_retro_env(config)
     try:
         fast_obs, _fast_infos = fast_env.reset()
-        retro_obs = retro_env.reset()
+        retro_obs, _retro_infos = retro_env.reset()
         if config.include_obs:
             require_array_equal(
                 phase="reset",
@@ -633,9 +673,11 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
             fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step_gymnasium(
                 retro_actions,
             )
-            retro_obs, retro_rewards, retro_dones, retro_infos = retro_env.step(retro_actions)
+            retro_obs, retro_rewards, retro_terminated, retro_truncated, retro_infos = retro_env.step(
+                retro_actions,
+            )
             fast_native_dones = np.asarray(fast_terminated | fast_truncated, dtype=np.bool_)
-            retro_dones = np.asarray(retro_dones, dtype=np.bool_)
+            retro_dones = np.asarray(retro_terminated | retro_truncated, dtype=np.bool_)
             fast_compare_rewards = np.asarray(fast_rewards, dtype=np.float32)
             retro_compare_rewards = np.asarray(retro_rewards, dtype=np.float32)
             fast_compare_dones = fast_native_dones

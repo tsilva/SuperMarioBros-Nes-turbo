@@ -23,6 +23,7 @@ from scripts.run_git_ref_benchmark import RESULTS_TSV_COLUMNS
 
 def test_screen_and_accept_commands_are_canonical() -> None:
     screen = build_benchmark_command("screen", ["base", "cand"], [])
+    accept_stack = build_benchmark_command("accept-stack", ["base", "cand"], [])
     accept = build_benchmark_command("accept", ["base", "cand"], ["--force-busy"])
     accept_full = build_benchmark_command(
         "accept", ["base", "cand"], ["--force-busy"], full=True
@@ -42,6 +43,20 @@ def test_screen_and_accept_commands_are_canonical() -> None:
         "0",
         "--max-measured-invocations",
         "3",
+    ]
+    assert accept_stack == [
+        sys.executable,
+        str(BENCHMARK_SCRIPT),
+        "base",
+        "cand",
+        "--steps",
+        "30000",
+        "--repeats",
+        "2",
+        "--warmups",
+        "1",
+        "--max-measured-invocations",
+        "7",
     ]
     assert accept == [
         sys.executable,
@@ -184,6 +199,46 @@ def test_infer_status_uses_benchmark_decision_fields() -> None:
             }
         )
         == "keep_small_gain"
+    )
+
+
+def test_infer_status_handles_stack_acceptance() -> None:
+    assert (
+        infer_status(
+            {
+                "benchmark_tier": "stack_acceptance",
+                "validity_passed": True,
+                "load_gate_passed": True,
+                "median_pair_ratio": 1.031,
+                "candidate_faster_pairs": 6,
+            }
+        )
+        == "keep_stack"
+    )
+    assert (
+        infer_status(
+            {
+                "benchmark_tier": "stack_acceptance",
+                "decision": "continue",
+                "load_gate_passed": True,
+                "median_pair_ratio": 1.0,
+                "candidate_faster_pairs": 4,
+            }
+        )
+        == "discard_stack"
+    )
+    assert (
+        infer_status(
+            {
+                "benchmark_tier": "stack_acceptance",
+                "decision": "continue",
+                "validity_passed": False,
+                "load_gate_passed": True,
+                "median_pair_ratio": 1.025,
+                "candidate_faster_pairs": 5,
+            }
+        )
+        == "inconclusive"
     )
 
 

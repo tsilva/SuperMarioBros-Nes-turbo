@@ -15,8 +15,8 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-supermariobrosnes-turbo = "2026-07-07T14:09:24Z"
-stable-retro-turbo = "2026-07-07T00:00:00Z"
+supermariobrosnes-turbo = "2026-07-07T17:00:00Z"
+stable-retro-turbo = "2026-07-07T16:00:00Z"
 
 [manifest]
 constraints = [
@@ -2749,7 +2749,7 @@ wheels = [
 
 [[package]]
 name = "stable-retro-turbo"
-version = "1.0.1.post7"
+version = "1.0.1.post8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "python_full_version == '3.14.*'" },
@@ -2757,14 +2757,14 @@ dependencies = [
     { name = "pyglet", marker = "python_full_version == '3.14.*'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/ef/563ef60454e8802b8b2278cc80279cdb41a10f454a780709bbfd76d71682/stable_retro_turbo-1.0.1.post7-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:816a9e6599dbfc5a4a32c0a380713044109aa1d336dac21461f7fb79628c16b5", size = 81561310, upload-time = "2026-07-06T19:40:13.571Z" },
-    { url = "https://files.pythonhosted.org/packages/76/49/1ef22943195b6fd23aec7f501ba0df7c7c73c1253b3f519ff8ca3fd3195d/stable_retro_turbo-1.0.1.post7-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6e63ee793ce7ab32be3737224348d5ced02eac761f36b239fcf09f2ab0b389a3", size = 84494403, upload-time = "2026-07-06T19:40:18.619Z" },
-    { url = "https://files.pythonhosted.org/packages/e8/2a/ee298d0d2310ea38f69f2cab58c47a31c9a1152de1d9f11a8c0d6dd1d4dc/stable_retro_turbo-1.0.1.post7-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:da1abfa72782927b2308c8fbd5501b91398c078de0c401c9e72b4077dd2fb2a4", size = 81561793, upload-time = "2026-07-06T19:40:23.838Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/02/cb57bd9b97b636aeec85246b729a7fda629e4b81620fcbd9f6a770da0d00/stable_retro_turbo-1.0.1.post7-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7615caa791cfb36066087351e72d1fb5f2293d81eb2df194fa10ed621346baa2", size = 84496325, upload-time = "2026-07-06T19:40:29.273Z" },
-    { url = "https://files.pythonhosted.org/packages/b6/11/29a23bdba3ad676b9ac3a937399b7812dd6432f797cc654246d459585105/stable_retro_turbo-1.0.1.post7-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:2139f62769b5ada0e642606da5abdfc4f050df21599e576aa1f116ecda25c4a9", size = 81561790, upload-time = "2026-07-06T19:40:35.495Z" },
-    { url = "https://files.pythonhosted.org/packages/c6/61/8b042d751901ab9c818806f6ca4c73ef8c5dbca81c61354595a3e40d3b15/stable_retro_turbo-1.0.1.post7-cp313-cp313-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:772067c99389c94de607c074b48fe7d9dd6cb5c14afb12489b7e5d05a8c56c4f", size = 84496321, upload-time = "2026-07-06T19:40:41.713Z" },
-    { url = "https://files.pythonhosted.org/packages/8c/8f/c6faece995b3e0c2a4ac4c7f9f19f7a20105d9c1cc54ddd0948144978e4d/stable_retro_turbo-1.0.1.post7-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:4de8e5fe8c102203e5842d73bd832b139d852411f4e12f8a9aeca71e0861acae", size = 81562077, upload-time = "2026-07-06T19:40:48.761Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/87/ba2e6623805fd2e3e3530ca8b461cb2a0881f275e64bc78a044880653534/stable_retro_turbo-1.0.1.post7-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8373e514a7a3e0b57da70648efb36d6b600b94d3529d499d1b2d0e7d9af3fdbc", size = 84496568, upload-time = "2026-07-06T19:40:55.636Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/aa/9ef73c72259aeadab54c05881b6124160088c15c173e1ab9768087fe1607/stable_retro_turbo-1.0.1.post8-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:0423312fb25b1106246e3a31e1bf52a4f64861bac6ee0823f6578d0fe5e924e1", size = 81562180, upload-time = "2026-07-07T15:56:24.834Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/49/c7dc15d19b2423f6a088a2a0dd383226cc86eae6e0ebc488ee72629f5a15/stable_retro_turbo-1.0.1.post8-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b279c778de3f1dc0d0a184d2093873953d4548517493b778254f7edb9cab1048", size = 84496396, upload-time = "2026-07-07T15:56:29.192Z" },
+    { url = "https://files.pythonhosted.org/packages/78/9c/7627af530a428138bf3ecfea35d079912cee8d6a2bf845022b6cc36851e7/stable_retro_turbo-1.0.1.post8-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:6ac2ab6f4c52535e482714e22ea9bf8f74d1b3b3a697269ee64b54a957da1c52", size = 81562781, upload-time = "2026-07-07T15:56:33.445Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/f2/8dde370eb904a74a9d96b07fef32b341b72dac86984db06d07ce6dbd0740/stable_retro_turbo-1.0.1.post8-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7088d2259177d8c80cd306f1b4cbbd288b5bd6c6ff035d4af92281a2af1f78a1", size = 84498416, upload-time = "2026-07-07T15:56:37.716Z" },
+    { url = "https://files.pythonhosted.org/packages/31/5d/e6b94db3ec40f5756585b2221705cb106fc1431cca7a5bf98bc94ec8c9b1/stable_retro_turbo-1.0.1.post8-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:ed1b6fd619de27aeff769d7085295cdc19375fa9f82d8eda260f6f8c00518301", size = 81562774, upload-time = "2026-07-07T15:56:41.872Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/d1/c725edd6c0e81901d9b3d84851632bc52fbd6f66308793ab6206b82e5fe0/stable_retro_turbo-1.0.1.post8-cp313-cp313-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:225fc97e30fffe5e8854bb8731d1e8733732d7059c8276a47f48e5e0e97bd730", size = 84498419, upload-time = "2026-07-07T15:56:46.162Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/f5/5f36effc0ade0fa279887c7570431ca5b9f593238e9e6d089ab631b7cd55/stable_retro_turbo-1.0.1.post8-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:421d569bf230636ad932df08e7717c32cc286d760dd6c28885ae391802545bee", size = 81562877, upload-time = "2026-07-07T15:56:50.668Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/fb/9fd76df9c615b9f2d620ec65a8d78f417b8d9456a380913ea397327b43c9/stable_retro_turbo-1.0.1.post8-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a36920aad8ec6f512e4fe94e624d29bf466851470dd14d944bc9a00200a7fac7", size = 84498550, upload-time = "2026-07-07T15:56:54.865Z" },
 ]
 
 [[package]]
@@ -2810,7 +2810,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "stable-baselines3", marker = "extra == 'dev'", specifier = ">=2.7.1" },
-    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.1.post7" },
+    { name = "stable-retro-turbo", marker = "python_full_version == '3.14.*' and extra == 'dev'", specifier = "==1.0.1.post8" },
 ]
 provides-extras = ["dev"]
 

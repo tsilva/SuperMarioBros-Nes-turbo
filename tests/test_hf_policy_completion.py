@@ -20,7 +20,7 @@ from rom_helpers import require_rom  # noqa: E402
 HF_LEVEL1_POLICY = "https://huggingface.co/tsilva/SuperMarioBros-NES_Level1"
 MAX_EPISODES = 10
 MAX_STEPS_PER_EPISODE = 3_000
-EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post7"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post8"
 
 
 def require_policy_prerequisites() -> None:
@@ -119,7 +119,7 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
     try:
         for episode in range(1, MAX_EPISODES + 1):
             fast_obs, _fast_infos = fast_env.reset()
-            retro_obs = retro_env.reset()
+            retro_obs, _retro_infos = retro_env.reset()
             compare.require_array_equal(
                 phase="policy_reset",
                 step=None,
@@ -137,10 +137,13 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
                 fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step_gymnasium(
                     fast_actions,
                 )
-                retro_obs, retro_rewards, retro_dones, retro_infos = retro_env.step(retro_actions)
+                retro_obs, retro_rewards, retro_terminated, retro_truncated, retro_infos = retro_env.step(
+                    retro_actions,
+                )
                 fast_dones = np.asarray(fast_terminated | fast_truncated, dtype=np.bool_)
-                retro_dones = np.asarray(retro_dones, dtype=np.bool_)
-                final_info = dict(retro_infos[0])
+                retro_dones = np.asarray(retro_terminated | retro_truncated, dtype=np.bool_)
+                step_info = compare.lane_info(retro_infos, 0)
+                final_info = dict(step_info.get("final_info", step_info))
 
                 compare.require_array_equal(
                     phase="policy_step",

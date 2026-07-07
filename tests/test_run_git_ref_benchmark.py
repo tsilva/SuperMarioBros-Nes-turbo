@@ -18,6 +18,7 @@ from scripts.run_git_ref_benchmark import (
     base_aggregate,
     benchmark_command,
     benchmark_tier,
+    build_plan,
     cap_checkpoints,
     decide_mode,
     execute,
@@ -316,6 +317,47 @@ def test_benchmark_tier_labels_official_and_triage_shapes(tmp_path: Path) -> Non
         SimpleNamespace(steps=5000, repeats=1, max_measured_invocations=None),
         plan,
     ) == "local_diagnosis"
+
+
+def test_benchmark_tier_labels_stack_acceptance_shape(tmp_path: Path) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="stack-tier-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(3, 5, 7),
+        warmups=1,
+        measured_cap=7,
+    )
+
+    assert benchmark_tier(
+        SimpleNamespace(steps=30000, repeats=2, max_measured_invocations=7),
+        plan,
+    ) == "stack_acceptance"
+
+
+def test_stack_acceptance_plan_uses_short_checkpoint_ladder(tmp_path: Path) -> None:
+    plan = build_plan(
+        SimpleNamespace(
+            refs=["1" * 40, "2" * 40],
+            single=False,
+            run_root=str(tmp_path / "runs-root"),
+            state_dir=str(tmp_path / "states"),
+            rom_path=str(tmp_path / "SuperMarioBros.nes"),
+            steps=30000,
+            repeats=2,
+            warmups=1,
+            max_measured_invocations=7,
+        )
+    )
+
+    assert plan.checkpoints == (3, 5, 7)
+    assert plan.measured_cap == 7
 
 
 def test_benchmark_command_pins_canonical_workload_flags(tmp_path: Path) -> None:

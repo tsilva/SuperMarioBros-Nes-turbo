@@ -42,6 +42,10 @@ PROFILE_WARMUP = "100"
 SCREEN_STEPS = "5000"
 SCREEN_REPEATS = "1"
 SCREEN_MEASURED_PAIRS = "3"
+STACK_ACCEPT_STEPS = "30000"
+STACK_ACCEPT_REPEATS = "2"
+STACK_ACCEPT_WARMUPS = "1"
+STACK_ACCEPT_MEASURED_PAIRS = "7"
 PROBE_STEPS = "2000"
 PROBE_REPEATS = "1"
 PROBE_WARMUP = "50"
@@ -87,6 +91,20 @@ def build_benchmark_command(
         command += ["--steps", ACCEPT_STEPS, "--repeats", ACCEPT_REPEATS]
         if not full:
             command += ["--max-measured-invocations", DEDICATED_ACCEPT_MEASURED_PAIRS]
+    elif kind == "accept-stack":
+        if len(refs) != 2:
+            raise SystemExit("accept-stack requires baseline_ref and candidate_ref")
+        command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], refs[1]]
+        command += [
+            "--steps",
+            STACK_ACCEPT_STEPS,
+            "--repeats",
+            STACK_ACCEPT_REPEATS,
+            "--warmups",
+            STACK_ACCEPT_WARMUPS,
+            "--max-measured-invocations",
+            STACK_ACCEPT_MEASURED_PAIRS,
+        ]
     elif kind == "calibrate":
         if len(refs) != 1:
             raise SystemExit("calibrate requires exactly one ref")
@@ -229,6 +247,25 @@ def infer_status(aggregate: dict[str, Any]) -> str:
             return "triage_promote"
         if isinstance(ratio, int | float) and ratio < 1.01:
             return "triage_discard"
+        return "inconclusive"
+    if tier == "stack_acceptance":
+        load_ok = aggregate.get("load_gate_passed") is True or aggregate.get(
+            "load_gate_ignored_for_validity"
+        ) is True
+        faster = aggregate.get("candidate_faster_pairs")
+        if (
+            aggregate.get("validity_passed") is True
+            and load_ok
+            and isinstance(ratio, int | float)
+            and ratio >= 1.03
+            and isinstance(faster, int)
+            and faster >= 6
+        ):
+            return "keep_stack"
+        if decision == "converged_no_meaningful_win" or (
+            isinstance(ratio, int | float) and ratio <= 1.0
+        ):
+            return "discard_stack"
         return "inconclusive"
     if tier != "local_acceptance":
         return "inconclusive"
@@ -536,7 +573,7 @@ def infer_next_action(
         return "Run `autoresearch.py checks` and then `autoresearch.py accept <baseline> <candidate>`."
     if latest_status in {"triage_discard", "discard"}:
         return "Record the lesson, then pick the next idea before another probe."
-    if latest_status in {"keep", "keep_small_gain"}:
+    if latest_status in {"keep", "keep_small_gain", "keep_stack"}:
         return "Update the accepted baseline and refresh calibration when the host is quiet."
     return "Inspect the latest aggregate and decide whether to discard, probe deeper, or screen."
 
@@ -676,7 +713,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     diagnose_parser.add_argument("--dry-run", action="store_true")
 
-    for name in ("screen", "accept"):
+    for name in ("screen", "accept", "accept-stack"):
         benchmark_parser = subparsers.add_parser(name)
         benchmark_parser.add_argument("baseline_ref")
         benchmark_parser.add_argument("candidate_ref")
@@ -754,7 +791,7 @@ def main(argv: list[str]) -> int:
             dry_run=args.dry_run,
             env_defaults={"RAYON_NUM_THREADS": "12"},
         )
-    if args.command in {"screen", "accept"}:
+    if args.command in {"screen", "accept", "accept-stack"}:
         root = autoresearch_root(None)
         command = build_benchmark_command(
             args.command,

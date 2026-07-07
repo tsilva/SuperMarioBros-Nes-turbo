@@ -36,6 +36,7 @@ Use `scripts/autoresearch.py` as the only routine interface:
 .venv/bin/python scripts/autoresearch.py diagnose [--quick] [--profile] [--dry-run]
 .venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py checks [--quick] [--dry-run] [--surface auto|native|python|benchmark]
+.venv/bin/python scripts/autoresearch.py accept-stack <baseline_ref> <candidate_ref> [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py record <aggregate.json> [--status <status>] [--description "..."] [--artifact <path>]
@@ -62,19 +63,31 @@ code disagree, trust the code and fix the prose.
    preprocessing, state loading, or public Python contracts.
 5. `screen`: commit only plausible candidates, then run
    `scripts/autoresearch.py screen <baseline_ref> <candidate_ref>`. One default
-   screen per candidate is enough unless asked otherwise.
-6. `accept`: for promoted candidates, contract-sensitive changes, public
+   screen per candidate is enough unless asked otherwise. Cheap screens may
+   promote clear, low-risk likely winners into a bundle instead of proving each
+   patch individually.
+6. `accept-stack`: for a bundle of screened likely winners, run correctness
+   checks once, then run
+   `scripts/autoresearch.py accept-stack <baseline_ref> <candidate_ref>`.
+   Use this when the bundle plausibly has at least 5% upside, has one obvious
+   monster candidate, reaches about three good candidates, or follows about
+   eight cheap screens. The proof unit is the whole stack; attribution cleanup
+   is optional after acceptance.
+7. `accept`: for strongest final evidence, contract-sensitive changes, public
    claims, baseline resets, or direct user requests, run full controller checks
    and `scripts/autoresearch.py accept <baseline_ref> <candidate_ref>`. Use
    `--full` only when the claim or user request needs the full ladder.
-7. `record`: finalized `screen`, `accept`, and `calibrate` runs auto-record by
-   default. Use `record` only for manual imports or status overrides.
-8. `retrospect`: put compact lessons in `scratchpad.md`; do not update docs or
+8. `record`: finalized `screen`, `accept-stack`, `accept`, and `calibrate`
+   runs auto-record by default. Use `record` only for manual imports or status
+   overrides.
+9. `retrospect`: put compact lessons in `scratchpad.md`; do not update docs or
    skills from scratchpad notes unless asked.
 
 `probe`, `diagnose`, and `make benchmark` are learning evidence only.
-`local_triage` is screening only. `local_acceptance` is the only tier that can
-justify `keep`, `keep_small_gain`, accepted speedups, or baseline updates.
+`local_triage` is screening only. `stack_acceptance` can justify `keep_stack`
+for a bundled patch stack, but does not prove individual attribution.
+`local_acceptance` remains the strongest tier for `keep`, `keep_small_gain`,
+accepted speedups, or baseline updates that need gold-standard evidence.
 
 Discard when the likely gain is smaller than the cost of proving it. Treat
 failures as regressions unless proven unrelated. Do not accept busy-machine or
@@ -95,7 +108,7 @@ Report compactly:
 phase: orient | diagnose | prototype | screen | acceptance | record | pause
 inputs: refs/artifacts read
 outputs: commits/results/artifacts written
-decision: keep | keep_small_gain | discard | inconclusive | defer | pause
+decision: keep | keep_small_gain | keep_stack | discard | discard_stack | inconclusive | defer | pause
 next: one concrete next action
 ```
 
