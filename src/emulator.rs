@@ -501,8 +501,9 @@ impl Ppu {
         height: usize,
     ) {
         debug_assert_eq!(dst.len(), width * height);
-        self.write_bg_gray_region_tiled(dst, crop_top, crop_left, width, height);
-        self.draw_sprites_gray_region(dst, crop_top, crop_left, width, height);
+        let palette_gray = self.palette_gray();
+        self.write_bg_gray_region_tiled(dst, crop_top, crop_left, width, height, &palette_gray);
+        self.draw_sprites_gray_region(dst, crop_top, crop_left, width, height, &palette_gray);
     }
 
     fn write_gray_frame_cropped_area_84x84(&self, dst: &mut [u8], sprite_shadow: &mut [u8]) {
@@ -608,8 +609,8 @@ impl Ppu {
         crop_left: usize,
         width: usize,
         height: usize,
+        palette_gray: &[u8; 32],
     ) {
-        let palette_gray = self.palette_gray();
         if self.mask & 0x08 == 0 {
             dst.fill(palette_gray[0]);
             return;
@@ -965,12 +966,12 @@ impl Ppu {
         crop_left: usize,
         width: usize,
         height: usize,
+        palette_gray: &[u8; 32],
     ) {
         if self.mask & 0x10 == 0 {
             return;
         }
 
-        let palette_gray = self.palette_gray();
         let crop_top_i = crop_top as i16;
         let crop_bottom = crop_top_i + height as i16;
         let crop_left_i = crop_left as i16;
