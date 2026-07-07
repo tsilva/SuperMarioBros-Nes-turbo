@@ -659,28 +659,25 @@ impl Ppu {
                 let run = (8 - fine_x).min(width - out_x);
                 let bg_gray = palette_gray[0];
                 let palette_base = (palette_id as usize) * 4;
+                let colors = [
+                    bg_gray,
+                    palette_gray[palette_base + 1],
+                    palette_gray[palette_base + 2],
+                    palette_gray[palette_base + 3],
+                ];
 
                 if fine_x == 0 && run >= 8 {
                     write_full_bg_tile_gray(
                         &mut dst[row_start + out_x..row_start + out_x + 8],
                         lo,
                         hi,
-                        bg_gray,
-                        palette_gray[palette_base + 1],
-                        palette_gray[palette_base + 2],
-                        palette_gray[palette_base + 3],
+                        colors,
                     );
                 } else {
                     for col in 0..run {
                         let bit = 7 - (fine_x + col);
                         let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                        dst[row_start + out_x + col] = gray_pixel(
-                            pixel,
-                            bg_gray,
-                            palette_gray[palette_base + 1],
-                            palette_gray[palette_base + 2],
-                            palette_gray[palette_base + 3],
-                        );
+                        dst[row_start + out_x + col] = colors[pixel as usize];
                     }
                 }
 
@@ -1447,26 +1444,19 @@ fn read_u16_le(value: &[u8]) -> Option<u16> {
 }
 
 #[inline(always)]
-fn gray_pixel(pixel: u8, bg: u8, p1: u8, p2: u8, p3: u8) -> u8 {
-    match pixel {
-        0 => bg,
-        1 => p1,
-        2 => p2,
-        _ => p3,
-    }
-}
-
-#[inline(always)]
-fn write_full_bg_tile_gray(dst: &mut [u8], lo: u8, hi: u8, bg: u8, p1: u8, p2: u8, p3: u8) {
+fn write_full_bg_tile_gray(dst: &mut [u8], lo: u8, hi: u8, colors: [u8; 4]) {
     debug_assert!(dst.len() >= 8);
-    dst[0] = gray_pixel(((lo >> 7) & 1) | (((hi >> 7) & 1) << 1), bg, p1, p2, p3);
-    dst[1] = gray_pixel(((lo >> 6) & 1) | (((hi >> 6) & 1) << 1), bg, p1, p2, p3);
-    dst[2] = gray_pixel(((lo >> 5) & 1) | (((hi >> 5) & 1) << 1), bg, p1, p2, p3);
-    dst[3] = gray_pixel(((lo >> 4) & 1) | (((hi >> 4) & 1) << 1), bg, p1, p2, p3);
-    dst[4] = gray_pixel(((lo >> 3) & 1) | (((hi >> 3) & 1) << 1), bg, p1, p2, p3);
-    dst[5] = gray_pixel(((lo >> 2) & 1) | (((hi >> 2) & 1) << 1), bg, p1, p2, p3);
-    dst[6] = gray_pixel(((lo >> 1) & 1) | (((hi >> 1) & 1) << 1), bg, p1, p2, p3);
-    dst[7] = gray_pixel((lo & 1) | ((hi & 1) << 1), bg, p1, p2, p3);
+    // SAFETY: The caller passes at least eight destination pixels for a full tile.
+    unsafe {
+        *dst.get_unchecked_mut(0) = colors[(((lo >> 7) & 1) | (((hi >> 7) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(1) = colors[(((lo >> 6) & 1) | (((hi >> 6) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(2) = colors[(((lo >> 5) & 1) | (((hi >> 5) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(3) = colors[(((lo >> 4) & 1) | (((hi >> 4) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(4) = colors[(((lo >> 3) & 1) | (((hi >> 3) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(5) = colors[(((lo >> 2) & 1) | (((hi >> 2) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(6) = colors[(((lo >> 1) & 1) | (((hi >> 1) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(7) = colors[((lo & 1) | ((hi & 1) << 1)) as usize];
+    }
 }
 
 #[inline]
