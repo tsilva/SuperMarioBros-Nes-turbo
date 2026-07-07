@@ -1,4 +1,4 @@
 interface:
   display_name: "Autoresearch Speed"
-  short_description: "Coordinate fixed local speed research."
-  default_prompt: "Use $autoresearch-speed to run a safe Super Mario Bros emulator speed optimization track."
+  short_description: "Run profiler-first local SPS research."
+  default_prompt: "Use $autoresearch-speed to run a profiler-first Super Mario Bros emulator speed optimization loop."

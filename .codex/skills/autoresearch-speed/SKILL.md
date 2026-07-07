@@ -1,6 +1,6 @@
 ---
 name: autoresearch-speed
-description: Phased Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with fixed local experiments, make-test regression gating, commit/revert discipline, and experiment tracking.
+description: Profiler-first Super Mario Bros emulator speed-improvement loop for this repo. Use when optimizing, profiling, benchmarking, or autonomously iterating on Super Mario Bros NES throughput with fast local diagnosis, exact-ref triage, official acceptance gates, and compact experiment tracking.
 ---
 
 # Autoresearch Speed
@@ -24,10 +24,63 @@ Use local benchmarks in this checkout only unless the user explicitly approves a
 different target in the current turn. Do not use SSH, tailnet, cloud, Modal, or
 benchmark skills for autoresearch timing.
 
+Primary objective: maximize useful SPS learning per wall-clock minute, then
+spend official benchmark time only on candidates that already have a concrete,
+mechanistic reason to win. Safety gates protect accepted changes; they should
+not become the default way to learn whether an idea is worth trying.
+
+Default loop:
+
+1. `orient_once`: verify branch/state, read the campaign ledger and ideas queue,
+   inspect only the files needed for the current hypothesis, and identify the
+   cheapest decisive evidence.
+2. `diagnose`: use profiler output, smoke timings, source inspection, or a
+   targeted equivalence check to kill weak ideas before creating commits.
+3. `prototype`: make one small local edit, build only what is needed to run the
+   narrow check, and revert or revise immediately if the mechanism is wrong.
+4. `screen`: commit only plausible candidates, then run paired `local_triage`
+   from exact refs. Do not triage speculative or broad patches.
+5. `accept`: run full checks and `local_acceptance` only after triage promotes a
+   candidate or the user explicitly asks for official evidence.
+6. `record`: write a compact result row or rejection note before starting the
+   next idea so future rounds do not repeat the same work.
+
+Fast local diagnosis commands are allowed only as learning evidence, never as
+acceptance evidence. Prefer these before any ref-paired benchmark:
+
+```bash
+RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py \
+  --num-envs 16 --steps 1000 --repeats 1 --warmup 20 \
+  --frame-skip 4 --frame-stack 4 --crop-top 32 --crop-bottom 0 \
+  --resize-width 84 --resize-height 84 \
+  --states Level1-1,Level1-2,Level1-3,Level1-4 \
+  --action-set simple --action noop --no-start-game \
+  --json --output-json artifacts/benchmarks/local-diagnosis.json
+
+RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py \
+  --num-envs 16 --steps 2000 --repeats 1 --warmup 100 \
+  --frame-skip 4 --frame-stack 4 --crop-top 32 --crop-bottom 0 \
+  --resize-width 84 --resize-height 84 \
+  --states Level1-1,Level1-2,Level1-3,Level1-4 \
+  --action-set simple --action noop --no-start-game \
+  --profile-output artifacts/benchmarks/local-profile.json \
+  --json --output-json artifacts/benchmarks/local-profile-benchmark.json
+```
+
+Use `--state-dir <path>` when the state files are not available through the
+default resolver. After native edits, run
+`.venv/bin/python -m maturin develop --release` before Python diagnosis so the
+benchmark imports the current build. Do not run `make benchmark` by reflex; use
+it only when the repo target already captures the exact narrow question more
+cheaply than the commands above.
+
 Benchmark funnel:
 
 - `local_diagnosis`: uncommitted profiling, smoke tests, and narrow checks.
-  Helpful for edits only; cannot accept or reject a committed candidate.
+  Helpful for edits only; cannot accept or reject a committed candidate. Stop
+  here when the profile says the idea cannot plausibly move SPS or when the
+  smoke run is slower by more than noise and the mechanism is not clearly
+  fixable.
 - `local_triage`: coordinator-owned paired screening from exact committed refs,
   fresh baseline and candidate, identical shorter runner settings, ROM, state
   directory, workload, load policy, and output metadata. Screening only.
@@ -59,8 +112,9 @@ Default triage command:
 .venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 5000 --repeats 1 --warmups 0 --max-measured-invocations 3
 ```
 
-For uncommitted `local_diagnosis` only, `make benchmark` is acceptable because it
-is not acceptance evidence.
+For uncommitted `local_diagnosis` only, `make benchmark` is acceptable when it
+is the cheapest targeted check for the active question. It is not acceptance
+evidence.
 
 Dry-run output is planning evidence only. Its `workload_hash` is a
 `planned_workload_hash` over requested parameters before source setup and before
@@ -69,6 +123,9 @@ aggregate `workload_hash` as acceptance evidence.
 
 Triage interpretation:
 
+- Run at most one default triage for a candidate before deciding whether to
+  discard, revise, or promote. A second triage is for noisy-but-promising
+  evidence only, and should usually use `--steps 10000`.
 - Below paired baseline, or below `+1%` with unstable samples: discard or
   revise without full acceptance.
 - `+3%` or better: run full checks and acceptance unless the change is risky or
@@ -85,11 +142,12 @@ Acceptance decisions:
   `decision=converged_candidate_win`, `validity_passed=true`, contract checks
   passed, and either `load_gate_passed=true` or an explicit user-approved
   `load_gate_ignored_for_validity=true`.
-- `keep_small_gain`: required checks passed, all official `stability_gates=true`,
-  median pair ratio is above `1.0`, CI lower bound is not below `1.0`, enough
-  faster pairs exist, and the change is simple, low-risk, simplifying,
-  composable, or plausibly compounding. If load was forced, call that out in the
-  ledger and final report.
+- `keep_small_gain`: required checks passed, all official `stability_gates`
+  values are true, `median_pair_ratio` is above `1.0`,
+  `pair_ratio_bootstrap_ci95[0]` is not below `1.0`, `candidate_faster_pairs`
+  meets `candidate_faster_pairs_required_for_win`, and the change is simple,
+  low-risk, simplifying, composable, or plausibly compounding. If load was
+  forced, call that out in the ledger and final report.
 - `discard`: equal/slower/no meaningful win/noisy/too complex/contract
   weakening.
 - `inconclusive`: malformed metadata, load failure, missing ROM, incomparable
@@ -108,6 +166,17 @@ and warmups, immediately before measured samples; if the gate fails, defer
 timing instead of producing predictably invalid official evidence. If load
 fails after a checkpoint, stop before the next measured sample and treat
 `limit_stop_reason=load_gate_failed` as inconclusive.
+
+When official acceptance is expected to be expensive, run a dry plan first and
+confirm the tier, refs, checkpoint ladder, limits, ROM/state paths, and load
+policy:
+
+```bash
+.venv/bin/python scripts/run_git_ref_benchmark.py <baseline_ref> <candidate_ref> --steps 50000 --repeats 3 --dry-run
+```
+
+Do not enter official acceptance merely to gather more intuition. If the next
+decision would not change after a valid official win/loss, skip the benchmark.
 
 ## Branch And State
 
@@ -137,10 +206,10 @@ Before work:
    baseline, accepted commits, and candidate commits. If not, stop and ask
    whether to recover, recreate from `main`, or migrate the ledger.
 6. If unrelated dirty changes would be carried in, stop and ask.
-7. Inspect the hot path: `scripts/benchmark_sps.py`,
-   `python/supermariobrosnes_turbo/env.py`, `src/py_api.rs`,
-   `src/vec_env.rs`, `src/emulator.rs`, `Cargo.toml`, `pyproject.toml`, and
-   relevant docs.
+7. Inspect the hot path once per session, then read only the files relevant to
+   the active hypothesis. Default hot-path files are `scripts/benchmark_sps.py`,
+   `python/supermariobrosnes_turbo/env.py`, `src/py_api.rs`, `src/vec_env.rs`,
+   `src/emulator.rs`, `Cargo.toml`, `pyproject.toml`, and relevant docs.
 
 Track every trial, including crashes and rejects:
 
@@ -171,16 +240,23 @@ epoch, worker count, benchmark output root, optional benchmark limits, current
 baseline, imported manifests, candidate states, triage fields, official
 aggregate fields, accepted/rejected commits, cleanup state, and stop reason.
 
+If `.codex/optimization_campaigns/ideas.md` has no high- or medium-ROI ready
+idea, do not spend official benchmark time on the least-bad leftover by default.
+First refresh profiler evidence or add a new targeted idea; if only low-ROI work
+remains, report that and ask before continuing a long campaign.
+
 ## Worker Campaign
 
-Use coordinator-led local diagnosis by default. Launch phased worker batch mode
-only when the user approves campaign branch/worktree creation in the current
-turn or resumes an already-approved campaign. In worker mode, workers generate
-and implement candidates in parallel while the coordinator evaluates them
-serially. Without worker approval, the coordinator may make a small direct
-candidate on the current branch, but must still use committed refs for triage
-and acceptance. Default worker count is `N=4` unless the user provides a
-different `N`.
+Use coordinator-led local diagnosis and single-candidate prototyping by default.
+Launch phased worker batch mode only when there are multiple independent,
+plausible hypotheses and the user approves campaign branch/worktree creation in
+the current turn or resumes an already-approved campaign. Do not launch workers
+just to brainstorm after the ready queue is low-ROI; profile or narrow the idea
+space first. In worker mode, workers generate and implement candidates in
+parallel while the coordinator evaluates them serially. Without worker approval,
+the coordinator may make a small direct candidate on the current branch, but
+must still use committed refs for triage and acceptance. Default worker count is
+`N=4` unless the user provides a different `N`.
 
 Phases:
 
@@ -273,6 +349,13 @@ cargo check --release
 .venv/bin/python -m maturin develop --release
 ```
 
+For pure diagnosis or a prototype that has not earned triage, prefer the minimum
+build/check that answers the current question. Examples: `cargo check --release`
+for a Rust compile question, `cargo test <test_name>` for a narrow invariant, or
+`.venv/bin/python -m maturin develop --release` only when Python needs to load
+the native extension. Do not run `make test` before triage unless the change is
+already promoted or a targeted failure indicates a broader regression.
+
 Add targeted tests before triage when touching observations, rewards,
 termination, reset behavior, action mapping, info fields, preprocessing bytes,
 state loading, or Python API contracts. Contract-sensitive changes require
@@ -297,6 +380,12 @@ Prefer simple, maintainable Rust-side changes in `src/emulator.rs`,
 vector scheduling, CPU emulation, PPU/rendering, resize/preprocessing, stack
 movement, and output-buffer copying.
 
+Spend the first diagnosis pass on the highest-current-cost mechanism, not on the
+easiest edit. Before coding, name the expected speed mechanism and the metric
+that would falsify it. Kill candidates quickly when profile shares, prior
+rejects, or cheap smoke timings make the maximum plausible gain smaller than the
+benchmark cost.
+
 Mario/NES shortcuts are allowed only when they preserve observed SMB behavior.
 Document shortcut assumptions in the manifest, ledger, and accepted commit
 message. Removing code while preserving or improving speed is a strong keep
@@ -320,7 +409,7 @@ Spend tokens on decisions and evidence, not narration. Treat `current.json`,
 aggregates as the source of truth. Use compact phase reports:
 
 ```text
-phase: launch_workers | freeze | filter | replay | triage | acceptance | cleanup | pause
+phase: orient_once | diagnose | prototype | screen | launch_workers | freeze | filter | replay | triage | acceptance | record | cleanup | pause
 inputs: refs/artifacts read
 outputs: manifests/commits/results written
 decision: keep | keep_small_gain | discard | inconclusive | defer | pause
@@ -345,6 +434,11 @@ Review with the user after one clear `keep`, two or three clean
 `keep_small_gain` commits, six to ten consecutive rejects, three to four hours
 without meaningful progress, or before changing benchmark semantics, public
 APIs, or major test contracts.
+
+Also pause instead of grinding when the remaining ready queue is only low-ROI,
+when two consecutive candidates die in `local_diagnosis` for the same reason, or
+when a full official run would be the next step but triage evidence is below the
+promotion threshold.
 
 Before merging accepted campaign work into `main`, the user must explicitly ask.
 Ensure no active agents or background jobs are running, rerun the required
