@@ -28,9 +28,14 @@ from scripts.run_git_ref_benchmark import (
     measured_invocation_limit_applies,
     parse_args,
     parse_load1,
+    prepare_source_cache,
+    prepared_source_dir,
+    prepared_source_is_usable,
     require_load_gate,
     require_wall_clock_budget,
     run_compare,
+    source_cache_root_for_plan,
+    link_prepared_source,
     uv_sync_command,
     validate_rom_hash,
 )
@@ -198,6 +203,45 @@ def test_uv_sync_command_includes_common_user_tool_paths() -> None:
     assert "$HOME/.local/bin" in command
     assert "$HOME/.cargo/bin" in command
     assert command.endswith("uv sync --frozen --no-dev")
+
+
+def test_prepare_source_cache_reuses_synced_commit_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "candidate.tar.gz"
+    archive.write_bytes(b"archive bytes")
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="cache-test",
+        run_dir=str(tmp_path / "benchmarks" / "runs" / "cache-test"),
+        refs=[],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(3,),
+        warmups=0,
+        measured_cap=3,
+    )
+    ref = BenchmarkRef("candidate", "cand", "2" * 40, archive)
+    calls: list[str] = []
+
+    def fake_run_stream(_args: object, _plan: BenchmarkPlan, shell: str) -> None:
+        calls.append(shell)
+        prepared_dir = prepared_source_dir(plan, ref)
+        tmp_dir = prepared_dir.with_name(f"{prepared_dir.name}.tmp")
+        (tmp_dir / ".venv" / "bin").mkdir(parents=True)
+        (tmp_dir / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.target_run_stream", fake_run_stream)
+
+    cache_dir = prepare_source_cache(SimpleNamespace(), plan, ref)
+    cached_again = prepare_source_cache(SimpleNamespace(), plan, ref)
+    link_prepared_source(plan, ref, cache_dir)
+
+    assert source_cache_root_for_plan(plan) == tmp_path / "benchmarks" / "prepared-sources"
+    assert cache_dir == cached_again
+    assert len(calls) == 1
+    assert prepared_source_is_usable(cache_dir, ref)
+    assert (Path(plan.run_dir) / "sources" / "candidate").is_symlink()
 
 
 def test_cap_checkpoints_treats_limit_as_upper_bound() -> None:

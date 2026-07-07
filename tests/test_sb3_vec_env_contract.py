@@ -297,7 +297,7 @@ def test_sb3_terminal_infos_include_terminal_observation_and_reset_info() -> Non
     env = make_env(
         require_rom(),
         num_envs=1,
-        done_on_info={"x_progress": ("x_pos", "increase")},
+        done_on={"x_progress": ("x_pos", "increase")},
     )
     actions = make_action_batch(env.num_envs, "right")
     try:
@@ -337,7 +337,7 @@ def test_weighted_state_sampling_survives_lane_local_autoreset() -> None:
         require_rom(),
         state={"Level1-1": 0.5, "Level1-2": 0.5},
         num_envs=4,
-        done_on_info={"x_progress": ("x_pos", "increase")},
+        done_on={"x_progress": ("x_pos", "increase")},
     )
     actions = make_action_batch(env.num_envs, ["right", "noop", "noop", "noop"])
     valid_states = {"Level1-1", "Level1-2"}
@@ -439,7 +439,7 @@ def test_set_state_applies_to_lane_autoreset_only_after_done() -> None:
         require_rom(),
         state=["Level1-1", "Level1-1"],
         num_envs=2,
-        done_on_info={"x_progress": ("x_pos", "increase")},
+        done_on={"x_progress": ("x_pos", "increase")},
     )
     actions = make_action_batch(env.num_envs, ["right", "noop"])
     try:
@@ -472,7 +472,7 @@ def test_terminal_info_filter_only_reports_done_lanes() -> None:
     env = make_env(
         require_rom(),
         num_envs=2,
-        done_on_info={"x_progress": ("x_pos", "increase")},
+        done_on={"x_progress": ("x_pos", "increase")},
         info_filter="terminal",
     )
     actions = make_action_batch(env.num_envs, ["right", "noop"])
@@ -501,10 +501,10 @@ def test_wrapper_option_validation_runs_before_rom_load() -> None:
 
     with pytest.raises(ValueError, match="obs_copy"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_copy=True)
-    with pytest.raises(ValueError, match="cannot pass both obs_copy"):
-        SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_copy="safe_view", copy_observations=False)
-    with pytest.raises(ValueError, match="unsafe_zero_copy"):
-        SuperMarioBrosNesTurboVecEnv(**base_kwargs, copy_observations=True, unsafe_zero_copy=True)
+    with pytest.raises(TypeError, match="copy_observations"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, copy_observations=False)
+    with pytest.raises(TypeError, match="unsafe_zero_copy"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, unsafe_zero_copy=True)
     with pytest.raises(ValueError, match="info_filter mode"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, info_filter="sometimes")
     with pytest.raises(ValueError, match="info_filter keys"):
@@ -517,8 +517,8 @@ def test_wrapper_option_validation_runs_before_rom_load() -> None:
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_resize_algorithm="lanczos")
     with pytest.raises(ValueError, match="unknown configured event"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on=["bad_event"])
-    with pytest.raises(ValueError, match="cannot pass both done_on"):
-        SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on=["life_loss"], done_on_info={})
+    with pytest.raises(TypeError, match="done_on_info"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on_info={})
     with pytest.raises(TypeError, match="states"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, states=["Level1-1"])
     with pytest.raises(TypeError, match="state_probs"):

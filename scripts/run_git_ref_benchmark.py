@@ -60,6 +60,7 @@ PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 ARCHIVE_SUBDIR = Path("local-archives")
 LOCAL_RESULTS_SUBDIR = Path("local-results")
+PREPARED_SOURCES_SUBDIR = Path("prepared-sources")
 RESULTS_TSV_COLUMNS = (
     "epoch",
     "commit",
@@ -412,14 +413,82 @@ def prepare_sources(args: argparse.Namespace, plan: BenchmarkPlan) -> None:
         shutil.copy2(ref.archive, archives / ref.archive.name)
 
     for ref in plan.refs:
-        source_dir = f"{plan.run_dir}/sources/{ref.role}"
-        archive_path = f"{plan.run_dir}/archives/{ref.archive.name}"
-        shell = (
-            f"rm -rf {quote(source_dir)} && mkdir -p {quote(source_dir)} && "
-            f"tar -xzf {quote(archive_path)} -C {quote(source_dir)} && "
-            f"cd {quote(source_dir)} && {uv_sync_command()}"
-        )
-        target_run_stream(args, plan, shell)
+        prepared_dir = prepare_source_cache(args, plan, ref)
+        link_prepared_source(plan, ref, prepared_dir)
+
+
+def benchmark_run_root_for_plan(plan: BenchmarkPlan) -> Path:
+    run_dir = Path(plan.run_dir)
+    if run_dir.parent.name == "runs":
+        return run_dir.parent.parent
+    return run_dir.parent
+
+
+def source_cache_root_for_plan(plan: BenchmarkPlan) -> Path:
+    return benchmark_run_root_for_plan(plan) / PREPARED_SOURCES_SUBDIR
+
+
+def prepared_source_dir(plan: BenchmarkPlan, ref: BenchmarkRef) -> Path:
+    return source_cache_root_for_plan(plan) / f"sha-{ref.short_sha}"
+
+
+def prepared_source_manifest(path: Path) -> Path:
+    return path / ".autoresearch-prepared-source.json"
+
+
+def prepared_source_is_usable(path: Path, ref: BenchmarkRef) -> bool:
+    manifest_path = prepared_source_manifest(path)
+    python_path = path / ".venv" / "bin" / "python"
+    if not path.is_dir() or not manifest_path.is_file() or not python_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError:
+        return False
+    return (
+        manifest.get("sha") == ref.sha
+        and manifest.get("archive_sha256") == sha256_path(ref.archive)
+    )
+
+
+def prepare_source_cache(args: argparse.Namespace, plan: BenchmarkPlan, ref: BenchmarkRef) -> Path:
+    cache_dir = prepared_source_dir(plan, ref)
+    if prepared_source_is_usable(cache_dir, ref):
+        return cache_dir
+
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = cache_dir.with_name(f"{cache_dir.name}.tmp")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    shell = (
+        f"mkdir -p {quote(tmp_dir)} && "
+        f"tar -xzf {quote(ref.archive)} -C {quote(tmp_dir)} && "
+        f"cd {quote(tmp_dir)} && {uv_sync_command()}"
+    )
+    target_run_stream(args, plan, shell)
+    manifest = {
+        "schema_version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sha": ref.sha,
+        "archive_sha256": sha256_path(ref.archive),
+        "uv_sync_command": uv_sync_command(),
+    }
+    prepared_source_manifest(tmp_dir).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    tmp_dir.rename(cache_dir)
+    return cache_dir
+
+
+def link_prepared_source(plan: BenchmarkPlan, ref: BenchmarkRef, prepared_dir: Path) -> None:
+    sources_root = Path(plan.run_dir) / "sources"
+    sources_root.mkdir(parents=True, exist_ok=True)
+    source_dir = sources_root / ref.role
+    if source_dir.is_symlink() or source_dir.is_file():
+        source_dir.unlink()
+    elif source_dir.exists():
+        shutil.rmtree(source_dir)
+    source_dir.symlink_to(prepared_dir, target_is_directory=True)
 
 
 def benchmark_command(
