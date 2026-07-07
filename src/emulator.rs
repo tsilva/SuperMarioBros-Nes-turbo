@@ -3020,10 +3020,8 @@ impl NesEmulator {
             }
             _ => 2,
         };
-        if self.extra_cycles != 0 {
-            cycles = cycles.saturating_add(self.extra_cycles);
-            self.extra_cycles = 0;
-        }
+        cycles = cycles.saturating_add(self.extra_cycles);
+        self.extra_cycles = 0;
         cycles
     }
 
