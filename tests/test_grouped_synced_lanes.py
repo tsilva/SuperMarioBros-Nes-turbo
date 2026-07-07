@@ -75,6 +75,31 @@ def test_repeated_state_groups_match_independent_lane_references() -> None:
                 np.testing.assert_array_equal(actual_array[lane], expected_array[0])
 
 
+def test_repeated_state_groups_match_references_after_autoreset() -> None:
+    rom_path = require_rom()
+    lane_states = [GROUP_STATES[index % len(GROUP_STATES)] for index in range(16)]
+    grouped = make_env(rom_path, lane_states, num_envs=16)
+    refs = [make_env(rom_path, state, num_envs=1) for state in GROUP_STATES]
+
+    reset_obs(grouped)
+    for ref in refs:
+        reset_obs(ref)
+
+    saw_done = False
+    for _ in range(900):
+        grouped_result = grouped.step_fast(action_batch("noop", 16))
+        ref_results = [ref.step_fast(action_batch("noop", 1)) for ref in refs]
+        saw_done |= bool(np.any(grouped_result[2]) or np.any(grouped_result[3]))
+        for lane, state in enumerate(lane_states):
+            ref_index = GROUP_STATES.index(state)
+            for actual_array, expected_array in zip(grouped_result, ref_results[ref_index], strict=True):
+                np.testing.assert_array_equal(actual_array[lane], expected_array[0])
+        if saw_done:
+            return
+
+    raise AssertionError("expected repeated-state noop rollout to trigger autoreset")
+
+
 def test_grouped_lanes_materialize_before_divergent_actions() -> None:
     rom_path = require_rom()
     lane_states = [GROUP_STATES[index % len(GROUP_STATES)] for index in range(16)]

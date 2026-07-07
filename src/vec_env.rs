@@ -1560,6 +1560,8 @@ impl MarioVecEnv {
     ) {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
+        let had_synced_lanes = self.synced_lanes && config.num_envs > 1;
+        let had_synced_groups = !self.synced_groups.is_empty();
         for env_idx in 0..config.num_envs {
             if !terminated[env_idx] && !truncated[env_idx] {
                 continue;
@@ -1590,8 +1592,19 @@ impl MarioVecEnv {
                 &mut xscroll_lo[env_idx],
             );
         }
-        self.synced_lanes = false;
-        self.synced_groups.clear();
+        if config.has_action_randomization() || self.weighted_initial_states {
+            self.synced_lanes = false;
+            self.synced_groups.clear();
+        } else if had_synced_lanes {
+            self.synced_lanes = true;
+            self.synced_groups.clear();
+        } else if had_synced_groups {
+            self.synced_lanes = false;
+            self.refresh_synced_groups();
+        } else {
+            self.synced_lanes = false;
+            self.synced_groups.clear();
+        }
     }
 
     pub fn env_ram(&self, env_idx: usize) -> Option<&[u8; 2048]> {
