@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
 import shutil
 
 import numpy as np
 import pytest
 from gymnasium import spaces
-from stable_baselines3.common.vec_env import VecEnv
+from gymnasium.vector import AutoresetMode, VectorEnv
 
-from supermariobrosnes_turbo import Actions, SuperMarioBrosNesTurboVecEnv, list_available_states
+from supermariobrosnes_turbo import (
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
+    list_available_states,
+)
 from rom_helpers import require_rom
 from supermariobrosnes_turbo.env import _normalize_initial_state_config, _resolve_state_path
 
@@ -82,15 +87,56 @@ def make_env(rom_path: Path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:
         obs_crop=(32, 0, 0, 0),
         obs_resize=(84, 84),
         obs_resize_algorithm="area",
-        obs_layout="chw",
+        obs_layout=kwargs.pop("obs_layout", "chw"),
         **kwargs,
     )
     env.seed(seed)
     return env
 
 
-def test_super_mario_vec_env_is_sb3_vec_env_type() -> None:
-    assert issubclass(SuperMarioBrosNesTurboVecEnv, VecEnv)
+def lane_has(infos: dict[str, object], key: str, lane: int) -> bool:
+    mask = infos.get(f"_{key}")
+    return bool(mask is not None and np.asarray(mask, dtype=np.bool_)[lane])
+
+
+def lane_value(infos: dict[str, object], key: str, lane: int) -> object:
+    assert lane_has(infos, key, lane), f"lane {lane} missing info key {key!r}: {infos}"
+    values = infos[key]
+    return values[lane]  # type: ignore[index]
+
+
+def nested_lane_value(infos: dict[str, object], path: tuple[str, ...], lane: int) -> object:
+    current: object = infos
+    for key in path[:-1]:
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    return lane_value(current, path[-1], lane)
+
+
+def final_done_on_info(infos: dict[str, object], lane: int, event: str) -> dict[str, object]:
+    current: object = infos
+    for key in ("final_info", "done_on_info", event):
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    return {
+        key: lane_value(current, key, lane)
+        for key in current
+        if not key.startswith("_")
+    }
+
+
+def test_super_mario_vector_env_is_gymnasium_vector_env_type() -> None:
+    assert issubclass(SuperMarioBrosNesTurboVecEnv, VectorEnv)
+    assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
+    assert not issubclass(SuperMarioBrosNesTurboVecEnv, tuple)
+
+
+def test_runtime_env_module_does_not_import_stable_baselines3() -> None:
+    import supermariobrosnes_turbo.env as env_module
+
+    assert "stable_baselines3" not in inspect.getsource(env_module)
 
 
 def test_packaged_state_inventory_includes_all_levels() -> None:
@@ -170,27 +216,30 @@ def test_weighted_state_validation_allows_zero_but_rejects_negative_and_all_zero
         )
 
 
-def test_sb3_step_contract_and_reset_infos() -> None:
+def test_gymnasium_reset_step_contract_and_spaces() -> None:
     env = make_env(require_rom())
     try:
-        assert isinstance(env, VecEnv)
         assert isinstance(env.action_space, spaces.MultiBinary)
+        assert isinstance(env.single_action_space, spaces.MultiBinary)
+        assert env.single_observation_space.shape == (1, 84, 84)
+        assert env.observation_space.shape == (2, 1, 84, 84)
+        assert env.metadata["autoreset_mode"] is AutoresetMode.SAME_STEP
 
-        obs = env.reset()
+        obs, infos = env.reset(seed=123)
         assert obs.shape == (2, 1, 84, 84)
-        assert env.reset_infos == [{}, {}]
+        assert infos == {}
 
         actions = make_action_batch(env.num_envs, "noop")
-        obs, rewards, dones, infos = env.step(actions)
+        obs, rewards, terminations, truncations, infos = env.step(actions)
         assert obs.shape == (2, 1, 84, 84)
         assert rewards.shape == (2,)
-        assert dones.shape == (2,)
-        assert dones.dtype == np.bool_
-        assert len(infos) == 2
-        assert "xscrollHi" in infos[0]
-
-        gym_step = env.step_gymnasium(actions)
-        assert len(gym_step) == 5
+        assert terminations.shape == (2,)
+        assert terminations.dtype == np.bool_
+        assert truncations.shape == (2,)
+        assert truncations.dtype == np.bool_
+        assert "xscrollHi" in infos
+        assert lane_has(infos, "xscrollHi", 0)
+        assert lane_has(infos, "xscrollHi", 1)
     finally:
         env.close()
 
@@ -202,7 +251,7 @@ def test_active_state_indices_are_read_only_and_track_state_labels() -> None:
         num_envs=2,
     )
     try:
-        env.reset()
+        _obs, infos = env.reset()
         active_state_indices = env.active_state_indices()
 
         np.testing.assert_array_equal(active_state_indices, np.asarray([0, 1], dtype=np.int32))
@@ -210,31 +259,8 @@ def test_active_state_indices_are_read_only_and_track_state_labels() -> None:
         with pytest.raises(ValueError, match="read-only"):
             active_state_indices[0] = 1
         assert env.active_states() == ("Level1-1", "Level1-2")
-    finally:
-        env.close()
-
-
-def test_sb3_helper_methods_respect_lane_indices() -> None:
-    env = make_env(require_rom(), num_envs=2)
-    try:
-        env.reset()
-        x_pos_before = env.x_pos.copy()
-
-        assert env.get_attr("x_pos", indices=0) == [int(x_pos_before[0])]
-        env.set_attr("x_pos", 123, indices=[1])
-        assert env.get_attr("x_pos") == [int(x_pos_before[0]), 123]
-
-        active_states = env.active_states()
-        assert env.env_method("active_states", indices=[0, 1]) == [active_states, active_states]
-        assert env.env_is_wrapped(VecEnv, indices=[0, 1]) == [False, False]
-        assert env.get_images() == [None, None]
-
-        env.set_attr("custom_attr", "shared")
-        assert env.get_attr("custom_attr", indices=[0, 1]) == ["shared", "shared"]
-        with pytest.raises(AttributeError, match="missing_attr"):
-            env.get_attr("missing_attr")
-        with pytest.raises(AttributeError, match="cannot set per-lane attribute"):
-            env.set_attr("other_custom_attr", "lane-only", indices=[0])
+        assert lane_value(infos, "state", 0) == "Level1-1"
+        assert lane_value(infos, "state", 1) == "Level1-2"
     finally:
         env.close()
 
@@ -247,10 +273,10 @@ def test_rgb_array_rendering_keeps_policy_observation_preprocessed() -> None:
         render_mode="rgb_array",
     )
     try:
-        obs = env.reset()
+        obs, _infos = env.reset()
 
         assert obs.shape == (1, 4, 84, 84)
-        assert env.observation_space.shape == (4, 84, 84)
+        assert env.single_observation_space.shape == (4, 84, 84)
 
         images = env.get_images()
         assert len(images) == 1
@@ -275,7 +301,7 @@ def test_rgb_array_rendering_returns_one_image_per_lane() -> None:
         render_mode="rgb_array",
     )
     try:
-        obs = env.reset()
+        obs, _infos = env.reset()
 
         assert obs.shape == (2, 4, 84, 84)
         images = env.get_images()
@@ -293,7 +319,7 @@ def test_rgb_array_rendering_returns_one_image_per_lane() -> None:
         env.close()
 
 
-def test_sb3_terminal_infos_include_terminal_observation_and_reset_info() -> None:
+def test_done_lane_includes_final_obs_and_final_info() -> None:
     env = make_env(
         require_rom(),
         num_envs=1,
@@ -303,12 +329,17 @@ def test_sb3_terminal_infos_include_terminal_observation_and_reset_info() -> Non
     try:
         env.reset()
         for _ in range(300):
-            _obs, _rewards, dones, infos = env.step(actions)
-            if bool(dones[0]):
-                info = infos[0]
-                assert "terminal_observation" in info
-                assert info["terminal_observation"].shape == (1, 84, 84)
-                assert info["reset_info"] == {}
+            obs, _rewards, terminations, truncations, infos = env.step(actions)
+            if bool(terminations[0] or truncations[0]):
+                assert bool(terminations[0])
+                assert not bool(truncations[0])
+                final_obs = lane_value(infos, "final_obs", 0)
+                assert isinstance(final_obs, np.ndarray)
+                assert final_obs.shape == (1, 84, 84)
+                assert final_obs.shape == obs.shape[1:]
+                assert bool(nested_lane_value(infos, ("final_info", "terminated"), 0)) is True
+                assert "terminal_observation" not in infos
+                assert "TimeLimit.truncated" not in infos
                 break
         else:
             pytest.fail("x_pos did not increase enough to trigger done_on_info")
@@ -316,18 +347,18 @@ def test_sb3_terminal_infos_include_terminal_observation_and_reset_info() -> Non
         env.close()
 
 
-def test_sb3_reset_infos_preserve_multi_state_labels() -> None:
+def test_reset_info_preserves_multi_state_labels() -> None:
     env = make_env(
         require_rom(),
         state=["Level1-1", "Level1-2"],
         num_envs=2,
     )
     try:
-        env.reset()
-        assert env.reset_infos == [
-            {"state": "Level1-1", "start_state": "Level1-1"},
-            {"state": "Level1-2", "start_state": "Level1-2"},
-        ]
+        _obs, infos = env.reset()
+        assert lane_value(infos, "state", 0) == "Level1-1"
+        assert lane_value(infos, "start_state", 0) == "Level1-1"
+        assert lane_value(infos, "state", 1) == "Level1-2"
+        assert lane_value(infos, "start_state", 1) == "Level1-2"
     finally:
         env.close()
 
@@ -343,14 +374,14 @@ def test_weighted_state_sampling_survives_lane_local_autoreset() -> None:
     valid_states = {"Level1-1", "Level1-2"}
 
     try:
-        env.reset()
+        _obs, reset_info = env.reset()
         before_states = env.active_states()
         assert set(before_states) <= valid_states
-        assert all(info["state"] in valid_states for info in env.reset_infos)
+        assert all(lane_value(reset_info, "state", lane) in valid_states for lane in range(env.num_envs))
 
         for _ in range(300):
-            _obs, _rewards, dones, infos = env.step(actions)
-            done_lanes = np.flatnonzero(dones).tolist()
+            _obs, _rewards, terminations, truncations, infos = env.step(actions)
+            done_lanes = np.flatnonzero(np.logical_or(terminations, truncations)).tolist()
             if not done_lanes:
                 continue
 
@@ -359,13 +390,10 @@ def test_weighted_state_sampling_survives_lane_local_autoreset() -> None:
             assert set(after_states) <= valid_states
             assert after_states[1:] == before_states[1:]
 
-            done_info = infos[0]
-            assert done_info["reset_info"] == {
-                "state": after_states[0],
-                "start_state": after_states[0],
-            }
-            assert "terminal_observation" in done_info
-            assert all("reset_info" not in info for info in infos[1:])
+            assert lane_value(infos, "state", 0) == after_states[0]
+            assert lane_value(infos, "start_state", 0) == after_states[0]
+            assert lane_has(infos, "final_obs", 0)
+            assert not lane_has(infos, "state", 1)
             break
         else:
             pytest.fail("x_pos did not increase enough to trigger lane-local autoreset")
@@ -450,17 +478,16 @@ def test_set_state_applies_to_lane_autoreset_only_after_done() -> None:
         assert env.active_states() == ("Level1-1", "Level1-1")
 
         for _ in range(300):
-            _obs, _rewards, dones, infos = env.step(actions)
-            if not bool(dones[0]):
+            _obs, _rewards, terminations, truncations, infos = env.step(actions)
+            if not bool(terminations[0] or truncations[0]):
                 continue
 
-            assert dones.tolist() == [True, False]
+            assert terminations.tolist() == [True, False]
+            assert truncations.tolist() == [False, False]
             assert env.active_states() == ("Level1-2", "Level1-1")
-            assert infos[0]["reset_info"] == {
-                "state": "Level1-2",
-                "start_state": "Level1-2",
-            }
-            assert "reset_info" not in infos[1]
+            assert lane_value(infos, "state", 0) == "Level1-2"
+            assert lane_value(infos, "start_state", 0) == "Level1-2"
+            assert not lane_has(infos, "state", 1)
             break
         else:
             pytest.fail("x_pos did not increase enough to trigger lane-local autoreset")
@@ -480,17 +507,139 @@ def test_terminal_info_filter_only_reports_done_lanes() -> None:
     try:
         env.reset()
         for _ in range(300):
-            _obs, _rewards, dones, infos = env.step(actions)
-            if not bool(dones[0]):
+            _obs, _rewards, terminations, truncations, infos = env.step(actions)
+            if not bool(terminations[0] or truncations[0]):
                 continue
 
-            assert dones.tolist() == [True, False]
-            assert "reset_info" in infos[0]
-            assert "terminal_observation" in infos[0]
-            assert infos[1] == {}
+            assert terminations.tolist() == [True, False]
+            assert lane_has(infos, "final_obs", 0)
+            assert not lane_has(infos, "final_obs", 1)
+            assert not lane_has(infos, "xscrollHi", 1)
             break
         else:
             pytest.fail("x_pos did not increase enough to trigger terminal-only info")
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("obs_layout", "expected_single_shape"),
+    [
+        ("chw", (1, 84, 84)),
+        ("hwc", (84, 84, 1)),
+    ],
+)
+def test_final_observation_matches_public_layout(obs_layout: str, expected_single_shape: tuple[int, ...]) -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=1,
+        obs_layout=obs_layout,
+        done_on={"x_progress": ("x_pos", "increase")},
+    )
+    actions = make_action_batch(env.num_envs, "right")
+    try:
+        obs, _infos = env.reset()
+        assert obs.shape == (1, *expected_single_shape)
+        assert env.single_observation_space.shape == expected_single_shape
+        assert env.observation_space.shape == (1, *expected_single_shape)
+
+        for _ in range(300):
+            obs, _rewards, terminations, truncations, infos = env.step(actions)
+            if not bool(terminations[0] or truncations[0]):
+                continue
+            final_obs = lane_value(infos, "final_obs", 0)
+            assert isinstance(final_obs, np.ndarray)
+            assert final_obs.shape == expected_single_shape
+            assert final_obs.dtype == obs.dtype
+            break
+        else:
+            pytest.fail("x_pos did not increase enough to trigger done_on_info")
+    finally:
+        env.close()
+
+
+def test_safe_view_preserves_rollout_observations_across_next_step() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=1,
+        obs_layout="hwc",
+        obs_copy="safe_view",
+        frame_skip=1,
+        frame_stack=1,
+        info_filter="none",
+    )
+    try:
+        first, _infos = env.reset()
+        first_snapshot = first.copy()
+        masks = make_action_batch(env.num_envs, "right")
+        second, _rewards, _terminations, _truncations, infos = env.step(masks)
+        assert first.shape == (1, 84, 84, 1)
+        assert second.shape == (1, 84, 84, 1)
+        np.testing.assert_array_equal(first, first_snapshot)
+        assert infos == {}
+    finally:
+        env.close()
+
+
+def test_named_done_on_life_loss_payload_is_in_final_info() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=1,
+        done_on=["life_loss"],
+    )
+    try:
+        env.reset()
+        masks = make_action_batch(env.num_envs, "noop")
+
+        for step in range(1, 3000):
+            _obs, _rewards, terminations, truncations, infos = env.step(masks)
+            if not bool(terminations[0] or truncations[0]):
+                continue
+            assert step == 2456
+            assert final_done_on_info(infos, 0, "life_loss") == {
+                "trigger": "lives_decrease",
+                "op": "decrease",
+                "compare": "reset",
+                "keys": ["lives"],
+                "variables": ["lives"],
+                "prev": [2],
+                "next": [1],
+            }
+            break
+        else:
+            pytest.fail("life_loss done_on rule did not fire before game-over")
+    finally:
+        env.close()
+
+
+def test_named_done_on_level_change_payload_is_in_final_info() -> None:
+    env = make_env(
+        require_rom(),
+        state="Level1-1",
+        num_envs=1,
+        done_on=["level_change"],
+    )
+    try:
+        env.reset()
+        right = make_action_batch(env.num_envs, "right")
+        for _step in range(1, 4500):
+            _obs, _rewards, terminations, truncations, infos = env.step(right)
+            if not bool(terminations[0] or truncations[0]):
+                continue
+            final_info = infos.get("final_info", {})
+            if not isinstance(final_info, dict):
+                continue
+            done_on_infos = final_info.get("done_on_info", {})
+            if not isinstance(done_on_infos, dict) or "level_change" not in done_on_infos:
+                continue
+            payload = final_done_on_info(infos, 0, "level_change")
+            assert payload["trigger"] == "level_bytes_changed"
+            assert payload["op"] == "change"
+            assert payload["keys"] == ["levelHi", "levelLo"]
+            assert payload["variables"] == ["levelHi", "levelLo"]
+            break
+        else:
+            pytest.skip("level_change did not fire within bounded probe")
     finally:
         env.close()
 

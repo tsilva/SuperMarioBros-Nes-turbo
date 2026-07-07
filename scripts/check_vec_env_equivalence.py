@@ -83,11 +83,16 @@ def assert_lane_info(vec: SuperMarioBrosNesTurboVecEnv, lane: int, ref: SuperMar
         assert getattr(vec, attr)[lane] == getattr(ref, attr)[0]
 
 
+def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
+    obs, _infos = env.reset()
+    return obs
+
+
 def check_uniform_sync(rom_path: Path) -> None:
     vec = make_env(rom_path, 16)
     one = make_env(rom_path, 1)
-    obs_vec = vec.reset()
-    obs_one = one.reset()
+    obs_vec = reset_obs(vec)
+    obs_one = reset_obs(one)
     assert obs_vec.shape == (16, 4, 84, 84)
     assert obs_vec.dtype == np.uint8
     np.testing.assert_array_equal(obs_vec[0], obs_one[0])

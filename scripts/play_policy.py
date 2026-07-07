@@ -152,6 +152,21 @@ def json_default(value):
     return repr(value)
 
 
+def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in infos.items():
+        if key.startswith("_"):
+            continue
+        mask = infos.get(f"_{key}")
+        if mask is not None and not bool(np.asarray(mask, dtype=np.bool_)[lane]):
+            continue
+        if isinstance(value, dict):
+            result[key] = lane_info(value, lane)
+        else:
+            result[key] = value[lane]  # type: ignore[index]
+    return result
+
+
 class SdlPolicyPlayer:
     def __init__(self, args: argparse.Namespace) -> None:
         try:
@@ -175,9 +190,12 @@ class SdlPolicyPlayer:
         self.rom_path = resolve_required_rom_path(args.rom_path)
         self.retro_action_masks = stable_action_masks(self.action_names, self.rom_path)
         self.env = self.make_env()
-        self.obs = self.env.reset()
+        self.obs, _infos = self.env.reset()
         self.display_env = self.make_display_env() if args.view == "raw" else None
-        self.display_obs = self.display_env.reset() if self.display_env is not None else self.obs
+        if self.display_env is not None:
+            self.display_obs, _display_infos = self.display_env.reset()
+        else:
+            self.display_obs = self.obs
         self.display_info: dict[str, object] = {}
         initial_frame = self.current_display_frame()
         self.display_height, self.display_width = initial_frame.shape[:2]
@@ -397,13 +415,18 @@ class SdlPolicyPlayer:
     def policy_step(self) -> None:
         action, _ = self.model.predict(self.obs, deterministic=self.args.deterministic)
         self.action = int(np.asarray(action).reshape(-1)[0])
-        obs, rewards, dones, infos = self.env.step(self.retro_action_masks[[self.action]])
-        terminated_value = bool(dones[0])
-        truncated_value = False
+        obs, rewards, terminations, truncations, infos = self.env.step(
+            self.retro_action_masks[[self.action]]
+        )
+        terminated_value = bool(terminations[0])
+        truncated_value = bool(truncations[0])
         self.obs = obs
         self.step_display_env()
         self.reward += float(rewards[0])
-        self.info = dict(infos[0])
+        step_info = lane_info(infos, 0)
+        self.info = dict(step_info.get("final_info", step_info))
+        if "final_obs" in step_info:
+            self.info["final_obs"] = step_info["final_obs"]
         self.step += 1
         self.max_x = max(self.max_x, int(self.info.get("x_pos", 0)))
         completed = self.is_completed()
@@ -418,8 +441,11 @@ class SdlPolicyPlayer:
             self.reward = 0.0
             self.max_x = 0
             self.info = {}
-            self.obs = self.env.reset()
-            self.display_obs = self.display_env.reset() if self.display_env is not None else self.obs
+            self.obs, _infos = self.env.reset()
+            if self.display_env is not None:
+                self.display_obs, _display_infos = self.display_env.reset()
+            else:
+                self.display_obs = self.obs
             self.display_info = {}
 
     def step_display_env(self) -> None:
@@ -427,11 +453,17 @@ class SdlPolicyPlayer:
             self.display_obs = self.obs
             self.display_info = self.info
             return
-        display_obs, _rewards, _dones, display_infos = self.display_env.step(
+        display_obs, _rewards, display_terminations, display_truncations, display_infos = self.display_env.step(
             self.retro_action_masks[[self.action]],
         )
         self.display_obs = display_obs
-        self.display_info = dict(display_infos[0])
+        step_info = lane_info(display_infos, 0)
+        if bool(display_terminations[0] or display_truncations[0]):
+            self.display_info = dict(step_info.get("final_info", step_info))
+            if "final_obs" in step_info:
+                self.display_info["final_obs"] = step_info["final_obs"]
+        else:
+            self.display_info = step_info
 
     def is_completed(self) -> bool:
         if bool(self.info.get("level_complete")) or bool(self.info.get("completion_event")):
@@ -448,13 +480,13 @@ class SdlPolicyPlayer:
 
     def hold_terminal_frame(self, completed: bool) -> None:
         hold_frames = self.args.hold_complete_frames if completed else self.args.hold_done_frames
-        terminal_observation = (
-            self.display_info.get("terminal_observation")
+        final_observation = (
+            self.display_info.get("final_obs")
             if self.display_env is not None
-            else self.info.get("terminal_observation")
+            else self.info.get("final_obs")
         )
-        if isinstance(terminal_observation, np.ndarray):
-            terminal_batch = terminal_observation[None, ...] if terminal_observation.ndim == 3 else terminal_observation
+        if isinstance(final_observation, np.ndarray):
+            terminal_batch = final_observation[None, ...] if final_observation.ndim == 3 else final_observation
             if self.display_env is not None:
                 self.display_obs = terminal_batch
             else:

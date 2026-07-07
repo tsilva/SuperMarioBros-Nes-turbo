@@ -67,6 +67,11 @@ def assert_fast_step_equal(
         np.testing.assert_array_equal(actual_array, expected_array)
 
 
+def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
+    obs, _infos = env.reset()
+    return obs
+
+
 def test_noop_and_sticky_validation_runs_before_rom_load() -> None:
     missing_rom = "/definitely/missing/SuperMarioBros.nes"
     with pytest.raises(ValueError, match="noop_reset_max"):
@@ -92,7 +97,7 @@ def test_noop_reset_max_one_matches_explicit_single_noop_step() -> None:
 
     baseline.reset()
     expected_obs = baseline.step_fast(action_masks(["noop"]))[0]
-    actual_obs = reset_noop.reset()
+    actual_obs = reset_obs(reset_noop)
 
     np.testing.assert_array_equal(actual_obs, expected_obs)
 
@@ -102,7 +107,7 @@ def test_noop_reset_is_seed_deterministic_across_envs() -> None:
     first = make_env(rom_path, num_envs=8, seed=17, noop_reset_max=2)
     second = make_env(rom_path, num_envs=8, seed=17, noop_reset_max=2)
 
-    np.testing.assert_array_equal(first.reset(), second.reset())
+    np.testing.assert_array_equal(reset_obs(first), reset_obs(second))
 
 
 def test_full_sticky_actions_reuse_initial_noop_action() -> None:
@@ -110,7 +115,7 @@ def test_full_sticky_actions_reuse_initial_noop_action() -> None:
     sticky = make_env(rom_path, num_envs=4, seed=7, sticky_action_prob=1.0)
     explicit_noop = make_env(rom_path, num_envs=4, seed=7)
 
-    np.testing.assert_array_equal(sticky.reset(), explicit_noop.reset())
+    np.testing.assert_array_equal(reset_obs(sticky), reset_obs(explicit_noop))
     right_actions = action_masks(["right"] * 4)
     noop_actions = action_masks(["noop"] * 4)
     for _ in range(8):
@@ -126,7 +131,7 @@ def test_stochastic_sticky_actions_are_seed_deterministic() -> None:
         for step in range(12)
     ]
 
-    np.testing.assert_array_equal(first.reset(), second.reset())
+    np.testing.assert_array_equal(reset_obs(first), reset_obs(second))
     for actions in action_trace:
         assert_fast_step_equal(first.step_fast(actions), second.step_fast(actions))
 
@@ -146,6 +151,6 @@ def test_disabled_noop_and_sticky_match_default_env() -> None:
         for step in range(10)
     ]
 
-    np.testing.assert_array_equal(default.reset(), explicit_disabled.reset())
+    np.testing.assert_array_equal(reset_obs(default), reset_obs(explicit_disabled))
     for actions in action_trace:
         assert_fast_step_equal(default.step_fast(actions), explicit_disabled.step_fast(actions))

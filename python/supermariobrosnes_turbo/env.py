@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from enum import Enum, Flag
 import gzip
@@ -12,52 +12,10 @@ from typing import Any, Literal
 
 import numpy as np
 from gymnasium import spaces
+from gymnasium.vector import AutoresetMode, VectorEnv
+from gymnasium.vector.utils import batch_space
 
 from ._supermariobrosnes_turbo import _RetroVecEnv as _CoreRetroVecEnv
-
-try:
-    from stable_baselines3.common.vec_env import VecEnv as _SB3VecEnv
-except ImportError:
-
-    class _SB3VecEnv:
-        def __init__(self, num_envs: int, observation_space: spaces.Space, action_space: spaces.Space):
-            self.num_envs = num_envs
-            self.observation_space = observation_space
-            self.action_space = action_space
-            self.reset_infos = [{} for _ in range(num_envs)]
-            self._seeds = [None for _ in range(num_envs)]
-            self._options = [{} for _ in range(num_envs)]
-
-        def _get_indices(self, indices: None | int | Iterable[int]) -> Iterable[int]:
-            if indices is None:
-                return range(self.num_envs)
-            if isinstance(indices, int):
-                return [indices]
-            return indices
-
-        def seed(self, seed: int | None = None) -> Sequence[int | None]:
-            if seed is None:
-                seed = int(np.random.randint(0, np.iinfo(np.uint32).max, dtype=np.uint32))
-            self._seeds = [seed + index for index in range(self.num_envs)]
-            return self._seeds
-
-        def set_options(self, options: list[dict[str, Any]] | dict[str, Any] | None = None) -> None:
-            if options is None:
-                options = {}
-            if isinstance(options, dict):
-                self._options = deepcopy([options] * self.num_envs)
-            else:
-                self._options = deepcopy(options)
-
-        def _reset_seeds(self) -> None:
-            self._seeds = [None for _ in range(self.num_envs)]
-
-        def _reset_options(self) -> None:
-            self._options = [{} for _ in range(self.num_envs)]
-
-        def step(self, actions: np.ndarray):
-            self.step_async(actions)
-            return self.step_wait()
 
 
 VISIBLE_WIDTH = 240
@@ -726,10 +684,10 @@ def _native_done_on_info_rules(
     return native_rules, metadata
 
 
-class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
-    """SMB-only vector env with the `stable-retro-turbo` RetroVecEnv signature."""
+class SuperMarioBrosNesTurboVecEnv(VectorEnv):
+    """Gymnasium VectorEnv for the native Super Mario Bros NES fast path."""
 
-    metadata = {"render_modes": ["rgb_array"]}
+    metadata = {"render_modes": ["rgb_array"], "autoreset_mode": AutoresetMode.SAME_STEP}
     _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
 
     def __init__(
@@ -883,8 +841,16 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self.crop_bottom = crop_bottom
         self.resize_width = self._output_resize_width
         self.resize_height = self._output_resize_height
-        self.single_action_space = spaces.Discrete(len(self.action_meanings))
-        self.vector_action_space = spaces.MultiDiscrete([len(self.action_meanings)] * self.num_envs)
+        self.single_action_space = (
+            spaces.Discrete(36)
+            if action_mode == "DISCRETE"
+            else spaces.MultiBinary(self.num_buttons)
+        )
+        self.action_space = (
+            spaces.MultiDiscrete([36] * self.num_envs)
+            if action_mode == "DISCRETE"
+            else spaces.MultiBinary((self.num_envs, self.num_buttons))
+        )
         self._public_channels = self._core.obs_shape()[1]
         if self.obs_layout == "chw":
             self._single_obs_shape = (
@@ -898,25 +864,18 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
                 self._output_resize_width,
                 self._public_channels,
             )
-        observation_space = spaces.Box(
+        self.single_observation_space = spaces.Box(
             low=0,
             high=255,
             shape=self._single_obs_shape,
             dtype=np.uint8,
         )
-        action_space = (
-            spaces.Discrete(36)
-            if action_mode == "DISCRETE"
-            else spaces.MultiBinary(self.num_buttons)
-        )
+        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
         self.render_mode = render_mode
         self.viewer = None
         self.closed = False
-        super().__init__(
-            num_envs=self.num_envs,
-            observation_space=observation_space,
-            action_space=action_space,
-        )
+        self._pending_seed: int | None = None
+        self._pending_options: dict[str, Any] | list[dict[str, Any]] | None = None
 
         self._actions = np.zeros((self.num_envs,), dtype=np.uint8)
         self._obs = np.empty(self._core.obs_shape(), dtype=np.uint8)
@@ -989,16 +948,17 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
 
     def reset(
         self,
+        *,
         seed: int | None = None,
-        options: dict[str, Any] | list[dict[str, Any]] | None = None,
-    ) -> np.ndarray:
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         if seed is not None:
             self.seed(seed)
         if options is not None:
             self.set_options(options)
-        pending_seed = next((value for value in self._seeds if value is not None), None)
-        if pending_seed is not None:
-            self._core.seed(int(pending_seed))
+        if self._pending_seed is not None:
+            super().reset(seed=int(self._pending_seed))
+            self._core.seed(int(self._pending_seed))
         self._core.reset_into(self._obs)
         self._rewards.fill(0)
         self._terminated.fill(False)
@@ -1007,13 +967,23 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self._terminal_observations = [None for _ in range(self.num_envs)]
         self._write_active_state_indices()
         self._write_info_arrays()
-        self.reset_infos = [self._reset_info_dict(index) for index in range(self.num_envs)]
-        self._reset_seeds()
-        self._reset_options()
-        return self._return_obs()
+        infos = self._vector_infos(
+            [self._reset_info_dict(index) for index in range(self.num_envs)]
+        )
+        self._pending_seed = None
+        self._pending_options = None
+        return self._return_obs(), infos
 
     def seed(self, seed: int | None = None) -> list[int | None]:
-        return list(super().seed(seed))
+        if seed is None:
+            seed = int(np.random.randint(0, np.iinfo(np.uint32).max, dtype=np.uint32))
+        self._pending_seed = int(seed)
+        return [int(seed) + index for index in range(self.num_envs)]
+
+    def set_options(self, options: dict[str, Any] | list[dict[str, Any]] | None = None) -> None:
+        if options is None:
+            options = {}
+        self._pending_options = deepcopy(options)
 
     def enable_profiler(self) -> None:
         self._core.enable_profiler()
@@ -1079,17 +1049,18 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
             return CORE_ACTION_MEANINGS.index("a")
         return CORE_ACTION_MEANINGS.index("noop")
 
-    def step_wait(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
-        obs, rewards, terminated, truncated = self.step_wait_fast()
-        dones = np.logical_or(terminated, truncated)
-        infos = [self._info_dict(index) for index in range(self.num_envs)]
-        return obs, rewards, dones, infos
+    def step(
+        self,
+        actions: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        self.step_async(actions)
+        return self.step_wait_gymnasium()
 
     def step_wait_gymnasium(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         obs, rewards, terminated, truncated = self.step_wait_fast()
-        infos = [self._info_dict(index) for index in range(self.num_envs)]
+        infos = self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
         return obs, rewards, terminated, truncated, infos
 
     def step_wait_fast(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -1172,9 +1143,8 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
     def step_gymnasium(
         self,
         actions: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
-        self.step_async(actions)
-        return self.step_wait_gymnasium()
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        return self.step(actions)
 
     def step_fast(self, actions: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         self.step_async(actions)
@@ -1242,17 +1212,31 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         info = self._base_info_dict(index)
         if self._info_keys is not None:
             info = {key: info[key] for key in self._info_keys if key in info}
-        if self._done_on_info[index] and (
-            self._info_keys is None or "done_on_info" in self._info_keys
-        ):
+        done_on_info = self._done_on_info[index]
+        include_done_on_info = self._info_keys is None or "done_on_info" in self._info_keys
+        if done_on_info and include_done_on_info and not terminal:
             info["done_on_info"] = self._done_on_info[index]
         if terminal:
-            terminal_observation = self._terminal_observations[index]
-            if terminal_observation is not None:
-                info["terminal_observation"] = terminal_observation
-            info["reset_info"] = self._reset_info_dict(index)
-            info["TimeLimit.truncated"] = bool(self._truncated[index])
+            reset_info = self._reset_info_dict(index)
+            info.update(reset_info)
+            final_info: dict[str, Any] = {}
+            if done_on_info and include_done_on_info:
+                final_info["done_on_info"] = done_on_info
+            if bool(self._terminated[index]):
+                final_info["terminated"] = True
+            if bool(self._truncated[index]):
+                final_info["truncated"] = True
+            final_obs = self._terminal_observations[index]
+            if final_obs is not None:
+                info["final_obs"] = final_obs
+            info["final_info"] = final_info
         return info
+
+    def _vector_infos(self, lane_infos: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        infos: dict[str, Any] = {}
+        for index, lane_info in enumerate(lane_infos):
+            infos = self._add_info(infos, lane_info, index)
+        return infos
 
     def _base_info_dict(self, index: int) -> dict[str, Any]:
         return {
@@ -1336,46 +1320,6 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
     def close(self) -> None:
         self.closed = True
 
-    def get_attr(self, attr_name: str, indices: None | int | Iterable[int] = None) -> list[Any]:
-        if not hasattr(self, attr_name):
-            raise AttributeError(attr_name)
-        value = getattr(self, attr_name)
-        return [self._lane_attr_value(value, index) for index in self._get_indices(indices)]
-
-    def set_attr(self, attr_name: str, value: Any, indices: None | int | Iterable[int] = None) -> None:
-        if hasattr(self, attr_name):
-            current = getattr(self, attr_name)
-            if isinstance(current, np.ndarray) and current.shape[:1] == (self.num_envs,):
-                for index in self._get_indices(indices):
-                    current[int(index)] = value
-                return
-        selected = list(self._get_indices(indices))
-        if selected != list(range(self.num_envs)):
-            raise AttributeError(f"cannot set per-lane attribute {attr_name!r}")
-        setattr(self, attr_name, value)
-
-    def env_method(
-        self,
-        method_name: str,
-        *method_args: Any,
-        indices: None | int | Iterable[int] = None,
-        **method_kwargs: Any,
-    ) -> list[Any]:
-        if not hasattr(self, method_name):
-            raise AttributeError(method_name)
-        method = getattr(self, method_name)
-        if not callable(method):
-            raise AttributeError(f"{method_name!r} is not callable")
-        result = method(*method_args, **method_kwargs)
-        return [result for _ in self._get_indices(indices)]
-
-    def env_is_wrapped(
-        self,
-        wrapper_class: type[Any],
-        indices: None | int | Iterable[int] = None,
-    ) -> list[bool]:
-        return [False for _ in self._get_indices(indices)]
-
     def get_images(self) -> Sequence[np.ndarray | None]:
         if self.render_mode != "rgb_array":
             return [None for _ in range(self.num_envs)]
@@ -1384,16 +1328,13 @@ class SuperMarioBrosNesTurboVecEnv(_SB3VecEnv):
         self._core.rgb_frames_into(self._rgb_frames)
         return [self._rgb_frames[index].copy() for index in range(self.num_envs)]
 
-    def _lane_attr_value(self, value: Any, index: int) -> Any:
-        if isinstance(value, np.ndarray) and value.shape[:1] == (self.num_envs,):
-            item = value[int(index)]
-            return item.item() if isinstance(item, np.generic) else item
-        if isinstance(value, list) and len(value) == self.num_envs:
-            return value[int(index)]
-        if isinstance(value, tuple) and len(value) == self.num_envs and value != self.action_meanings:
-            return value[int(index)]
-        return value
-
+    def render(self) -> np.ndarray | None:
+        frames = [frame for frame in self.get_images() if frame is not None]
+        if not frames:
+            return None
+        if len(frames) == 1:
+            return frames[0]
+        return np.concatenate(frames, axis=0)
 
 def _normalize_state_value(state: Any) -> Any:
     name = getattr(state, "name", None)
