@@ -230,7 +230,12 @@ def test_prepare_source_cache_reuses_synced_commit_tree(
         prepared_dir = prepared_source_dir(plan, ref)
         tmp_dir = prepared_dir.with_name(f"{prepared_dir.name}.tmp")
         (tmp_dir / ".venv" / "bin").mkdir(parents=True)
+        site_packages = tmp_dir / ".venv" / "lib" / "python3.13" / "site-packages"
+        site_packages.mkdir(parents=True)
         (tmp_dir / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
+        (site_packages / "supermariobrosnes_turbo.pth").write_text(
+            str(tmp_dir / "python") + "\n"
+        )
 
     monkeypatch.setattr("scripts.run_git_ref_benchmark.target_run_stream", fake_run_stream)
 
@@ -242,7 +247,19 @@ def test_prepare_source_cache_reuses_synced_commit_tree(
     assert cache_dir == cached_again
     assert len(calls) == 1
     assert prepared_source_is_usable(cache_dir, ref)
+    pth = (
+        cache_dir
+        / ".venv"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "supermariobrosnes_turbo.pth"
+    )
+    assert pth.read_text() == str(cache_dir / "python") + "\n"
     assert (Path(plan.run_dir) / "sources" / "candidate").is_symlink()
+
+    pth.write_text(str(cache_dir.with_name(f"{cache_dir.name}.tmp") / "python") + "\n")
+    assert not prepared_source_is_usable(cache_dir, ref)
 
 
 def test_cap_checkpoints_treats_limit_as_upper_bound() -> None:
