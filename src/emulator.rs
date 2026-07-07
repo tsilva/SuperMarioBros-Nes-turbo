@@ -1444,24 +1444,16 @@ fn read_u16_le(value: &[u8]) -> Option<u16> {
 #[inline(always)]
 fn write_full_bg_tile_gray(dst: &mut [u8], lo: u8, hi: u8, colors: [u8; 4]) {
     debug_assert!(dst.len() >= 8);
-    // SAFETY: The caller passes at least eight destination pixels for a full tile,
-    // and each color index is built from two bitplanes, so it is in 0..4.
+    // SAFETY: The caller passes at least eight destination pixels for a full tile.
     unsafe {
-        *dst.get_unchecked_mut(0) =
-            *colors.get_unchecked((((lo >> 7) & 1) | (((hi >> 7) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(1) =
-            *colors.get_unchecked((((lo >> 6) & 1) | (((hi >> 6) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(2) =
-            *colors.get_unchecked((((lo >> 5) & 1) | (((hi >> 5) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(3) =
-            *colors.get_unchecked((((lo >> 4) & 1) | (((hi >> 4) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(4) =
-            *colors.get_unchecked((((lo >> 3) & 1) | (((hi >> 3) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(5) =
-            *colors.get_unchecked((((lo >> 2) & 1) | (((hi >> 2) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(6) =
-            *colors.get_unchecked((((lo >> 1) & 1) | (((hi >> 1) & 1) << 1)) as usize);
-        *dst.get_unchecked_mut(7) = *colors.get_unchecked(((lo & 1) | ((hi & 1) << 1)) as usize);
+        *dst.get_unchecked_mut(0) = colors[(((lo >> 7) & 1) | (((hi >> 7) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(1) = colors[(((lo >> 6) & 1) | (((hi >> 6) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(2) = colors[(((lo >> 5) & 1) | (((hi >> 5) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(3) = colors[(((lo >> 4) & 1) | (((hi >> 4) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(4) = colors[(((lo >> 3) & 1) | (((hi >> 3) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(5) = colors[(((lo >> 2) & 1) | (((hi >> 2) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(6) = colors[(((lo >> 1) & 1) | (((hi >> 1) & 1) << 1)) as usize];
+        *dst.get_unchecked_mut(7) = colors[((lo & 1) | ((hi & 1) << 1)) as usize];
     }
 }
 
