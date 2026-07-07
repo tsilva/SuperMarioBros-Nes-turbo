@@ -2044,22 +2044,17 @@ fn step_one(
             obs_chunk,
         );
     } else {
-        if done_on_info_rules.is_empty() {
-            reward += env.step_frames(action, config.frame_skip);
-            done = env.is_done();
-        } else {
-            for _ in 0..config.frame_skip {
-                reward += env.step_frame(action);
-                let done_on_info = check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
-                done = env.is_done() || done_on_info;
-                if done {
-                    break;
-                }
+        for _ in 0..config.frame_skip {
+            reward += env.step_frame(action);
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
+            done = env.is_done() || done_on_info;
+            if done {
+                break;
             }
         }
         shift_stack_left(config, obs_chunk);
@@ -2154,22 +2149,17 @@ fn step_one_profiled(
         );
         profiler.record_resize(resize_start.elapsed());
     } else {
-        if done_on_info_rules.is_empty() {
-            reward += env.step_frames_profiled(action, config.frame_skip, profiler);
-            done = env.is_done();
-        } else {
-            for _ in 0..config.frame_skip {
-                reward += env.step_frame_profiled(action, profiler);
-                let done_on_info = check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
-                done = env.is_done() || done_on_info;
-                if done {
-                    break;
-                }
+        for _ in 0..config.frame_skip {
+            reward += env.step_frame_profiled(action, profiler);
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
+            done = env.is_done() || done_on_info;
+            if done {
+                break;
             }
         }
         let shift_start = Instant::now();
