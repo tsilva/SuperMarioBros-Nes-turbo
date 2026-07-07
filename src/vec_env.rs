@@ -1255,7 +1255,33 @@ impl MarioVecEnv {
             let time = &mut time[..leader_count];
             let xscroll_hi = &mut xscroll_hi[..leader_count];
             let xscroll_lo = &mut xscroll_lo[..leader_count];
-            if leader_count >= PARALLEL_ENV_THRESHOLD {
+            if leader_count == 4 {
+                step_four_dense_leaders(
+                    config,
+                    &self.resize_plan,
+                    &self.done_on_info_rules,
+                    envs,
+                    scratch,
+                    actions,
+                    done_on_info_baselines,
+                    fired_done_on_info,
+                    obs,
+                    obs_stride,
+                    rewards,
+                    terminated,
+                    truncated,
+                    x_pos,
+                    coins,
+                    level_hi,
+                    level_lo,
+                    lives,
+                    score,
+                    scrolling,
+                    time,
+                    xscroll_hi,
+                    xscroll_lo,
+                );
+            } else if leader_count >= PARALLEL_ENV_THRESHOLD {
                 envs.par_iter_mut()
                     .zip(scratch.par_iter_mut())
                     .zip(actions.par_iter())
@@ -1852,6 +1878,186 @@ fn copy_obs_lane(obs: &mut [u8], obs_stride: usize, src_lane: usize, dst_lane: u
         let src = &right[..obs_stride];
         left[dst_start..dst_start + obs_stride].copy_from_slice(src);
     }
+}
+
+fn split_first4_mut<T>(slice: &mut [T]) -> (&mut T, &mut T, &mut T, &mut T) {
+    debug_assert!(slice.len() >= 4);
+    let (a, rest) = slice.split_at_mut(1);
+    let (b, rest) = rest.split_at_mut(1);
+    let (c, rest) = rest.split_at_mut(1);
+    (&mut a[0], &mut b[0], &mut c[0], &mut rest[0])
+}
+
+fn split_first4_chunks_mut(
+    slice: &mut [u8],
+    chunk_len: usize,
+) -> (&mut [u8], &mut [u8], &mut [u8], &mut [u8]) {
+    debug_assert!(slice.len() >= chunk_len * 4);
+    let (a, rest) = slice.split_at_mut(chunk_len);
+    let (b, rest) = rest.split_at_mut(chunk_len);
+    let (c, rest) = rest.split_at_mut(chunk_len);
+    let (d, _) = rest.split_at_mut(chunk_len);
+    (a, b, c, d)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn step_four_dense_leaders(
+    config: VecEnvConfig,
+    resize_plan: &AreaResizePlan,
+    done_on_info_rules: &[DoneOnInfoRule],
+    envs: &mut [NesEmulator],
+    scratch: &mut [Vec<u8>],
+    actions: &[u8],
+    done_on_info_baselines: &[InfoSnapshot],
+    fired_done_on_info: &mut [Vec<FiredDoneOnInfoRule>],
+    obs: &mut [u8],
+    obs_stride: usize,
+    rewards: &mut [f32],
+    terminated: &mut [bool],
+    truncated: &mut [bool],
+    x_pos: &mut [u16],
+    coins: &mut [u8],
+    level_hi: &mut [i16],
+    level_lo: &mut [i16],
+    lives: &mut [i16],
+    score: &mut [u32],
+    scrolling: &mut [i16],
+    time: &mut [u16],
+    xscroll_hi: &mut [u8],
+    xscroll_lo: &mut [u8],
+) {
+    let (env0, env1, env2, env3) = split_first4_mut(envs);
+    let (scratch0, scratch1, scratch2, scratch3) = split_first4_mut(scratch);
+    let (fired0, fired1, fired2, fired3) = split_first4_mut(fired_done_on_info);
+    let (obs0, obs1, obs2, obs3) = split_first4_chunks_mut(obs, obs_stride);
+    let (reward0, reward1, reward2, reward3) = split_first4_mut(rewards);
+    let (terminated0, terminated1, terminated2, terminated3) = split_first4_mut(terminated);
+    let (truncated0, truncated1, truncated2, truncated3) = split_first4_mut(truncated);
+    let (x0, x1, x2, x3) = split_first4_mut(x_pos);
+    let (coins0, coins1, coins2, coins3) = split_first4_mut(coins);
+    let (level_hi0, level_hi1, level_hi2, level_hi3) = split_first4_mut(level_hi);
+    let (level_lo0, level_lo1, level_lo2, level_lo3) = split_first4_mut(level_lo);
+    let (lives0, lives1, lives2, lives3) = split_first4_mut(lives);
+    let (score0, score1, score2, score3) = split_first4_mut(score);
+    let (scrolling0, scrolling1, scrolling2, scrolling3) = split_first4_mut(scrolling);
+    let (time0, time1, time2, time3) = split_first4_mut(time);
+    let (xscroll_hi0, xscroll_hi1, xscroll_hi2, xscroll_hi3) = split_first4_mut(xscroll_hi);
+    let (xscroll_lo0, xscroll_lo1, xscroll_lo2, xscroll_lo3) = split_first4_mut(xscroll_lo);
+
+    rayon::join(
+        || {
+            rayon::join(
+                || {
+                    step_one(
+                        config,
+                        resize_plan,
+                        env0,
+                        scratch0,
+                        done_on_info_baselines[0],
+                        done_on_info_rules,
+                        fired0,
+                        actions[0],
+                        obs0,
+                        reward0,
+                        terminated0,
+                        truncated0,
+                        x0,
+                        coins0,
+                        level_hi0,
+                        level_lo0,
+                        lives0,
+                        score0,
+                        scrolling0,
+                        time0,
+                        xscroll_hi0,
+                        xscroll_lo0,
+                    );
+                },
+                || {
+                    step_one(
+                        config,
+                        resize_plan,
+                        env1,
+                        scratch1,
+                        done_on_info_baselines[1],
+                        done_on_info_rules,
+                        fired1,
+                        actions[1],
+                        obs1,
+                        reward1,
+                        terminated1,
+                        truncated1,
+                        x1,
+                        coins1,
+                        level_hi1,
+                        level_lo1,
+                        lives1,
+                        score1,
+                        scrolling1,
+                        time1,
+                        xscroll_hi1,
+                        xscroll_lo1,
+                    );
+                },
+            );
+        },
+        || {
+            rayon::join(
+                || {
+                    step_one(
+                        config,
+                        resize_plan,
+                        env2,
+                        scratch2,
+                        done_on_info_baselines[2],
+                        done_on_info_rules,
+                        fired2,
+                        actions[2],
+                        obs2,
+                        reward2,
+                        terminated2,
+                        truncated2,
+                        x2,
+                        coins2,
+                        level_hi2,
+                        level_lo2,
+                        lives2,
+                        score2,
+                        scrolling2,
+                        time2,
+                        xscroll_hi2,
+                        xscroll_lo2,
+                    );
+                },
+                || {
+                    step_one(
+                        config,
+                        resize_plan,
+                        env3,
+                        scratch3,
+                        done_on_info_baselines[3],
+                        done_on_info_rules,
+                        fired3,
+                        actions[3],
+                        obs3,
+                        reward3,
+                        terminated3,
+                        truncated3,
+                        x3,
+                        coins3,
+                        level_hi3,
+                        level_lo3,
+                        lives3,
+                        score3,
+                        scrolling3,
+                        time3,
+                        xscroll_hi3,
+                        xscroll_lo3,
+                    );
+                },
+            );
+        },
+    );
 }
 
 fn actions_are_uniform(actions: &[u8], first_action: u8) -> bool {
