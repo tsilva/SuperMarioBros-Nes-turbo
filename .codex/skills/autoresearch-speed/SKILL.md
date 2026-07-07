@@ -7,126 +7,109 @@ description: Lightweight Super Mario Bros NES throughput optimization loop for t
 
 ## Contract
 
-Read this skill's `SPECS.md` before optimizing. Always obey its `PURPOSE` and
-`REQUIREMENTS`; never accept speedups that violate them, and never modify
-`SPECS.md` during an autoresearch-speed run.
+Read this skill's `SPECS.md` before optimizing. It is the invariant contract:
+accuracy is non-negotiable, benchmark semantics stay canonical, and only valid
+`env_steps_per_sec` gains count.
 
 Optimize the live repo on the current branch. Do not create or switch branches,
 fork workers, use SSH/tailnet/cloud/Modal, merge, push, or delete branches
 unless the user explicitly approves that in the current turn.
 
-Maximize the benchmark output variable `env_steps_per_sec`: largest valid gain,
-least wall-clock time, fewest useful tokens. Every candidate needs a concrete
-speed mechanism, cheap falsification path, and no environment-contract risk.
+Every candidate needs:
 
-Required path variables, from CLI flags, environment, or `.env`:
+- A concrete speed mechanism.
+- The cheapest falsification path before exact-ref benchmarking.
+- No risk to public API shape, deterministic lane behavior, observation bytes,
+  rewards, resets, terminations, infos, state loading, or benchmark workload.
+
+Required paths, from CLI flags, environment, or `.env`:
 
 - `ROM_PATH`: SMB NES ROM.
-- `AUTORESEARCH_ROOT_PATH`: existing directory for all mutable autoresearch
-  state. Tools must fail if it is unset, missing, or not a directory.
+- `AUTORESEARCH_ROOT_PATH`: existing directory for mutable autoresearch state.
 
-Keep mutable research artifacts outside the repo under `AUTORESEARCH_ROOT_PATH`:
+Keep mutable research artifacts out of the repo by default. The root owns
 `benchmarks/`, `states/`, `candidates/`, `current.json`, `results.tsv`,
 `ideas.md`, and `scratchpad.md`.
 
-## Controller
+## Sources of Truth
 
-Use `scripts/autoresearch.py` as the loop controller. It owns the standard
-diagnosis, screening, acceptance, check, and recording command shapes:
+Use `scripts/autoresearch.py` as the loop controller. It owns the normal command
+shapes, benchmark sizes, exact-ref tiers, checks, recording, and next-step hints:
 
 ```bash
 .venv/bin/python scripts/autoresearch.py init
 .venv/bin/python scripts/autoresearch.py status
 .venv/bin/python scripts/autoresearch.py probe [--dry-run]
-.venv/bin/python scripts/autoresearch.py diagnose [--profile]
+.venv/bin/python scripts/autoresearch.py diagnose [--quick] [--profile] [--dry-run]
 .venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [-- <extra runner args>]
-.venv/bin/python scripts/autoresearch.py checks [--quick] [--surface auto|native|python|benchmark]
+.venv/bin/python scripts/autoresearch.py checks [--quick] [--dry-run] [--surface auto|native|python|benchmark]
 .venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [-- <extra runner args>]
-.venv/bin/python scripts/autoresearch.py record <aggregate.json> [--description "..."] [--artifact <path>]
+.venv/bin/python scripts/autoresearch.py record <aggregate.json> [--status <status>] [--description "..."] [--artifact <path>]
 ```
 
-`scripts/run_git_ref_benchmark.py` owns official benchmark semantics.
-`RESULTS_TSV_COLUMNS` is the source of truth for `results.tsv`; do not duplicate,
-rename, split, or alias benchmark fields in the skill or ledger.
+Also defer to:
 
-Use `scripts/autoresearch.py init` to create missing mutable state under
-`AUTORESEARCH_ROOT_PATH`, and `scripts/autoresearch.py status` to inspect the
-current ledger, recent benchmark index, git state, and next controller hint.
+- `scripts/run_git_ref_benchmark.py` for official benchmark semantics.
+- `RESULTS_TSV_COLUMNS` for the exact `results.tsv` schema.
+- `scripts/benchmark_sps.py` for the live current-checkout SPS workload.
+- Repo-root `SPECS.md` for durable package/API/release requirements.
 
-Use `scripts/autoresearch.py probe`, `make benchmark`, or
-`scripts/autoresearch.py diagnose` for the live current-checkout loop. `probe`
-is the cheapest smoke-sized speed signal and can only justify discarding or
-doing deeper diagnosis; it cannot justify screening, acceptance, or a keep.
-`diagnose` matches the default local benchmark scale
-(`16` envs, `5000` steps, `3` repeats, `500` warmup) and writes a JSON artifact
-under `AUTORESEARCH_ROOT_PATH/benchmarks/`. Use `diagnose --quick` only as a
-smoke-sized falsification pass, and `diagnose --profile` when profiler evidence
-is the cheapest next signal.
+Do not duplicate, rename, split, or alias benchmark fields in this skill or in
+the ledger. If prose and code disagree, trust the code and fix the prose.
 
 ## Loop
 
-1. `orient`: verify git state/current branch, read `SPECS.md`, inspect
-   `AUTORESEARCH_ROOT_PATH/results.tsv` and `ideas.md`, and pick the highest-ROI
-   live hypothesis.
-2. `probe`/`diagnose`: run the cheapest source inspection, profiler, smoke
-   timing, or narrow equivalence check that can falsify the mechanism.
-3. `prototype`: make one small edit; after native edits, rebuild with
-   `.venv/bin/python -m maturin develop --release` before Python timings.
-4. `quick-check`: before triage, run
+1. `orient`: run `status`, verify git state/current branch, read both SPECS
+   files, inspect `results.tsv` and `ideas.md`, then choose the highest expected
+   verified SPS gain per unit time.
+2. `falsify`: use source inspection, prior rejects, `probe`, `diagnose --quick`,
+   `diagnose --profile`, or a narrow equivalence check. Local probe/diagnosis is
+   learning evidence only; it can justify discard or deeper work, not a keep.
+3. `prototype`: make one small edit. After native edits, rebuild with
+   `.venv/bin/python -m maturin develop --release` before Python timing.
+4. `check`: before triage, run
    `scripts/autoresearch.py checks --quick --surface <surface>` matching the
-   touched surface. Use full `checks` only before acceptance or when the touched
-   surface demands it.
-5. `screen`: only committed plausible candidates get exact-ref `local_triage`
-   through `scripts/autoresearch.py screen`. This is the first paired
-   baseline/candidate run, and it is capped at three measured pairs. The
-   benchmark runner caches prepared exact-ref source trees by commit under
-   `AUTORESEARCH_ROOT_PATH/benchmarks/prepared-sources/` so repeated baselines
-   do not pay repeated archive extraction and `uv sync` setup cost.
-6. `accept`: after a promoted screen or explicit user request, run
-   `scripts/autoresearch.py checks`, then `scripts/autoresearch.py accept`.
-   On the dedicated quiet host this caps acceptance at the first high-signal
-   checkpoint (`11` measured pairs). If all validity and decision gates pass,
-   the result is accepted; if the cap is reached without valid gates, record it
-   as inconclusive rather than weakening the evidence. Use `accept --full` for
-   public claims, baseline resets, noisy contenders that deserve more samples,
-   or any case where the user asks for the full ladder.
+   touched surface. Add targeted tests before triage when touching observations,
+   rewards, termination, reset behavior, action mapping, info fields,
+   preprocessing bytes, state loading, or Python API contracts.
+5. `screen`: commit only plausible candidates, then run exact-ref
+   `local_triage` with `scripts/autoresearch.py screen`. One default screen per
+   candidate is enough unless the user asks otherwise.
+6. `accept`: for clear wins, low-risk small wins, contract-sensitive changes, or
+   direct user requests, run full controller checks and then
+   `scripts/autoresearch.py accept`. Use `accept --full` for public claims,
+   baseline resets, noisy contenders worth more samples, or user-requested full
+   ladders.
 7. `record`: write every keep, discard, crash, skip, or inconclusive result with
    `scripts/autoresearch.py record` before starting the next idea.
-8. `retrospect`: append compact lessons to
-   `AUTORESEARCH_ROOT_PATH/scratchpad.md` when a mistake, hindsight conclusion,
-   friction, missing check, or heuristic would make the next run stronger. The
-   user reviews these later; do not update docs or skills from scratchpad notes
-   unless asked.
+8. `retrospect`: append compact lessons to `scratchpad.md` when a mistake,
+   hindsight conclusion, friction, missing check, or heuristic would make the
+   next run stronger. Do not update docs or skills from scratchpad notes unless
+   asked.
 
-## Decisions
+## Evidence Ladder
 
-Fast local probe/diagnosis is learning evidence only and may use cached or
-recent baseline numbers for direction. Exact-ref `local_triage` is screening
-only. Only `local_acceptance` can justify `keep`, `keep_small_gain`, accepted
-speedups, or baseline updates.
+- `probe`, `diagnose`, and `make benchmark`: learning evidence only.
+- `local_triage`: exact-ref screening only.
+- `local_acceptance`: the only tier that can justify `keep`,
+  `keep_small_gain`, accepted speedups, or baseline updates.
 
-Use one default screen per candidate. Escalate to acceptance only for clear
-wins, low-risk small wins, contract-sensitive questions that need official
-evidence, or direct user requests. Use `calibrate <ref>` periodically on the
-dedicated host to refresh single-ref variance for the accepted baseline; this is
-background context, not a substitute for paired acceptance. Discard ideas
-quickly when profile share, prior rejects, smoke timings, tests, or benchmark
-noise make the plausible gain smaller than the cost of proving it.
+Use `calibrate <ref>` periodically on the dedicated host to refresh single-ref
+variance for the accepted baseline; calibration is context, not a substitute for
+paired acceptance.
 
-Before triage, run the cheapest checks matching the touched surface. Before
-acceptance, run the controller checks. Add targeted tests before triage when
-touching observations, rewards, termination, reset behavior, action mapping,
-info fields, preprocessing bytes, state loading, or Python API contracts.
+Discard quickly when profile share, prior rejects, smoke timings, tests, or
+benchmark noise make the plausible gain smaller than the cost of proving it.
 
 Treat failures as regressions unless proven unrelated. If repair does not
-converge after focused attempts, record the rejection, reset the trial away, and
-move on. Do not accept from busy-machine or load-failed official measurements
-unless the user explicitly forced or waived that validity gate.
+converge after focused attempts, record the rejection, reset the trial, and move
+on. Do not accept busy-machine or load-failed official measurements unless the
+user explicitly forces or waives that validity gate.
 
-Prefer Rust-side hot-path changes in `src/emulator.rs`, `src/vec_env.rs`, and
-`src/py_api.rs`. Accepted scope limits: SMB mapper 0 / NROM only, no audio
-requirement, no general Gym Retro/arbitrary NES mapper compatibility, and
+Prefer Rust hot-path changes in `src/emulator.rs`, `src/vec_env.rs`, and
+`src/py_api.rs`. Scope limits are intentional: SMB mapper 0 / NROM only, no
+audio requirement, no general Gym Retro/arbitrary NES mapper compatibility, and
 RGB/uncropped renderers as compatibility paths.
 
 Preserve or strengthen deterministic lane behavior, public Python API shape,
@@ -145,10 +128,10 @@ decision: keep | keep_small_gain | discard | inconclusive | defer | pause
 next: one concrete next action
 ```
 
-Pause when access fails, user limits are exhausted, regressions persist,
-metadata is untrustworthy, unrelated branch changes would be included, refs are
-missing, timing is contaminated, low-ROI leftovers remain, two candidates die
-for the same reason, or the user asks to stop.
+Pause when access fails, user limits are exhausted, regressions persist, refs are
+missing, metadata/timing is untrustworthy, unrelated branch changes would be
+included, low-ROI leftovers remain, two candidates die for the same reason, or
+the user asks to stop.
 
 At session end, report branch, baseline/candidate refs, latest aggregate,
 accepted commits, rejects, checks, changed files, cleanup status, benchmark
