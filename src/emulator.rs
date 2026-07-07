@@ -2081,13 +2081,15 @@ impl NesEmulator {
 
     #[inline]
     fn fetch_u8(&mut self) -> u8 {
-        let value = if self.cpu.pc >= 0x8000 {
-            self.prg_read(self.cpu.pc)
+        let pc = self.cpu.pc;
+        self.cpu.pc = pc.wrapping_add(1);
+        if pc >= 0x8000 {
+            let idx = ((pc - 0x8000) as usize) & self.prg_addr_mask;
+            // SAFETY: SMB/NROM PRG ROM sizes are power-of-two and prg_addr_mask is len - 1.
+            unsafe { *self.prg_rom.get_unchecked(idx) }
         } else {
-            self.cpu_read(self.cpu.pc)
-        };
-        self.cpu.pc = self.cpu.pc.wrapping_add(1);
-        value
+            self.cpu_read(pc)
+        }
     }
 
     #[inline]
