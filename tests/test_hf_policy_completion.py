@@ -80,9 +80,11 @@ def level1_policy_config(*, steps: int = MAX_STEPS_PER_EPISODE) -> compare.Compa
         include_dones=False,
         include_infos=False,
         stop_on_done=True,
+        fixed_action=None,
         output_json=None,
         allow_version_mismatch=False,
         preprocessing_matrix=False,
+        termination_matrix=False,
     )
 
 
@@ -135,7 +137,7 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
                 retro_actions = retro_masks_by_action[fast_actions]
 
                 fast_obs, fast_rewards, fast_terminated, fast_truncated, fast_infos = fast_env.step_gymnasium(
-                    fast_actions,
+                    retro_actions,
                 )
                 retro_obs, retro_rewards, retro_terminated, retro_truncated, retro_infos = retro_env.step(
                     retro_actions,
@@ -169,6 +171,10 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
                     retro=retro_dones,
                     action_names=action_names,
                 )
+                if level_was_cleared(final_info):
+                    return
+                if bool(retro_dones[0]):
+                    break
                 compare.compare_infos(
                     phase="policy_step",
                     step=step,
@@ -176,10 +182,6 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
                     retro_infos=retro_infos,
                     action_names=action_names,
                 )
-                if level_was_cleared(final_info):
-                    return
-                if bool(retro_dones[0]):
-                    break
             episode_summaries.append(
                 {
                     "episode": episode,

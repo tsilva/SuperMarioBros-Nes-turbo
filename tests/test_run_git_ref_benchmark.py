@@ -393,7 +393,15 @@ def test_benchmark_command_pins_canonical_workload_flags(tmp_path: Path) -> None
         measured_cap=7,
     )
 
-    command = benchmark_command(plan, "candidate", "measured-candidate-00", steps=50000, repeats=3)
+    args = SimpleNamespace(max_load=4.0)
+    command = benchmark_command(
+        args,
+        plan,
+        "candidate",
+        "measured-candidate-00",
+        steps=50000,
+        repeats=3,
+    )
 
     for expected in (
         "--num-envs 16",
