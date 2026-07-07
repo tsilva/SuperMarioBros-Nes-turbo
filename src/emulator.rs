@@ -28,12 +28,6 @@ const DEFAULT_GRAY_CROP_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - DEFAULT_GRAY_CROP
 const DEFAULT_GRAY_RESIZE_WIDTH: usize = 84;
 const DEFAULT_GRAY_RESIZE_HEIGHT: usize = 84;
 const DEFAULT_GRAY_RESIZE_PIXELS: usize = DEFAULT_GRAY_RESIZE_WIDTH * DEFAULT_GRAY_RESIZE_HEIGHT;
-const DEFAULT_GRAY_Y0: [usize; DEFAULT_GRAY_RESIZE_HEIGHT] =
-    build_default_gray_axis_start(DEFAULT_GRAY_CROP_HEIGHT);
-const DEFAULT_GRAY_Y1: [usize; DEFAULT_GRAY_RESIZE_HEIGHT] =
-    build_default_gray_axis_end(DEFAULT_GRAY_CROP_HEIGHT);
-const DEFAULT_GRAY_Y_COUNT: [u16; DEFAULT_GRAY_RESIZE_HEIGHT] =
-    build_default_gray_axis_count(DEFAULT_GRAY_CROP_HEIGHT);
 const SMB_IDLE_JMP_PC: u16 = 0x8057;
 const SMB_IDLE_JMP_PPU_CYCLES: usize = 9;
 const SMB_SPRITE0_POLL_PC: u16 = 0x8150;
@@ -527,40 +521,24 @@ impl Ppu {
         );
 
         for dy in 0..DEFAULT_GRAY_RESIZE_HEIGHT {
-            let mut sums = [0u16; DEFAULT_GRAY_RESIZE_WIDTH];
-            for sy in DEFAULT_GRAY_Y0[dy]..DEFAULT_GRAY_Y1[dy] {
-                let row_start = sy * VISIBLE_FRAME_WIDTH;
-                accumulate_default_gray_area_row(
-                    &native[row_start..row_start + VISIBLE_FRAME_WIDTH],
-                    &mut sums,
-                );
-            }
-
-            let dst_row = dy * DEFAULT_GRAY_RESIZE_WIDTH;
-            if DEFAULT_GRAY_Y_COUNT[dy] == 2 {
-                for group in 0..12usize {
-                    let out = dst_row + group * 7;
-                    let sum = group * 7;
-                    dst[out] = (sums[sum] / 4) as u8;
-                    dst[out + 1] = (sums[sum + 1] / 6) as u8;
-                    dst[out + 2] = (sums[sum + 2] / 6) as u8;
-                    dst[out + 3] = (sums[sum + 3] / 6) as u8;
-                    dst[out + 4] = (sums[sum + 4] / 6) as u8;
-                    dst[out + 5] = (sums[sum + 5] / 6) as u8;
-                    dst[out + 6] = (sums[sum + 6] / 6) as u8;
+            let y0 = (dy * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT;
+            let y1 = (((dy + 1) * DEFAULT_GRAY_CROP_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT)
+                .max(y0 + 1)
+                .min(DEFAULT_GRAY_CROP_HEIGHT);
+            for dx in 0..DEFAULT_GRAY_RESIZE_WIDTH {
+                let x0 = (dx * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH;
+                let x1 = (((dx + 1) * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH)
+                    .max(x0 + 1)
+                    .min(VISIBLE_FRAME_WIDTH);
+                let mut sum = 0u32;
+                for sy in y0..y1 {
+                    let src_row = sy * VISIBLE_FRAME_WIDTH;
+                    for sx in x0..x1 {
+                        sum += native[src_row + sx] as u32;
+                    }
                 }
-            } else {
-                for group in 0..12usize {
-                    let out = dst_row + group * 7;
-                    let sum = group * 7;
-                    dst[out] = (sums[sum] / 6) as u8;
-                    dst[out + 1] = (sums[sum + 1] / 9) as u8;
-                    dst[out + 2] = (sums[sum + 2] / 9) as u8;
-                    dst[out + 3] = (sums[sum + 3] / 9) as u8;
-                    dst[out + 4] = (sums[sum + 4] / 9) as u8;
-                    dst[out + 5] = (sums[sum + 5] / 9) as u8;
-                    dst[out + 6] = (sums[sum + 6] / 9) as u8;
-                }
+                dst[dy * DEFAULT_GRAY_RESIZE_WIDTH + dx] =
+                    (sum / ((x1 - x0) * (y1 - y0)) as u32) as u8;
             }
         }
     }
@@ -1404,84 +1382,6 @@ fn next_ppu_event_dot(current: usize) -> usize {
     } else {
         PPU_DOTS_PER_FRAME
     }
-}
-
-#[inline(always)]
-fn accumulate_default_gray_area_row(row: &[u8], sums: &mut [u16; DEFAULT_GRAY_RESIZE_WIDTH]) {
-    debug_assert!(row.len() >= VISIBLE_FRAME_WIDTH);
-    for group in 0..12usize {
-        let src = group * 20;
-        let dst = group * 7;
-        // SAFETY: callers pass exactly one 240-pixel default source row; each
-        // 20-pixel group maps into seven bins and the loop covers 12 groups.
-        unsafe {
-            sums[dst] += *row.get_unchecked(src) as u16 + *row.get_unchecked(src + 1) as u16;
-            sums[dst + 1] += *row.get_unchecked(src + 2) as u16
-                + *row.get_unchecked(src + 3) as u16
-                + *row.get_unchecked(src + 4) as u16;
-            sums[dst + 2] += *row.get_unchecked(src + 5) as u16
-                + *row.get_unchecked(src + 6) as u16
-                + *row.get_unchecked(src + 7) as u16;
-            sums[dst + 3] += *row.get_unchecked(src + 8) as u16
-                + *row.get_unchecked(src + 9) as u16
-                + *row.get_unchecked(src + 10) as u16;
-            sums[dst + 4] += *row.get_unchecked(src + 11) as u16
-                + *row.get_unchecked(src + 12) as u16
-                + *row.get_unchecked(src + 13) as u16;
-            sums[dst + 5] += *row.get_unchecked(src + 14) as u16
-                + *row.get_unchecked(src + 15) as u16
-                + *row.get_unchecked(src + 16) as u16;
-            sums[dst + 6] += *row.get_unchecked(src + 17) as u16
-                + *row.get_unchecked(src + 18) as u16
-                + *row.get_unchecked(src + 19) as u16;
-        }
-    }
-}
-
-const fn build_default_gray_axis_start(src_len: usize) -> [usize; DEFAULT_GRAY_RESIZE_HEIGHT] {
-    let mut out = [0usize; DEFAULT_GRAY_RESIZE_HEIGHT];
-    let mut idx = 0usize;
-    while idx < DEFAULT_GRAY_RESIZE_HEIGHT {
-        out[idx] = (idx * src_len) / DEFAULT_GRAY_RESIZE_HEIGHT;
-        idx += 1;
-    }
-    out
-}
-
-const fn build_default_gray_axis_end(src_len: usize) -> [usize; DEFAULT_GRAY_RESIZE_HEIGHT] {
-    let mut out = [0usize; DEFAULT_GRAY_RESIZE_HEIGHT];
-    let mut idx = 0usize;
-    while idx < DEFAULT_GRAY_RESIZE_HEIGHT {
-        let start = (idx * src_len) / DEFAULT_GRAY_RESIZE_HEIGHT;
-        let mut end = ((idx + 1) * src_len) / DEFAULT_GRAY_RESIZE_HEIGHT;
-        if end < start + 1 {
-            end = start + 1;
-        }
-        if end > src_len {
-            end = src_len;
-        }
-        out[idx] = end;
-        idx += 1;
-    }
-    out
-}
-
-const fn build_default_gray_axis_count(src_len: usize) -> [u16; DEFAULT_GRAY_RESIZE_HEIGHT] {
-    let mut out = [0u16; DEFAULT_GRAY_RESIZE_HEIGHT];
-    let mut idx = 0usize;
-    while idx < DEFAULT_GRAY_RESIZE_HEIGHT {
-        let start = (idx * src_len) / DEFAULT_GRAY_RESIZE_HEIGHT;
-        let mut end = ((idx + 1) * src_len) / DEFAULT_GRAY_RESIZE_HEIGHT;
-        if end < start + 1 {
-            end = start + 1;
-        }
-        if end > src_len {
-            end = src_len;
-        }
-        out[idx] = (end - start) as u16;
-        idx += 1;
-    }
-    out
 }
 
 fn prg_rom_supports_smb_idle_jmp(prg_rom: &[u8], mask: usize) -> bool {
