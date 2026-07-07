@@ -39,12 +39,13 @@ shapes, benchmark sizes, exact-ref tiers, checks, recording, and next-step hints
 ```bash
 .venv/bin/python scripts/autoresearch.py init
 .venv/bin/python scripts/autoresearch.py status
+.venv/bin/python scripts/autoresearch.py next
 .venv/bin/python scripts/autoresearch.py probe [--dry-run]
 .venv/bin/python scripts/autoresearch.py diagnose [--quick] [--profile] [--dry-run]
-.venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [-- <extra runner args>]
+.venv/bin/python scripts/autoresearch.py screen <baseline_ref> <candidate_ref> [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py checks [--quick] [--dry-run] [--surface auto|native|python|benchmark]
-.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [-- <extra runner args>]
-.venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [-- <extra runner args>]
+.venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref> [--full] [--dry-run] [--no-record] [-- <extra runner args>]
+.venv/bin/python scripts/autoresearch.py calibrate <ref> [--full] [--dry-run] [--no-record] [-- <extra runner args>]
 .venv/bin/python scripts/autoresearch.py record <aggregate.json> [--status <status>] [--description "..."] [--artifact <path>]
 ```
 
@@ -61,8 +62,8 @@ the ledger. If prose and code disagree, trust the code and fix the prose.
 ## Loop
 
 1. `orient`: run `status`, verify git state/current branch, read both SPECS
-   files, inspect `results.tsv` and `ideas.md`, then choose the highest expected
-   verified SPS gain per unit time.
+   files, inspect `results.tsv` and `ideas.md`, then run `next` and choose the
+   highest expected verified SPS gain per unit time.
 2. `falsify`: use source inspection, prior rejects, `probe`, `diagnose --quick`,
    `diagnose --profile`, or a narrow equivalence check. Local probe/diagnosis is
    learning evidence only; it can justify discard or deeper work, not a keep.
@@ -81,8 +82,9 @@ the ledger. If prose and code disagree, trust the code and fix the prose.
    `scripts/autoresearch.py accept`. Use `accept --full` for public claims,
    baseline resets, noisy contenders worth more samples, or user-requested full
    ladders.
-7. `record`: write every keep, discard, crash, skip, or inconclusive result with
-   `scripts/autoresearch.py record` before starting the next idea.
+7. `record`: `screen`, `accept`, and `calibrate` auto-record finalized
+   aggregates by default. Use `record` only for manual/imported aggregates or
+   status overrides.
 8. `retrospect`: append compact lessons to `scratchpad.md` when a mistake,
    hindsight conclusion, friction, missing check, or heuristic would make the
    next run stronger. Do not update docs or skills from scratchpad notes unless

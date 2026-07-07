@@ -17,12 +17,14 @@ try:
     from dotenv_utils import require_arg_or_env_or_dotenv_path
     from run_git_ref_benchmark import (
         AUTORESEARCH_ROOT_ENV,
+        LOCAL_RESULTS_SUBDIR,
         RESULTS_TSV_COLUMNS,
     )
 except ModuleNotFoundError:
     from scripts.dotenv_utils import require_arg_or_env_or_dotenv_path
     from scripts.run_git_ref_benchmark import (
         AUTORESEARCH_ROOT_ENV,
+        LOCAL_RESULTS_SUBDIR,
         RESULTS_TSV_COLUMNS,
     )
 
@@ -201,6 +203,10 @@ def run_command(
     return subprocess.run(command, check=False, env=env).returncode
 
 
+def benchmark_index_path(root: Path) -> Path:
+    return root / "benchmarks" / LOCAL_RESULTS_SUBDIR / "index.jsonl"
+
+
 def load_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     if not isinstance(payload, dict):
@@ -325,16 +331,34 @@ def event_from_aggregate(
     return event
 
 
+def record_aggregate(
+    root: Path,
+    aggregate_path: Path,
+    *,
+    status: str | None = None,
+    description: str = "",
+    artifact: str | None = None,
+) -> dict[str, Any]:
+    event = event_from_aggregate(
+        aggregate_path,
+        status=status,
+        description=description,
+        artifact=artifact,
+    )
+    append_jsonl(root / "events.jsonl", event)
+    append_tsv(root / "results.tsv", event)
+    return event
+
+
 def record(args: argparse.Namespace) -> int:
     root = autoresearch_root(args.autoresearch_root)
-    event = event_from_aggregate(
+    event = record_aggregate(
+        root,
         args.aggregate,
         status=args.status,
         description=args.description or "",
         artifact=args.artifact,
     )
-    append_jsonl(root / "events.jsonl", event)
-    append_tsv(root / "results.tsv", event)
     print(
         json.dumps(
             {
@@ -410,6 +434,17 @@ def read_jsonl_tail(path: Path, limit: int = 5) -> list[dict[str, Any]]:
     return records[-limit:]
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        records.append(json.loads(line))
+    return records
+
+
 def read_tsv_tail(path: Path, limit: int = 5) -> list[dict[str, str]]:
     if not path.exists() or path.stat().st_size == 0:
         return []
@@ -421,8 +456,7 @@ def read_tsv_tail(path: Path, limit: int = 5) -> list[dict[str, str]]:
     return rows[-limit:]
 
 
-def status(args: argparse.Namespace) -> int:
-    root = autoresearch_root(args.autoresearch_root)
+def status_payload(root: Path, *, limit: int) -> dict[str, Any]:
     branch = subprocess.run(
         ["git", "branch", "--show-current"],
         check=False,
@@ -435,12 +469,9 @@ def status(args: argparse.Namespace) -> int:
         stdout=subprocess.PIPE,
         text=True,
     ).stdout.splitlines()
-    latest_results = read_tsv_tail(root / "results.tsv", limit=args.limit)
-    local_index = read_jsonl_tail(
-        root / "benchmarks" / "local-results" / "index.jsonl",
-        limit=args.limit,
-    )
-    payload = {
+    latest_results = read_tsv_tail(root / "results.tsv", limit=limit)
+    local_index = read_jsonl_tail(benchmark_index_path(root), limit=limit)
+    return {
         "root": str(root),
         "branch": branch,
         "git_status_short": git_status,
@@ -449,13 +480,38 @@ def status(args: argparse.Namespace) -> int:
             "ideas": str(root / "ideas.md"),
             "scratchpad": str(root / "scratchpad.md"),
             "current": str(root / "current.json"),
-            "benchmark_index": str(root / "benchmarks" / "local-results" / "index.jsonl"),
+            "benchmark_index": str(benchmark_index_path(root)),
         },
         "latest_results": latest_results,
         "latest_benchmarks": local_index,
         "next": infer_next_action(latest_results, local_index),
     }
+
+
+def status(args: argparse.Namespace) -> int:
+    root = autoresearch_root(args.autoresearch_root)
+    payload = status_payload(root, limit=args.limit)
     print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def next_action(args: argparse.Namespace) -> int:
+    root = autoresearch_root(args.autoresearch_root)
+    payload = status_payload(root, limit=args.limit)
+    latest_results = payload["latest_results"]
+    latest_benchmarks = payload["latest_benchmarks"]
+    print(
+        json.dumps(
+            {
+                "root": payload["root"],
+                "next": payload["next"],
+                "latest_result": latest_results[-1] if latest_results else None,
+                "latest_benchmark": latest_benchmarks[-1] if latest_benchmarks else None,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -463,6 +519,13 @@ def infer_next_action(
     latest_results: list[dict[str, str]],
     latest_benchmarks: list[dict[str, Any]],
 ) -> str:
+    latest_result_epoch = latest_results[-1].get("epoch") if latest_results else None
+    latest_benchmark = latest_benchmarks[-1] if latest_benchmarks else None
+    if latest_benchmark and latest_benchmark.get("run_name") != latest_result_epoch:
+        local_dir = latest_benchmark.get("local_result_dir")
+        if local_dir:
+            aggregate = Path(local_dir) / "aggregate.json"
+            return f"Run `autoresearch.py record {aggregate}` for the latest unrecorded benchmark."
     if not latest_results and not latest_benchmarks:
         return (
             "Run `autoresearch.py probe` or `autoresearch.py diagnose --quick` "
@@ -476,6 +539,59 @@ def infer_next_action(
     if latest_status in {"keep", "keep_small_gain"}:
         return "Update the accepted baseline and refresh calibration when the host is quiet."
     return "Inspect the latest aggregate and decide whether to discard, probe deeper, or screen."
+
+
+def auto_record_latest_benchmark(root: Path, before_run_names: set[str]) -> dict[str, Any] | None:
+    records = read_jsonl(benchmark_index_path(root))
+    new_records = [
+        record
+        for record in records
+        if isinstance(record.get("run_name"), str)
+        and record["run_name"] not in before_run_names
+    ]
+    if not new_records:
+        print("auto_record: no finalized benchmark aggregate found")
+        return None
+    latest = new_records[-1]
+    local_dir = latest.get("local_result_dir")
+    if not isinstance(local_dir, str):
+        print("auto_record: latest benchmark index row has no local_result_dir")
+        return None
+    aggregate_path = Path(local_dir) / "aggregate.json"
+    if not aggregate_path.exists():
+        print(f"auto_record: aggregate missing at {aggregate_path}")
+        return None
+    event = record_aggregate(root, aggregate_path)
+    print(
+        json.dumps(
+            {
+                "auto_recorded": str(aggregate_path),
+                "status": event["status"],
+                "results": str(root / "results.tsv"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return event
+
+
+def run_benchmark_command(
+    root: Path,
+    command: list[str],
+    *,
+    dry_run: bool,
+    auto_record: bool,
+) -> int:
+    before_run_names = {
+        record["run_name"]
+        for record in read_jsonl(benchmark_index_path(root))
+        if isinstance(record.get("run_name"), str)
+    }
+    returncode = run_command(command, dry_run=dry_run)
+    if returncode == 0 and auto_record and not dry_run:
+        auto_record_latest_benchmark(root, before_run_names)
+    return returncode
 
 
 def check_commands(*, quick: bool, surface: str) -> list[list[str]]:
@@ -523,6 +639,9 @@ def benchmark_extra_args(args: argparse.Namespace) -> list[str]:
     if "--full" in extra_args:
         args.full = True
         extra_args = [arg for arg in extra_args if arg != "--full"]
+    if "--no-record" in extra_args:
+        args.no_record = True
+        extra_args = [arg for arg in extra_args if arg != "--no-record"]
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
     return extra_args
@@ -538,6 +657,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--autoresearch-root")
     status_parser.add_argument("--limit", type=int, default=5)
+
+    next_parser = subparsers.add_parser("next")
+    next_parser.add_argument("--autoresearch-root")
+    next_parser.add_argument("--limit", type=int, default=5)
 
     probe_parser = subparsers.add_parser("probe")
     probe_parser.add_argument("--autoresearch-root")
@@ -564,6 +687,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                 help="Run the full uncapped acceptance ladder instead of the dedicated-host cap.",
             )
         benchmark_parser.add_argument("--dry-run", action="store_true")
+        benchmark_parser.add_argument(
+            "--no-record",
+            action="store_true",
+            help="Skip automatic ledger recording after a successful finalized benchmark.",
+        )
         benchmark_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
     calibrate_parser = subparsers.add_parser("calibrate")
@@ -574,6 +702,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Run the full uncapped single-ref ladder instead of the dedicated-host cap.",
     )
     calibrate_parser.add_argument("--dry-run", action="store_true")
+    calibrate_parser.add_argument(
+        "--no-record",
+        action="store_true",
+        help="Skip automatic ledger recording after a successful finalized benchmark.",
+    )
     calibrate_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
     checks_parser = subparsers.add_parser("checks")
@@ -603,6 +736,10 @@ def main(argv: list[str]) -> int:
         if args.limit <= 0:
             raise SystemExit("--limit must be positive")
         return status(args)
+    if args.command == "next":
+        if args.limit <= 0:
+            raise SystemExit("--limit must be positive")
+        return next_action(args)
     if args.command == "probe":
         root = autoresearch_root(args.autoresearch_root)
         return run_command(
@@ -618,21 +755,33 @@ def main(argv: list[str]) -> int:
             env_defaults={"RAYON_NUM_THREADS": "12"},
         )
     if args.command in {"screen", "accept"}:
+        root = autoresearch_root(None)
         command = build_benchmark_command(
             args.command,
             [args.baseline_ref, args.candidate_ref],
             benchmark_extra_args(args),
             full=getattr(args, "full", False),
         )
-        return run_command(command, dry_run=args.dry_run)
+        return run_benchmark_command(
+            root,
+            command,
+            dry_run=args.dry_run,
+            auto_record=not args.no_record,
+        )
     if args.command == "calibrate":
+        root = autoresearch_root(None)
         command = build_benchmark_command(
             args.command,
             [args.ref],
             benchmark_extra_args(args),
             full=args.full,
         )
-        return run_command(command, dry_run=args.dry_run)
+        return run_benchmark_command(
+            root,
+            command,
+            dry_run=args.dry_run,
+            auto_record=not args.no_record,
+        )
     if args.command == "checks":
         return checks(args)
     if args.command == "record":
