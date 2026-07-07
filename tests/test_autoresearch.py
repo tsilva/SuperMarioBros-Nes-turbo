@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from scripts.autoresearch import (
+    BENCHMARK_SCRIPT,
+    benchmark_extra_args,
+    build_benchmark_command,
+    build_diagnose_command,
+    event_from_aggregate,
+    infer_status,
+    record,
+    run_command,
+)
+from scripts.run_git_ref_benchmark import RESULTS_TSV_COLUMNS
+
+
+def test_screen_and_accept_commands_are_canonical() -> None:
+    screen = build_benchmark_command("screen", ["base", "cand"], [])
+    accept = build_benchmark_command("accept", ["base", "cand"], ["--force-busy"])
+
+    assert screen == [
+        sys.executable,
+        str(BENCHMARK_SCRIPT),
+        "base",
+        "cand",
+        "--steps",
+        "5000",
+        "--repeats",
+        "1",
+        "--warmups",
+        "0",
+        "--max-measured-invocations",
+        "3",
+    ]
+    assert accept == [
+        sys.executable,
+        str(BENCHMARK_SCRIPT),
+        "base",
+        "cand",
+        "--steps",
+        "50000",
+        "--repeats",
+        "3",
+        "--force-busy",
+    ]
+
+
+def test_benchmark_extra_args_accepts_dry_run_after_refs() -> None:
+    class Args:
+        extra_args = ["--dry-run", "--", "--force-busy"]
+        dry_run = False
+
+    assert benchmark_extra_args(Args) == ["--force-busy"]
+    assert Args.dry_run is True
+
+
+def test_diagnose_command_writes_under_autoresearch_root(tmp_path: Path) -> None:
+    command = build_diagnose_command(tmp_path, profile=True)
+
+    assert "--profile-output" in command
+    assert str(tmp_path / "benchmarks" / "local-profile.json") in command
+    assert str(tmp_path / "benchmarks" / "local-profile-benchmark.json") in command
+
+
+def test_run_command_prints_env_defaults_for_dry_run(capsys, monkeypatch) -> None:
+    monkeypatch.delenv("AUTORESEARCH_TEST_ENV_DEFAULT", raising=False)
+
+    assert (
+        run_command(
+            ["python", "-V"],
+            dry_run=True,
+            env_defaults={"AUTORESEARCH_TEST_ENV_DEFAULT": "1"},
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "AUTORESEARCH_TEST_ENV_DEFAULT=1 python -V\n"
+
+
+def test_infer_status_uses_benchmark_decision_fields() -> None:
+    assert infer_status({"benchmark_tier": "local_triage", "median_pair_ratio": 1.04}) == "triage_promote"
+    assert infer_status({"benchmark_tier": "local_triage", "median_pair_ratio": 1.0}) == "triage_discard"
+    assert (
+        infer_status(
+            {
+                "benchmark_tier": "local_acceptance",
+                "decision": "converged_candidate_win",
+                "validity_passed": True,
+                "load_gate_passed": True,
+            }
+        )
+        == "keep"
+    )
+    assert (
+        infer_status(
+            {
+                "benchmark_tier": "local_acceptance",
+                "decision": "continue",
+                "load_gate_passed": True,
+                "stability_gates": {"stable": True},
+                "median_pair_ratio": 1.001,
+                "pair_ratio_bootstrap_ci95": [1.0, 1.002],
+                "candidate_faster_pairs": 3,
+                "candidate_faster_pairs_required_for_win": 3,
+            }
+        )
+        == "keep_small_gain"
+    )
+
+
+def test_record_appends_events_and_results_tsv(tmp_path: Path) -> None:
+    root = tmp_path / "autoresearch"
+    root.mkdir()
+    aggregate_path = tmp_path / "aggregate.json"
+    aggregate_path.write_text(
+        json.dumps(
+            {
+                "run_name": "benchmark-compare-test",
+                "benchmark_tier": "local_triage",
+                "mode": "paired_compare_fixed_local",
+                "workload_hash": "abc123",
+                "refs": {"baseline": "main", "candidate": "HEAD"},
+                "shas": {"baseline": "1" * 40, "candidate": "2" * 40},
+                "median_pair_ratio": 1.04,
+                "measured_pairs": 3,
+                "expected_rom_sha256": "expected",
+                "rom_sha256": "actual",
+            }
+        )
+        + "\n"
+    )
+
+    class Args:
+        aggregate = aggregate_path
+        autoresearch_root = str(root)
+        status = None
+        description = "screen passed"
+        artifact = None
+
+    assert record(Args) == 0
+    event = json.loads((root / "events.jsonl").read_text().splitlines()[0])
+    rows = (root / "results.tsv").read_text().splitlines()
+
+    assert event["status"] == "triage_promote"
+    assert event["commit"] == "2" * 40
+    assert rows[0].split("\t") == list(RESULTS_TSV_COLUMNS)
+    values = dict(zip(rows[0].split("\t"), rows[1].split("\t"), strict=True))
+    assert values["status"] == "triage_promote"
+    assert values["median_pair_ratio"] == "1.04"
+    assert values["description"] == "screen passed"
+
+
+def test_event_from_aggregate_allows_status_override(tmp_path: Path) -> None:
+    aggregate_path = tmp_path / "aggregate.json"
+    aggregate_path.write_text(json.dumps({"benchmark_tier": "local_diagnosis"}) + "\n")
+
+    event = event_from_aggregate(
+        aggregate_path,
+        status="discard",
+        description="manual rejection",
+        artifact=None,
+    )
+
+    assert event["status"] == "discard"
+    assert event["description"] == "manual rejection"
