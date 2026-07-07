@@ -51,7 +51,7 @@ autoresearch-checks:
 	$(PYTHON) scripts/autoresearch.py checks
 
 release:
-	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev --group dev
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --frozen --extra dev --group dev
 	scripts/release.py
 
 test-rust:
