@@ -15,7 +15,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-supermariobrosnes-turbo = "2026-07-04T07:50:05Z"
+supermariobrosnes-turbo = "2026-07-07T13:14:15Z"
 stable-retro-turbo = "2026-07-07T00:00:00Z"
 
 [manifest]
@@ -2769,7 +2769,7 @@ wheels = [
 
 [[package]]
 name = "supermariobrosnes-turbo"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "gymnasium", version = "1.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
