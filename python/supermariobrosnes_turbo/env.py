@@ -1065,12 +1065,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
     def step_wait_gymnasium(
         self,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-        obs, rewards, terminated, truncated = self.step_wait_fast()
-        infos = self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
-        return obs, rewards, terminated, truncated, infos
-
-    def step_wait_fast(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Step the whole batch without allocating per-env info dictionaries."""
         self._core.step_into(
             self._actions,
             self._obs,
@@ -1088,13 +1082,35 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             self._xscroll_hi,
             self._xscroll_lo,
         )
+        self._finish_native_step()
+        obs, rewards, terminated, truncated = (
+            self._return_obs(),
+            self._return_rewards(),
+            self._terminated,
+            self._truncated,
+        )
+        infos = self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
+        return obs, rewards, terminated, truncated, infos
+
+    def step_wait_fast(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Step the whole batch without allocating per-env info dictionaries."""
+        self._core.step_fast_into(
+            self._actions,
+            self._obs,
+            self._rewards,
+            self._terminated,
+            self._truncated,
+        )
+        self._finish_native_step()
+        return self._return_obs(), self._return_rewards(), self._terminated, self._truncated
+
+    def _finish_native_step(self) -> None:
         has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
         if has_terminal:
             self._write_active_state_indices()
             self._write_terminal_observations()
         if self.done_on_info_rules:
             self._write_done_on_info()
-        return self._return_obs(), self._return_rewards(), self._terminated, self._truncated
 
     def _write_done_on_info(self) -> None:
         reports = self._core.done_on_info()
