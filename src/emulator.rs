@@ -245,14 +245,13 @@ impl Ppu {
         let mut completed_frame = false;
         let mut remaining = ppu_cycles;
         while remaining > 0 {
-            let current = self.frame_dot;
+            let current = self.dot();
             let next = next_ppu_event_dot(current);
             let advance = remaining.min(next - current);
-            let dot = current + advance;
-            self.frame_dot = dot;
+            self.set_dot(current + advance);
             remaining -= advance;
 
-            match dot {
+            match self.dot() {
                 PPU_SPRITE0_DOT => self.status |= 0x40,
                 PPU_VBLANK_DOT => {
                     self.status |= 0x80;
@@ -282,9 +281,13 @@ impl Ppu {
     }
 
     #[inline]
+    fn dot(&self) -> usize {
+        self.frame_dot
+    }
+
+    #[inline]
     fn cycles_until_next_event(&self) -> usize {
-        let dot = self.frame_dot;
-        next_ppu_event_dot(dot) - dot
+        next_ppu_event_dot(self.dot()) - self.dot()
     }
 
     #[inline]
@@ -292,7 +295,6 @@ impl Ppu {
         self.status & 0x40 != 0
     }
 
-    #[cfg(test)]
     #[inline]
     fn set_dot(&mut self, dot: usize) {
         self.frame_dot = dot;
