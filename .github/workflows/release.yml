@@ -55,17 +55,20 @@ jobs:
           import hashlib
           from pathlib import Path
 
-          import stable_retro
-
           expected_sha256 = "f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de"
-          rom_path = (
-              Path(stable_retro.__file__).resolve().parent
-              / "data"
-              / "stable"
-              / "SuperMarioBros-Nes-v0"
-              / "rom.nes"
-          )
-          if rom_path.exists():
+          try:
+              import stable_retro
+          except ModuleNotFoundError:
+              rom_path = None
+          else:
+              rom_path = (
+                  Path(stable_retro.__file__).resolve().parent
+                  / "data"
+                  / "stable"
+                  / "SuperMarioBros-Nes-v0"
+                  / "rom.nes"
+              )
+          if rom_path is not None and rom_path.exists():
               digest = hashlib.sha256(rom_path.read_bytes()).hexdigest()
               if digest != expected_sha256:
                   raise SystemExit(f"unexpected release ROM SHA-256: {digest}")
