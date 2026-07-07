@@ -11,10 +11,44 @@ from pathlib import Path
 import numpy as np
 
 from supermariobrosnes_turbo import Actions, CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_turbo import ROM_PATH_ENV_VAR
 from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
 
-DEFAULT_ROM = default_rom_path()
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def dotenv_value(name: str, dotenv_path: Path) -> str | None:
+    try:
+        lines = dotenv_path.read_text().splitlines()
+    except FileNotFoundError:
+        return None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        key, separator, raw_value = stripped.partition("=")
+        if separator != "=" or key.strip() != name:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value or None
+    return None
+
+
+def play_default_rom_path() -> Path | None:
+    path = default_rom_path()
+    if path is not None:
+        return path
+    value = dotenv_value(ROM_PATH_ENV_VAR, REPO_ROOT / ".env")
+    return Path(value).expanduser() if value else None
+
+
+DEFAULT_ROM = play_default_rom_path()
 NES_WIDTH = 256
 NES_HEIGHT = 240
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
@@ -113,7 +147,7 @@ class SdlExternalVecPlayer:
         self.display_grayscale = grayscale
         self.scale = args.scale
         self.frame_delay_s = 1.0 / max(1, args.fps)
-        self.obs = self.env.reset()[0]
+        self.obs = self.reset_one()
         initial_frame = display_frame_from_obs(self.obs, self.display_grayscale)
         self.display_height, self.display_width = initial_frame.shape[:2]
         self.reward = 0.0
@@ -178,7 +212,7 @@ class SdlExternalVecPlayer:
                 self.obs, reward, self.terminated, self.truncated, self.info = self.step_one(action)
                 self.reward += reward
                 if self.terminated or self.truncated:
-                    self.obs = self.env.reset()[0]
+                    self.obs = self.reset_one()
                     self.reward = 0.0
 
                 self.render()
@@ -271,6 +305,10 @@ class SdlExternalVecPlayer:
             bool(truncated[0]),
             lane_info(infos, 0),
         )
+
+    def reset_one(self) -> np.ndarray:
+        obs, _infos = self.env.reset()
+        return obs[0]
 
     def current_action(self) -> int:
         if SDLK_RETURN in self.pressed_keys:

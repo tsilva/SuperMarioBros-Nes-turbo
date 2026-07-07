@@ -39,6 +39,7 @@ constraint-dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "--basetemp=.pytest-tmp"
 markers = [
   "retro_oracle: manual acceptance tests that compare against stable-retro-turbo and require the local ROM",
 ]

@@ -243,7 +243,14 @@ def package_metadata() -> dict[str, str | None]:
 
 
 def resolve_verified_rom_path(path: str | Path | None = None) -> Path:
-    resolved = resolve_required_rom_path(path)
+    try:
+        resolved = resolve_required_rom_path(path)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not resolved.exists():
+        raise SystemExit(f"ROM path does not exist: {resolved}")
+    if not resolved.is_file():
+        raise SystemExit(f"ROM path is not a file: {resolved}")
     validate_rom_hash(resolved)
     return resolved
 
@@ -439,12 +446,12 @@ def main() -> None:
     args = parse_args()
     validate_args(args)
     args.parsed_states = initial_states_for_args(args)
+    rom_path = resolve_verified_rom_path(args.rom_path)
     load = load_preflight(args)
     action_set = args.action_set
     action_meanings = ACTION_SETS[action_set]
     if args.state_dir is not None:
         os.environ["SUPERMARIOBROSNES_FASTENV_STATE_DIR"] = str(args.state_dir)
-    rom_path = resolve_verified_rom_path(args.rom_path)
     env = SuperMarioBrosNesTurboVecEnv(
         "SuperMarioBros-Nes-v0",
         state=benchmark_state(args),
