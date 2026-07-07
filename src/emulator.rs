@@ -889,7 +889,12 @@ impl Ppu {
                             [self.bg_color_index(screen_x as usize, screen_y as usize) as usize];
                         continue;
                     }
-                    dst[idx] = palette_gray[palette_base + pixel as usize];
+                    // SAFETY: idx is guarded by the crop/window bounds above, and
+                    // nonzero sprite pixels are in 1..=3 within the selected palette.
+                    unsafe {
+                        *dst.get_unchecked_mut(idx) =
+                            *palette_gray.get_unchecked(palette_base + pixel as usize);
+                    }
                 }
             }
         }
@@ -952,7 +957,12 @@ impl Ppu {
                             [self.bg_color_index(screen_x as usize, screen_y as usize) as usize];
                         continue;
                     }
-                    dst[idx] = palette_gray[palette_base + pixel as usize];
+                    // SAFETY: idx is guarded by the crop/window bounds above, and
+                    // nonzero sprite pixels are in 1..=3 within the selected palette.
+                    unsafe {
+                        *dst.get_unchecked_mut(idx) =
+                            *palette_gray.get_unchecked(palette_base + pixel as usize);
+                    }
                 }
             }
         }
