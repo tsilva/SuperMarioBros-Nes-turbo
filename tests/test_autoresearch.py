@@ -6,6 +6,7 @@ from pathlib import Path
 
 from scripts.autoresearch import (
     BENCHMARK_SCRIPT,
+    auto_record_latest_benchmark,
     benchmark_extra_args,
     build_probe_command,
     build_benchmark_command,
@@ -82,13 +83,15 @@ def test_screen_and_accept_commands_are_canonical() -> None:
 
 def test_benchmark_extra_args_accepts_dry_run_after_refs() -> None:
     class Args:
-        extra_args = ["--dry-run", "--full", "--", "--force-busy"]
+        extra_args = ["--dry-run", "--full", "--no-record", "--", "--force-busy"]
         dry_run = False
         full = False
+        no_record = False
 
     assert benchmark_extra_args(Args) == ["--force-busy"]
     assert Args.dry_run is True
     assert Args.full is True
+    assert Args.no_record is True
 
 
 def test_diagnose_command_writes_under_autoresearch_root(tmp_path: Path) -> None:
@@ -133,6 +136,10 @@ def test_infer_next_action_promotes_screen_results() -> None:
     assert "probe" in infer_next_action([], [])
     assert "accept" in infer_next_action([{"status": "triage_promote"}], [])
     assert "next idea" in infer_next_action([{"status": "discard"}], [])
+    assert "record" in infer_next_action(
+        [],
+        [{"run_name": "run-1", "local_result_dir": "/tmp/run-1"}],
+    )
 
 
 def test_run_command_prints_env_defaults_for_dry_run(capsys, monkeypatch) -> None:
@@ -220,6 +227,43 @@ def test_record_appends_events_and_results_tsv(tmp_path: Path) -> None:
     assert values["status"] == "triage_promote"
     assert values["median_pair_ratio"] == "1.04"
     assert values["description"] == "screen passed"
+
+
+def test_auto_record_latest_benchmark_appends_new_index_entry(tmp_path: Path) -> None:
+    root = tmp_path / "autoresearch"
+    local_dir = root / "benchmarks" / "local-results" / "run-new"
+    local_dir.mkdir(parents=True)
+    aggregate_path = local_dir / "aggregate.json"
+    aggregate_path.write_text(
+        json.dumps(
+            {
+                "run_name": "run-new",
+                "benchmark_tier": "local_triage",
+                "refs": {"baseline": "main", "candidate": "HEAD"},
+                "shas": {"baseline": "1" * 40, "candidate": "2" * 40},
+                "median_pair_ratio": 1.04,
+            }
+        )
+        + "\n"
+    )
+    index_path = root / "benchmarks" / "local-results" / "index.jsonl"
+    index_path.write_text(
+        json.dumps(
+            {
+                "run_name": "run-new",
+                "local_result_dir": str(local_dir),
+            }
+        )
+        + "\n"
+    )
+
+    event = auto_record_latest_benchmark(root, before_run_names=set())
+    rows = (root / "results.tsv").read_text().splitlines()
+
+    assert event is not None
+    assert event["status"] == "triage_promote"
+    assert rows[0].split("\t") == list(RESULTS_TSV_COLUMNS)
+    assert "triage_promote" in rows[1]
 
 
 def test_event_from_aggregate_allows_status_override(tmp_path: Path) -> None:
