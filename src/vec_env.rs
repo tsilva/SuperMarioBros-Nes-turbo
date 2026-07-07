@@ -2007,7 +2007,6 @@ fn step_one(
     xscroll_lo_out: &mut u8,
 ) {
     let action = MarioAction::from_u8(action_id);
-    let has_done_on_info_rules = !done_on_info_rules.is_empty();
     let mut reward = 0.0;
     let mut done = false;
     if config.frame_maxpool {
@@ -2024,13 +2023,12 @@ fn step_one(
             };
             write_rgb_source_frame(config, env, target);
             recent_count += 1;
-            let done_on_info = has_done_on_info_rules
-                && check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
             done = env.is_done() || done_on_info;
             if done {
                 break;
@@ -2048,13 +2046,12 @@ fn step_one(
     } else {
         for _ in 0..config.frame_skip {
             reward += env.step_frame(action);
-            let done_on_info = has_done_on_info_rules
-                && check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
             done = env.is_done() || done_on_info;
             if done {
                 break;
@@ -2109,7 +2106,6 @@ fn step_one_profiled(
     profiler: &mut Profiler,
 ) {
     let action = MarioAction::from_u8(action_id);
-    let has_done_on_info_rules = !done_on_info_rules.is_empty();
     let mut reward = 0.0;
     let mut done = false;
     if config.frame_maxpool {
@@ -2128,13 +2124,12 @@ fn step_one_profiled(
             write_rgb_source_frame(config, env, target);
             profiler.record_render(render_start.elapsed());
             recent_count += 1;
-            let done_on_info = has_done_on_info_rules
-                && check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
             done = env.is_done() || done_on_info;
             if done {
                 break;
@@ -2156,13 +2151,12 @@ fn step_one_profiled(
     } else {
         for _ in 0..config.frame_skip {
             reward += env.step_frame_profiled(action, profiler);
-            let done_on_info = has_done_on_info_rules
-                && check_done_on_info(
-                    env,
-                    done_on_info_baseline,
-                    done_on_info_rules,
-                    fired_done_on_info,
-                );
+            let done_on_info = check_done_on_info(
+                env,
+                done_on_info_baseline,
+                done_on_info_rules,
+                fired_done_on_info,
+            );
             done = env.is_done() || done_on_info;
             if done {
                 break;
