@@ -1200,6 +1200,18 @@ impl MarioVecEnv {
         })
     }
 
+    fn dense_leading_synced_group_count(&self) -> Option<usize> {
+        if self.synced_groups.is_empty() {
+            return None;
+        }
+        for (group_idx, group) in self.synced_groups.iter().enumerate() {
+            if group.first().copied() != Some(group_idx) {
+                return None;
+            }
+        }
+        Some(self.synced_groups.len())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn step_synced_groups(
         &mut self,
@@ -1221,13 +1233,127 @@ impl MarioVecEnv {
     ) {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
-        let mut group_actions = vec![None; config.num_envs];
-        for group in &self.synced_groups {
-            let first = group[0];
-            group_actions[first] = Some(actions[first]);
-        }
 
-        if config.num_envs >= PARALLEL_ENV_THRESHOLD {
+        if let Some(leader_count) = self.dense_leading_synced_group_count() {
+            let resize_plan = &self.resize_plan;
+            let envs = &mut self.envs[..leader_count];
+            let scratch = &mut self.scratch[..leader_count];
+            let actions = &actions[..leader_count];
+            let done_on_info_baselines = &self.done_on_info_baselines[..leader_count];
+            let fired_done_on_info = &mut self.last_done_on_info[..leader_count];
+            let obs = &mut obs[..leader_count * obs_stride];
+            let rewards = &mut rewards[..leader_count];
+            let terminated = &mut terminated[..leader_count];
+            let truncated = &mut truncated[..leader_count];
+            let x_pos = &mut x_pos[..leader_count];
+            let coins = &mut coins[..leader_count];
+            let level_hi = &mut level_hi[..leader_count];
+            let level_lo = &mut level_lo[..leader_count];
+            let lives = &mut lives[..leader_count];
+            let score = &mut score[..leader_count];
+            let scrolling = &mut scrolling[..leader_count];
+            let time = &mut time[..leader_count];
+            let xscroll_hi = &mut xscroll_hi[..leader_count];
+            let xscroll_lo = &mut xscroll_lo[..leader_count];
+            if leader_count >= PARALLEL_ENV_THRESHOLD {
+                envs.par_iter_mut()
+                    .zip(scratch.par_iter_mut())
+                    .zip(actions.par_iter())
+                    .zip(done_on_info_baselines.par_iter())
+                    .zip(fired_done_on_info.par_iter_mut())
+                    .zip(obs.par_chunks_mut(obs_stride))
+                    .zip(rewards.par_iter_mut())
+                    .zip(terminated.par_iter_mut())
+                    .zip(truncated.par_iter_mut())
+                    .zip(x_pos.par_iter_mut())
+                    .zip(coins.par_iter_mut())
+                    .zip(level_hi.par_iter_mut())
+                    .zip(level_lo.par_iter_mut())
+                    .zip(lives.par_iter_mut())
+                    .zip(score.par_iter_mut())
+                    .zip(scrolling.par_iter_mut())
+                    .zip(time.par_iter_mut())
+                    .zip(xscroll_hi.par_iter_mut())
+                    .zip(xscroll_lo.par_iter_mut())
+                    .for_each(|zipped| {
+                        let (zipped, xscroll_lo_out) = zipped;
+                        let (zipped, xscroll_hi_out) = zipped;
+                        let (zipped, time_out) = zipped;
+                        let (zipped, scrolling_out) = zipped;
+                        let (zipped, score_out) = zipped;
+                        let (zipped, lives_out) = zipped;
+                        let (zipped, level_lo_out) = zipped;
+                        let (zipped, level_hi_out) = zipped;
+                        let (zipped, coins_out) = zipped;
+                        let (zipped, x_out) = zipped;
+                        let (zipped, truncated_out) = zipped;
+                        let (zipped, terminated_out) = zipped;
+                        let (zipped, reward_out) = zipped;
+                        let (zipped, obs_chunk) = zipped;
+                        let (zipped, fired_done_on_info) = zipped;
+                        let (zipped, done_on_info_baseline) = zipped;
+                        let ((env, scratch), action) = zipped;
+                        step_one(
+                            config,
+                            resize_plan,
+                            env,
+                            scratch,
+                            *done_on_info_baseline,
+                            &self.done_on_info_rules,
+                            fired_done_on_info,
+                            *action,
+                            obs_chunk,
+                            reward_out,
+                            terminated_out,
+                            truncated_out,
+                            x_out,
+                            coins_out,
+                            level_hi_out,
+                            level_lo_out,
+                            lives_out,
+                            score_out,
+                            scrolling_out,
+                            time_out,
+                            xscroll_hi_out,
+                            xscroll_lo_out,
+                        );
+                    });
+            } else {
+                for env_idx in 0..leader_count {
+                    let start = env_idx * obs_stride;
+                    let end = start + obs_stride;
+                    step_one(
+                        config,
+                        &self.resize_plan,
+                        &mut envs[env_idx],
+                        &mut scratch[env_idx],
+                        done_on_info_baselines[env_idx],
+                        &self.done_on_info_rules,
+                        &mut fired_done_on_info[env_idx],
+                        actions[env_idx],
+                        &mut obs[start..end],
+                        &mut rewards[env_idx],
+                        &mut terminated[env_idx],
+                        &mut truncated[env_idx],
+                        &mut x_pos[env_idx],
+                        &mut coins[env_idx],
+                        &mut level_hi[env_idx],
+                        &mut level_lo[env_idx],
+                        &mut lives[env_idx],
+                        &mut score[env_idx],
+                        &mut scrolling[env_idx],
+                        &mut time[env_idx],
+                        &mut xscroll_hi[env_idx],
+                        &mut xscroll_lo[env_idx],
+                    );
+                }
+            }
+        } else if config.num_envs >= PARALLEL_ENV_THRESHOLD {
+            let mut group_actions = vec![None; config.num_envs];
+            for group in &self.synced_groups {
+                let first = group[0];
+                group_actions[first] = Some(actions[first]);
+            }
             let resize_plan = &self.resize_plan;
             self.envs
                 .par_iter_mut()
