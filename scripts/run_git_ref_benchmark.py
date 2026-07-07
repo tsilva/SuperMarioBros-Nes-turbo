@@ -95,6 +95,7 @@ RESULTS_TSV_COLUMNS = (
 )
 
 Mode = Literal["single", "compare"]
+STACK_ACCEPTANCE_CHECKPOINTS = (3, 5, 7)
 
 
 @dataclass(frozen=True)
@@ -174,7 +175,25 @@ def benchmark_tier(args: argparse.Namespace, plan: BenchmarkPlan) -> str:
         and args.max_measured_invocations == 3
     ):
         return "local_triage"
+    if (
+        plan.mode == "compare"
+        and args.steps == 30000
+        and args.repeats == 2
+        and plan.warmups == 1
+        and args.max_measured_invocations == 7
+    ):
+        return "stack_acceptance"
     return "local_diagnosis"
+
+
+def is_stack_acceptance_shape(args: argparse.Namespace, mode: Mode, warmups: int) -> bool:
+    return (
+        mode == "compare"
+        and args.steps == 30000
+        and args.repeats == 2
+        and warmups == 1
+        and args.max_measured_invocations == 7
+    )
 
 
 def resolve_ref(ref: str) -> str:
@@ -237,8 +256,10 @@ def build_plan(args: argparse.Namespace) -> BenchmarkPlan:
     default_checkpoints = (
         DEFAULT_SINGLE_CHECKPOINTS if mode == "single" else DEFAULT_COMPARISON_CHECKPOINTS
     )
-    checkpoints = cap_checkpoints(default_checkpoints, args.max_measured_invocations)
     warmups = args.warmups if args.warmups is not None else 2
+    if is_stack_acceptance_shape(args, mode, warmups):
+        default_checkpoints = STACK_ACCEPTANCE_CHECKPOINTS
+    checkpoints = cap_checkpoints(default_checkpoints, args.max_measured_invocations)
     return BenchmarkPlan(
         mode=mode,
         run_name=run_name,

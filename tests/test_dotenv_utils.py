@@ -242,7 +242,7 @@ def test_direct_benchmark_results_record_rom_identity(
     )
     stable = build_stable_retro_pypi_result(
         stable_args,
-        "1.0.1.post7",
+        "1.0.1.post8",
         obs,
         runs,
         ("Level1-1",),
@@ -311,7 +311,7 @@ def test_pypi_workload_hash_inputs_include_rom_digest() -> None:
         measured_invocations=11,
     )
 
-    stable_payload = stable_pypi_workload(args, "1.0.1.post7")
+    stable_payload = stable_pypi_workload(args, "1.0.1.post8")
     smb_payload = smb_pypi_workload(args, "0.1.2")
 
     assert stable_payload["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256

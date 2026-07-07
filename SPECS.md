@@ -15,7 +15,7 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
 - Preserve native game-over and flag-completion termination plus additive `done_on`/`done_on_info` semantics, named events, `change`/`increase`/`decrease`, Gymnasium vector `infos` payloads, and same-step `final_obs`/`final_info` terminal data.
 - Maintain deterministic seeding and lane behavior; grouped/synced lane optimizations may only preserve the public vector-env contract.
 - Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, and comparable JSON.
-- Use `stable-retro-turbo==1.0.1.post7` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
+- Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
 - Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; ad hoc timings are not acceptance evidence.
 - Keep mutable autoresearch state and benchmark artifacts out of the repo by default; ledgers, ideas, scratchpads, candidate bundles, run dirs, source archives, result caches, and indexes live under `AUTORESEARCH_ROOT_PATH`.
 - Preserve parity/regression tests for Gymnasium VectorEnv behavior, native/stable-retro constructor compatibility, state sampling, terminal infos, sticky/no-op actions, benchmark stats, release flow, and benchmark metadata.
