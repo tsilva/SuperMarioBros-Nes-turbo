@@ -461,7 +461,7 @@ def main() -> None:
     )
     if args.profile_output is not None:
         env.enable_profiler()
-    obs = env.reset()
+    obs, _infos = env.reset()
     active_states = env.active_states()
     actions = fill_action(args.num_envs, args.action, action_meanings)
     prepare_game(env, args, action_meanings)

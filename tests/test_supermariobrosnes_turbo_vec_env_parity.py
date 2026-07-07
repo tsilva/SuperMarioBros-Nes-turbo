@@ -79,6 +79,44 @@ def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
         raise
 
 
+def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
+    obs, _infos = env.reset()
+    return obs
+
+
+def lane_has(infos: dict[str, object], key: str, lane: int) -> bool:
+    mask = infos.get(f"_{key}")
+    return bool(mask is not None and np.asarray(mask, dtype=np.bool_)[lane])
+
+
+def lane_value(infos: dict[str, object], key: str, lane: int) -> object:
+    assert lane_has(infos, key, lane), f"lane {lane} missing info key {key!r}: {infos}"
+    values = infos[key]
+    return values[lane]  # type: ignore[index]
+
+
+def nested_lane_value(infos: dict[str, object], path: tuple[str, ...], lane: int) -> object:
+    current: object = infos
+    for key in path[:-1]:
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    return lane_value(current, path[-1], lane)
+
+
+def final_done_on_info(infos: dict[str, object], lane: int, event: str) -> dict[str, object]:
+    current: object = infos
+    for key in ("final_info", "done_on_info", event):
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    return {
+        key: lane_value(current, key, lane)
+        for key in current
+        if not key.startswith("_")
+    }
+
+
 def test_native_vec_env_binding_is_private_retro_vec_env() -> None:
     assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
     assert not hasattr(native, "SuperMarioBrosNesTurboVecEnv")
@@ -403,8 +441,10 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
                 "resize_algorithm": "nearest",
             },
         ]
-        assert remove_env.observation_space.shape == (1, 192, 230)
-        assert mask_env.observation_space.shape == (1, 224, 240)
+        assert remove_env.single_observation_space.shape == (1, 192, 230)
+        assert remove_env.observation_space.shape == (1, 1, 192, 230)
+        assert mask_env.single_observation_space.shape == (1, 224, 240)
+        assert mask_env.observation_space.shape == (1, 1, 224, 240)
         assert not remove_env._needs_python_postprocess
         assert not mask_env._needs_python_postprocess
 
@@ -494,14 +534,15 @@ def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
         assert not hasattr(env, "copy_observations")
         assert not hasattr(env, "unsafe_zero_copy")
         assert isinstance(env.action_space, spaces.MultiBinary)
-        obs = env.reset()
+        obs = reset_obs(env)
         assert obs.shape == (1, 4, 84, 84)
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        obs, rewards, dones, infos = env.step(masks)
+        obs, rewards, terminations, truncations, infos = env.step(masks)
         assert obs.shape == (1, 4, 84, 84)
         assert rewards.shape == (1,)
-        assert dones.shape == (1,)
-        assert infos == [{}]
+        assert terminations.shape == (1,)
+        assert truncations.shape == (1,)
+        assert infos == {}
     finally:
         env.close()
 
@@ -548,9 +589,9 @@ def test_native_turbo_vec_env_mask_crop_preserves_full_canvas_shape_and_masks_be
         obs_resize=(84, 84),
     )
     try:
-        full_obs = full_env.reset()
-        full_source = full_source_env.reset()
-        mask_obs = mask_env.reset()
+        full_obs = reset_obs(full_env)
+        full_source = reset_obs(full_source_env)
+        mask_obs = reset_obs(mask_env)
 
         assert mask_env.observation_space.shape == full_env.observation_space.shape
         assert mask_obs.shape == full_obs.shape == (1, 1, 84, 84)
@@ -588,9 +629,9 @@ def test_native_turbo_vec_env_remove_crop_matches_default_cropped_behavior() -> 
         obs_resize=(84, 84),
     )
     try:
-        default_obs = default_env.reset()
-        remove_obs = remove_env.reset()
-        full_obs = full_env.reset()
+        default_obs = reset_obs(default_env)
+        remove_obs = reset_obs(remove_env)
+        full_obs = reset_obs(full_env)
 
         assert remove_env.observation_space.shape == default_env.observation_space.shape
         assert remove_obs.shape == default_obs.shape == (1, 1, 84, 84)
@@ -622,16 +663,17 @@ def test_native_turbo_vec_env_mask_crop_terminal_observation_matches_public_layo
         info_filter="all",
     )
     try:
-        obs = env.reset()
+        obs = reset_obs(env)
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
         for _step in range(1, 20):
-            obs, _rewards, dones, infos = env.step(masks)
-            if bool(dones[0]):
-                terminal_observation = infos[0]["terminal_observation"]
-                assert terminal_observation.shape == obs.shape[1:]
-                assert terminal_observation.dtype == obs.dtype
-                assert terminal_observation.shape == env.observation_space.shape
-                assert infos[0]["done_on_info"]["time_tick"] == {
+            obs, _rewards, terminations, truncations, infos = env.step(masks)
+            if bool(terminations[0] or truncations[0]):
+                final_obs = lane_value(infos, "final_obs", 0)
+                assert isinstance(final_obs, np.ndarray)
+                assert final_obs.shape == obs.shape[1:]
+                assert final_obs.dtype == obs.dtype
+                assert final_obs.shape == env.single_observation_space.shape
+                assert final_done_on_info(infos, 0, "time_tick") == {
                     "trigger": "default",
                     "op": "decrease",
                     "compare": "reset",
@@ -655,9 +697,9 @@ def test_native_turbo_vec_env_empty_done_on_keeps_native_game_over_done() -> Non
 
         first_life_loss = second_life_loss = None
         for step in range(1, 7600):
-            _obs, _rewards, dones, infos = env.step(masks)
-            done = bool(dones[0])
-            lives = int(infos[0]["lives"])
+            _obs, _rewards, terminations, truncations, infos = env.step(masks)
+            done = bool(terminations[0] or truncations[0])
+            lives = int(lane_value(infos, "lives", 0))
             if lives == 1 and first_life_loss is None:
                 first_life_loss = (step, done)
             if lives == 0 and second_life_loss is None:
@@ -667,7 +709,7 @@ def test_native_turbo_vec_env_empty_done_on_keeps_native_game_over_done() -> Non
                 assert second_life_loss == (4991, False)
                 assert step == 7527
                 assert lives == 2
-                assert "done_on_info" not in infos[0]
+                assert "done_on_info" not in infos
                 break
         else:
             pytest.fail("native game-over scenario done did not fire by step 7599")
@@ -682,20 +724,18 @@ def test_native_turbo_vec_env_life_loss_done_on_is_additive_and_earlier() -> Non
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
 
         for step in range(1, 3000):
-            _obs, _rewards, dones, infos = env.step(masks)
-            if not bool(dones[0]):
+            _obs, _rewards, terminations, truncations, infos = env.step(masks)
+            if not bool(terminations[0] or truncations[0]):
                 continue
             assert step == 2456
-            assert infos[0]["done_on_info"] == {
-                "life_loss": {
-                    "trigger": "lives_decrease",
-                    "op": "decrease",
-                    "compare": "reset",
-                    "keys": ["lives"],
-                    "variables": ["lives"],
-                    "prev": [2],
-                    "next": [1],
-                },
+            assert final_done_on_info(infos, 0, "life_loss") == {
+                "trigger": "lives_decrease",
+                "op": "decrease",
+                "compare": "reset",
+                "keys": ["lives"],
+                "variables": ["lives"],
+                "prev": [2],
+                "next": [1],
             }
             break
         else:
@@ -720,10 +760,10 @@ def test_native_turbo_vec_env_reports_multiple_done_on_triggers_same_event() -> 
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
 
         for _step in range(1, 3000):
-            _obs, _rewards, dones, infos = env.step(masks)
-            if not bool(dones[0]):
+            _obs, _rewards, terminations, truncations, infos = env.step(masks)
+            if not bool(terminations[0] or truncations[0]):
                 continue
-            payload = infos[0]["done_on_info"]["life_loss"]
+            payload = final_done_on_info(infos, 0, "life_loss")
             assert payload["trigger"] == "lives_decrease"
             assert payload["op"] == "decrease"
             assert payload["compare"] == "reset"
@@ -764,15 +804,15 @@ def test_native_turbo_vec_env_hwc_layout_and_safe_view_survives_next_step() -> N
         info_filter="none",
     )
     try:
-        first = env.reset()
+        first = reset_obs(env)
         first_snapshot = first.copy()
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
         masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
-        second, _rewards, _dones, infos = env.step(masks)
+        second, _rewards, _terminations, _truncations, infos = env.step(masks)
         assert first.shape == (1, 84, 84, 1)
         assert second.shape == (1, 84, 84, 1)
         np.testing.assert_array_equal(first, first_snapshot)
-        assert infos == [{}]
+        assert infos == {}
     finally:
         env.close()
 
@@ -799,10 +839,10 @@ def test_native_turbo_vec_env_reward_clip_and_info_filter_all() -> None:
         env.reset()
         masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
         masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
-        _obs, rewards, _dones, infos = env.step(masks)
+        _obs, rewards, _terminations, _truncations, infos = env.step(masks)
         assert rewards.tolist() == [0.0]
-        assert set(infos[0]) <= {"lives", "xscrollHi"}
-        assert "lives" in infos[0]
+        assert set(key for key in infos if not key.startswith("_")) <= {"lives", "xscrollHi"}
+        assert lane_has(infos, "lives", 0)
     finally:
         env.close()
 
@@ -843,15 +883,16 @@ def test_native_turbo_vec_env_actions_all_mask_matches_discrete_fast_env() -> No
         info_filter="none",
     )
     try:
-        np.testing.assert_array_equal(retro_env.reset(), discrete_env.reset())
+        np.testing.assert_array_equal(reset_obs(retro_env), reset_obs(discrete_env))
         masks = np.zeros((1, retro_env.num_buttons), dtype=np.uint8)
         masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
         masks[0, BUTTON_TO_INDEX["A"]] = 1
-        retro_obs, retro_rewards, retro_dones, _infos = retro_env.step(masks)
-        discrete_obs, discrete_rewards, discrete_dones, _infos = discrete_env.step(np.asarray([24], dtype=np.uint8))
+        retro_obs, retro_rewards, retro_terminations, retro_truncations, _infos = retro_env.step(masks)
+        discrete_obs, discrete_rewards, discrete_terminations, discrete_truncations, _infos = discrete_env.step(np.asarray([24], dtype=np.uint8))
         np.testing.assert_array_equal(retro_obs, discrete_obs)
         np.testing.assert_array_equal(retro_rewards, discrete_rewards)
-        np.testing.assert_array_equal(retro_dones, discrete_dones)
+        np.testing.assert_array_equal(retro_terminations, discrete_terminations)
+        np.testing.assert_array_equal(retro_truncations, discrete_truncations)
     finally:
         retro_env.close()
         discrete_env.close()

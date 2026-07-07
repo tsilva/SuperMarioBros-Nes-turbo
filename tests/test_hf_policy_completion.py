@@ -118,7 +118,7 @@ def test_huggingface_level1_policy_completes_with_full_fast_env_parity() -> None
     episode_summaries: list[dict[str, object]] = []
     try:
         for episode in range(1, MAX_EPISODES + 1):
-            fast_obs = fast_env.reset()
+            fast_obs, _fast_infos = fast_env.reset()
             retro_obs = retro_env.reset()
             compare.require_array_equal(
                 phase="policy_reset",

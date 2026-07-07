@@ -30,6 +30,22 @@ ACTION_BUTTONS = {
     "start": ("START",),
 }
 
+
+def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in infos.items():
+        if key.startswith("_"):
+            continue
+        mask = infos.get(f"_{key}")
+        if mask is not None and not bool(np.asarray(mask, dtype=np.bool_)[lane]):
+            continue
+        if isinstance(value, dict):
+            result[key] = lane_info(value, lane)
+        else:
+            result[key] = value[lane]  # type: ignore[index]
+    return result
+
+
 SDL_INIT_VIDEO = 0x00000020
 SDL_WINDOWPOS_CENTERED = 0x2FFF0000
 SDL_WINDOW_SHOWN = 0x00000004
@@ -253,7 +269,7 @@ class SdlExternalVecPlayer:
             float(rewards[0]),
             bool(terminated[0]),
             bool(truncated[0]),
-            infos[0],
+            lane_info(infos, 0),
         )
 
     def current_action(self) -> int:

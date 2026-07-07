@@ -57,7 +57,7 @@ def main() -> None:
         obs_grayscale=True,
         frame_stack=1,
     )
-    obs = env.reset()
+    obs, _infos = env.reset()
     print(f"actions={ACTION_MEANINGS}")
     print(f"reset_sum={int(obs.sum())} {info_summary(env)}")
 

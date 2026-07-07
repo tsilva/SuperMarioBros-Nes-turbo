@@ -614,7 +614,7 @@ def run_comparison(config: ComparisonConfig) -> dict[str, Any]:
     fast_env = make_fast_env(config)
     retro_env = make_retro_env(config)
     try:
-        fast_obs = fast_env.reset()
+        fast_obs, _fast_infos = fast_env.reset()
         retro_obs = retro_env.reset()
         if config.include_obs:
             require_array_equal(

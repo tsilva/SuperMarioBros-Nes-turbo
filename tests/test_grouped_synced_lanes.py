@@ -47,14 +47,19 @@ def assert_fast_step_equal(
         np.testing.assert_array_equal(actual_array, expected_array)
 
 
+def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
+    obs, _infos = env.reset()
+    return obs
+
+
 def test_repeated_state_groups_match_independent_lane_references() -> None:
     rom_path = require_rom()
     lane_states = [GROUP_STATES[index % len(GROUP_STATES)] for index in range(16)]
     grouped = make_env(rom_path, lane_states, num_envs=16)
     refs = [make_env(rom_path, state, num_envs=1) for state in GROUP_STATES]
 
-    grouped_obs = grouped.reset()
-    ref_obs = [ref.reset() for ref in refs]
+    grouped_obs = reset_obs(grouped)
+    ref_obs = [reset_obs(ref) for ref in refs]
     for lane, state in enumerate(lane_states):
         ref_index = GROUP_STATES.index(state)
         np.testing.assert_array_equal(grouped_obs[lane], ref_obs[ref_index][0])
