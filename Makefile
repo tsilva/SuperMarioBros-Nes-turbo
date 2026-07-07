@@ -12,6 +12,7 @@ BENCHMARK_NUM_ENVS ?= 16
 BENCHMARK_STEPS ?= 5000
 BENCHMARK_REPEATS ?= 3
 BENCHMARK_WARMUP ?= 500
+BENCHMARK_LOAD_ARGS ?= --skip-load-preflight
 BENCHMARK_ARGS ?=
 BASELINE_REF ?=
 CANDIDATE_REF ?=
@@ -24,7 +25,7 @@ develop:
 benchmark: benchmark-local
 
 benchmark-local:
-	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_ARGS)
+	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_LOAD_ARGS) $(BENCHMARK_ARGS)
 
 autoresearch-diagnose:
 	$(PYTHON) scripts/autoresearch.py diagnose

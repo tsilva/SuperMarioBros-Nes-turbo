@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "supermariobrosnes-turbo"
-version = "0.2.10"
+version = "0.2.11"
 description = "Blazing fast SuperMarioBros-Nes environment for Reinforcement Learning."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,6 +39,7 @@ constraint-dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "--basetemp=.pytest-tmp"
 markers = [
   "retro_oracle: manual acceptance tests that compare against stable-retro-turbo and require the local ROM",
 ]

@@ -271,6 +271,13 @@ def test_native_benchmark_load_preflight_uses_strict_boundary(
     assert native_load_preflight(args)["load_ok"] is True
 
 
+def test_native_benchmark_rejects_missing_rom_before_hashing(tmp_path: Path) -> None:
+    missing_rom = tmp_path / "missing.nes"
+
+    with pytest.raises(SystemExit, match=f"ROM path does not exist: {missing_rom}"):
+        resolve_native_verified_rom_path(missing_rom)
+
+
 def test_pypi_benchmark_wrappers_read_rom_path_from_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
