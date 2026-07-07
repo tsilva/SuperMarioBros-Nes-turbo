@@ -536,6 +536,7 @@ def link_prepared_source(plan: BenchmarkPlan, ref: BenchmarkRef, prepared_dir: P
 
 
 def benchmark_command(
+    args: argparse.Namespace,
     plan: BenchmarkPlan,
     role: str,
     output_name: str,
@@ -556,6 +557,7 @@ def benchmark_command(
         "--warmup 100 --frame-skip 4 --frame-stack 4 "
         "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
         f"--states {quote(states)} --action-set simple --action noop "
+        f"--max-start-load {args.max_load} "
         "--no-start-game "
         f"--json --output-json {quote(output)} "
         f"> {quote(output + '.stdout.json')}"
@@ -571,7 +573,11 @@ def run_invocation(
     steps: int,
     repeats: int,
 ) -> None:
-    target_run_stream(args, plan, benchmark_command(plan, role, output_name, steps=steps, repeats=repeats))
+    target_run_stream(
+        args,
+        plan,
+        benchmark_command(args, plan, role, output_name, steps=steps, repeats=repeats),
+    )
 
 
 def require_raw_payload_matches_plan(
