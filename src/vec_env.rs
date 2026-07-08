@@ -8,8 +8,9 @@ use rayon::prelude::*;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const PARALLEL_ENV_THRESHOLD: usize = 4;
+const DEFAULT_MASK_CROP_TOP: usize = 32;
 const DEFAULT_AREA_SRC_WIDTH: usize = VISIBLE_FRAME_WIDTH;
-const DEFAULT_AREA_SRC_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - 32;
+const DEFAULT_AREA_SRC_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - DEFAULT_MASK_CROP_TOP;
 const DEFAULT_AREA_DST_WIDTH: usize = 84;
 const DEFAULT_AREA_DST_HEIGHT: usize = 84;
 const DEFAULT_AREA_Y0: [usize; DEFAULT_AREA_DST_HEIGHT] =
@@ -283,7 +284,7 @@ impl VecEnvConfig {
     fn uses_default_gray_mask_top_area_resize(&self) -> bool {
         self.grayscale
             && self.crop_mode == CropMode::Mask
-            && self.crop_top == 32
+            && self.crop_top == DEFAULT_MASK_CROP_TOP
             && self.crop_bottom == 0
             && self.crop_left == 0
             && self.crop_right == 0
@@ -1562,10 +1563,13 @@ fn write_default_gray_mask_top_area_frame(
     scratch: &mut [u8],
     dst: &mut [u8],
 ) {
+    debug_assert_eq!(resize_plan.src_width, DEFAULT_AREA_SRC_WIDTH);
+    debug_assert_eq!(resize_plan.src_height, FULL_AREA_SRC_HEIGHT);
+    debug_assert_eq!(resize_plan.dst_width, DEFAULT_AREA_DST_WIDTH);
+    debug_assert_eq!(resize_plan.dst_height, DEFAULT_AREA_DST_HEIGHT);
     let native_len = VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT;
     let top_len = config.crop_top * VISIBLE_FRAME_WIDTH;
     let native = &mut scratch[..native_len];
-    native[..top_len].fill(config.crop_fill);
     env.write_gray_visible_frame_region(
         &mut native[top_len..],
         config.crop_top,
@@ -1573,7 +1577,7 @@ fn write_default_gray_mask_top_area_frame(
         VISIBLE_FRAME_WIDTH,
         VISIBLE_FRAME_HEIGHT - config.crop_top,
     );
-    resize_frame_area(config, resize_plan, native, dst);
+    resize_full_gray_area_mask_top_32(native, dst, config.crop_fill);
 }
 
 fn write_native_frame(config: VecEnvConfig, env: &NesEmulator, dst: &mut [u8]) {
@@ -1811,32 +1815,75 @@ fn resize_full_gray_area(src: &[u8], dst: &mut [u8]) {
         }
 
         let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
-        let y_count = FULL_AREA_Y_COUNT[dy];
-        if y_count == 2 {
-            for group in 0..12usize {
-                let out = dst_row + group * 7;
-                let sum = group * 7;
-                dst[out] = (sums[sum] / 4) as u8;
-                dst[out + 1] = (sums[sum + 1] / 6) as u8;
-                dst[out + 2] = (sums[sum + 2] / 6) as u8;
-                dst[out + 3] = (sums[sum + 3] / 6) as u8;
-                dst[out + 4] = (sums[sum + 4] / 6) as u8;
-                dst[out + 5] = (sums[sum + 5] / 6) as u8;
-                dst[out + 6] = (sums[sum + 6] / 6) as u8;
-            }
-        } else {
-            for group in 0..12usize {
-                let out = dst_row + group * 7;
-                let sum = group * 7;
-                dst[out] = (sums[sum] / 6) as u8;
-                dst[out + 1] = (sums[sum + 1] / 9) as u8;
-                dst[out + 2] = (sums[sum + 2] / 9) as u8;
-                dst[out + 3] = (sums[sum + 3] / 9) as u8;
-                dst[out + 4] = (sums[sum + 4] / 9) as u8;
-                dst[out + 5] = (sums[sum + 5] / 9) as u8;
-                dst[out + 6] = (sums[sum + 6] / 9) as u8;
-            }
+        write_default_area_sum_row(&sums, FULL_AREA_Y_COUNT[dy], &mut dst[dst_row..]);
+    }
+}
+
+fn resize_full_gray_area_mask_top_32(src: &[u8], dst: &mut [u8], fill: u8) {
+    debug_assert!(src.len() >= DEFAULT_AREA_SRC_WIDTH * FULL_AREA_SRC_HEIGHT);
+    debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH * DEFAULT_AREA_DST_HEIGHT);
+
+    for dy in 0..DEFAULT_AREA_DST_HEIGHT {
+        let y0 = FULL_AREA_Y0[dy];
+        let y1 = FULL_AREA_Y1[dy];
+        let mut sums = [0u16; DEFAULT_AREA_DST_WIDTH];
+        if y0 < DEFAULT_MASK_CROP_TOP && fill != 0 {
+            let masked_rows = y1.min(DEFAULT_MASK_CROP_TOP) - y0;
+            add_default_area_fill_rows(fill, masked_rows as u16, &mut sums);
         }
+        for sy in y0.max(DEFAULT_MASK_CROP_TOP)..y1 {
+            let row_start = sy * DEFAULT_AREA_SRC_WIDTH;
+            accumulate_default_area_row(
+                &src[row_start..row_start + DEFAULT_AREA_SRC_WIDTH],
+                &mut sums,
+            );
+        }
+
+        let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
+        write_default_area_sum_row(&sums, FULL_AREA_Y_COUNT[dy], &mut dst[dst_row..]);
+    }
+}
+
+fn write_default_area_sum_row(sums: &[u16; DEFAULT_AREA_DST_WIDTH], y_count: u16, dst: &mut [u8]) {
+    debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH);
+    if y_count == 2 {
+        for group in 0..12usize {
+            let out = group * 7;
+            let sum = group * 7;
+            dst[out] = (sums[sum] / 4) as u8;
+            dst[out + 1] = (sums[sum + 1] / 6) as u8;
+            dst[out + 2] = (sums[sum + 2] / 6) as u8;
+            dst[out + 3] = (sums[sum + 3] / 6) as u8;
+            dst[out + 4] = (sums[sum + 4] / 6) as u8;
+            dst[out + 5] = (sums[sum + 5] / 6) as u8;
+            dst[out + 6] = (sums[sum + 6] / 6) as u8;
+        }
+    } else {
+        for group in 0..12usize {
+            let out = group * 7;
+            let sum = group * 7;
+            dst[out] = (sums[sum] / 6) as u8;
+            dst[out + 1] = (sums[sum + 1] / 9) as u8;
+            dst[out + 2] = (sums[sum + 2] / 9) as u8;
+            dst[out + 3] = (sums[sum + 3] / 9) as u8;
+            dst[out + 4] = (sums[sum + 4] / 9) as u8;
+            dst[out + 5] = (sums[sum + 5] / 9) as u8;
+            dst[out + 6] = (sums[sum + 6] / 9) as u8;
+        }
+    }
+}
+
+fn add_default_area_fill_rows(fill: u8, row_count: u16, sums: &mut [u16; DEFAULT_AREA_DST_WIDTH]) {
+    let fill = u16::from(fill);
+    for group in 0..12usize {
+        let dst = group * 7;
+        sums[dst] += fill * row_count * 2;
+        sums[dst + 1] += fill * row_count * 3;
+        sums[dst + 2] += fill * row_count * 3;
+        sums[dst + 3] += fill * row_count * 3;
+        sums[dst + 4] += fill * row_count * 3;
+        sums[dst + 5] += fill * row_count * 3;
+        sums[dst + 6] += fill * row_count * 3;
     }
 }
 
