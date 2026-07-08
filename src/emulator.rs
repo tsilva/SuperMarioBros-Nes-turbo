@@ -543,6 +543,18 @@ impl Ppu {
         }
     }
 
+    fn write_gray_visible_mask_lower_frame(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        debug_assert_eq!(dst.len(), VISIBLE_FRAME_WIDTH * height);
+        self.write_bg_gray_visible_mask_lower_tiled(dst, crop_top, height);
+        self.draw_sprites_gray_region(
+            dst,
+            crop_top,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            height,
+        );
+    }
+
     #[allow(dead_code)]
     fn write_bg_gray_cropped_tiled(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         let palette_gray = self.palette_gray();
@@ -657,6 +669,84 @@ impl Ppu {
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
                 let run = (8 - fine_x).min(width - out_x);
+                let bg_gray = palette_gray[0];
+                let palette_base = (palette_id as usize) * 4;
+                let colors = [
+                    bg_gray,
+                    palette_gray[palette_base + 1],
+                    palette_gray[palette_base + 2],
+                    palette_gray[palette_base + 3],
+                ];
+
+                if fine_x == 0 && run >= 8 {
+                    write_full_bg_tile_gray(
+                        &mut dst[row_start + out_x..row_start + out_x + 8],
+                        lo,
+                        hi,
+                        colors,
+                    );
+                } else {
+                    for col in 0..run {
+                        let bit = 7 - (fine_x + col);
+                        let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
+                        dst[row_start + out_x + col] = colors[pixel as usize];
+                    }
+                }
+
+                out_x += run;
+            }
+        }
+    }
+
+    fn write_bg_gray_visible_mask_lower_tiled(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
+        let palette_gray = self.palette_gray();
+        if self.mask & 0x08 == 0 {
+            dst.fill(palette_gray[0]);
+            return;
+        }
+
+        let pattern_base = if self.ctrl & 0x10 != 0 {
+            0x1000
+        } else {
+            0x0000
+        };
+        let scroll_x = self.render_scroll_x_px() as usize;
+        let scroll_y = self.scroll_y_px as usize;
+
+        for out_y in 0..height {
+            let y = crop_top + out_y;
+            debug_assert!(y >= 32);
+            let world_y = y + scroll_y;
+            let table_y = (world_y / 240) & 1;
+            let local_y = world_y % 240;
+            let tile_y = local_y / 8;
+            let fine_y = local_y & 7;
+            let row_start = out_y * VISIBLE_FRAME_WIDTH;
+            let mut out_x = 0usize;
+
+            while out_x < VISIBLE_FRAME_WIDTH {
+                let screen_x = VISIBLE_FRAME_LEFT + out_x;
+                let world_x = screen_x + scroll_x;
+                let table_x = (world_x / 256) & 1;
+                let table = table_y * 2 + table_x;
+                let local_x = world_x & 0xff;
+                let tile_x = local_x / 8;
+                let fine_x = local_x & 7;
+                let nt_base = 0x2000 + (table as u16) * 0x400;
+                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
+                let attr =
+                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
+                let palette_id = (attr >> shift) & 0x03;
+                let pattern_addr = pattern_base + tile_id * 16 + fine_y;
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
+                let run = (8 - fine_x).min(VISIBLE_FRAME_WIDTH - out_x);
                 let bg_gray = palette_gray[0];
                 let palette_base = (palette_id as usize) * 4;
                 let colors = [
@@ -1717,6 +1807,17 @@ impl NesEmulator {
             width,
             height,
         );
+    }
+
+    #[inline]
+    pub fn write_gray_visible_mask_lower_frame(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
+        self.ppu
+            .write_gray_visible_mask_lower_frame(dst, VISIBLE_FRAME_TOP + crop_top, height);
     }
 
     #[inline]

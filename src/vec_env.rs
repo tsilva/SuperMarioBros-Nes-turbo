@@ -1591,11 +1591,9 @@ fn write_default_gray_mask_top_area_frame(
     let native_len = VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT;
     let top_len = config.crop_top * VISIBLE_FRAME_WIDTH;
     let native = &mut scratch[..native_len];
-    env.write_gray_visible_frame_region(
+    env.write_gray_visible_mask_lower_frame(
         &mut native[top_len..],
         config.crop_top,
-        0,
-        VISIBLE_FRAME_WIDTH,
         VISIBLE_FRAME_HEIGHT - config.crop_top,
     );
     resize_full_gray_area_mask_top_32(native, dst, config.crop_fill);
