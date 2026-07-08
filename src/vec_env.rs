@@ -18,6 +18,13 @@ const DEFAULT_AREA_Y1: [usize; DEFAULT_AREA_DST_HEIGHT] =
     build_default_area_axis_end(DEFAULT_AREA_SRC_HEIGHT);
 const DEFAULT_AREA_Y_COUNT: [u16; DEFAULT_AREA_DST_HEIGHT] =
     build_default_area_axis_count(DEFAULT_AREA_SRC_HEIGHT);
+const FULL_AREA_SRC_HEIGHT: usize = VISIBLE_FRAME_HEIGHT;
+const FULL_AREA_Y0: [usize; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_start(FULL_AREA_SRC_HEIGHT);
+const FULL_AREA_Y1: [usize; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_end(FULL_AREA_SRC_HEIGHT);
+const FULL_AREA_Y_COUNT: [u16; DEFAULT_AREA_DST_HEIGHT] =
+    build_default_area_axis_count(FULL_AREA_SRC_HEIGHT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct VecEnvConfig {
@@ -2552,6 +2559,14 @@ fn resize_frame_area(config: VecEnvConfig, plan: &AreaResizePlan, src: &[u8], ds
             resize_default_gray_area(src, dst);
             return;
         }
+        if plan.src_width == DEFAULT_AREA_SRC_WIDTH
+            && plan.src_height == FULL_AREA_SRC_HEIGHT
+            && plan.dst_width == DEFAULT_AREA_DST_WIDTH
+            && plan.dst_height == DEFAULT_AREA_DST_HEIGHT
+        {
+            resize_full_gray_area(src, dst);
+            return;
+        }
         resize_plane_area(src, dst, plan, 0, 0);
     } else {
         let src_plane = plan.src_width * plan.src_height;
@@ -2578,6 +2593,50 @@ fn resize_default_gray_area(src: &[u8], dst: &mut [u8]) {
 
         let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
         let y_count = DEFAULT_AREA_Y_COUNT[dy];
+        if y_count == 2 {
+            for group in 0..12usize {
+                let out = dst_row + group * 7;
+                let sum = group * 7;
+                dst[out] = (sums[sum] / 4) as u8;
+                dst[out + 1] = (sums[sum + 1] / 6) as u8;
+                dst[out + 2] = (sums[sum + 2] / 6) as u8;
+                dst[out + 3] = (sums[sum + 3] / 6) as u8;
+                dst[out + 4] = (sums[sum + 4] / 6) as u8;
+                dst[out + 5] = (sums[sum + 5] / 6) as u8;
+                dst[out + 6] = (sums[sum + 6] / 6) as u8;
+            }
+        } else {
+            for group in 0..12usize {
+                let out = dst_row + group * 7;
+                let sum = group * 7;
+                dst[out] = (sums[sum] / 6) as u8;
+                dst[out + 1] = (sums[sum + 1] / 9) as u8;
+                dst[out + 2] = (sums[sum + 2] / 9) as u8;
+                dst[out + 3] = (sums[sum + 3] / 9) as u8;
+                dst[out + 4] = (sums[sum + 4] / 9) as u8;
+                dst[out + 5] = (sums[sum + 5] / 9) as u8;
+                dst[out + 6] = (sums[sum + 6] / 9) as u8;
+            }
+        }
+    }
+}
+
+fn resize_full_gray_area(src: &[u8], dst: &mut [u8]) {
+    debug_assert!(src.len() >= DEFAULT_AREA_SRC_WIDTH * FULL_AREA_SRC_HEIGHT);
+    debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH * DEFAULT_AREA_DST_HEIGHT);
+
+    for dy in 0..DEFAULT_AREA_DST_HEIGHT {
+        let mut sums = [0u16; DEFAULT_AREA_DST_WIDTH];
+        for sy in FULL_AREA_Y0[dy]..FULL_AREA_Y1[dy] {
+            let row_start = sy * DEFAULT_AREA_SRC_WIDTH;
+            accumulate_default_area_row(
+                &src[row_start..row_start + DEFAULT_AREA_SRC_WIDTH],
+                &mut sums,
+            );
+        }
+
+        let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
+        let y_count = FULL_AREA_Y_COUNT[dy];
         if y_count == 2 {
             for group in 0..12usize {
                 let out = dst_row + group * 7;
@@ -2997,6 +3056,51 @@ mod tests {
         let src = (0..src_len)
             .map(|idx| ((idx * 37 + idx / 251 + 19) & 0xff) as u8)
             .collect::<Vec<_>>();
+        let mut optimized = vec![0; 84 * 84];
+        let mut reference = vec![0; 84 * 84];
+
+        resize_frame_area(config, &plan, &src, &mut optimized);
+        reference_resize_plane_area(
+            &src,
+            &mut reference,
+            config.source_width(),
+            config.source_height(),
+            84,
+            84,
+            0,
+            0,
+        );
+
+        assert_eq!(optimized, reference);
+    }
+
+    #[test]
+    fn precomputed_area_resize_matches_reference_full_mask_grayscale() {
+        let config = VecEnvConfig {
+            num_envs: 16,
+            frame_skip: 4,
+            grayscale: true,
+            frame_stack: 4,
+            frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
+            terminate_on_flag: true,
+            crop_top: 32,
+            crop_bottom: 0,
+            crop_left: 0,
+            crop_right: 0,
+            crop_mode: CropMode::Mask,
+            crop_fill: 7,
+            resize_width: 84,
+            resize_height: 84,
+            resize_algorithm: ResizeAlgorithm::Area,
+        };
+        let plan = AreaResizePlan::new(config.source_width(), config.source_height(), 84, 84);
+        let src_len = config.source_width() * config.source_height();
+        let mut src = (0..src_len)
+            .map(|idx| ((idx * 41 + idx / 199 + 23) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        mask_native_frame(config, &mut src);
         let mut optimized = vec![0; 84 * 84];
         let mut reference = vec![0; 84 * 84];
 

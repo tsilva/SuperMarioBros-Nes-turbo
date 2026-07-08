@@ -32,6 +32,9 @@ DEFAULT_ROM = (
     else None
 )
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+DEFAULT_OBS_CROP_MODE = "mask"
+DEFAULT_TERMINATE_ON_LIFE_LOSS = True
+DEFAULT_TERMINATE_ON_LEVEL_CHANGE = True
 ACTION_BUTTONS = {
     "noop": (),
     "right": ("RIGHT",),
@@ -169,12 +172,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rgb", action="store_true")
     parser.add_argument("--crop-top", type=int, default=32)
     parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--obs-crop-mode", choices=("remove", "mask"), default=DEFAULT_OBS_CROP_MODE)
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--states", default=",".join(DEFAULT_STATES))
     parser.add_argument("--action", choices=sorted(ACTION_BUTTONS), default="noop")
     parser.add_argument("--obs-copy", default="safe_view")
     parser.add_argument("--obs-resize-algorithm", default="area")
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_TERMINATE_ON_LIFE_LOSS,
+        help="Terminate and autoreset benchmark lanes when lives decrease.",
+    )
+    parser.add_argument(
+        "--terminate-on-level-change",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_TERMINATE_ON_LEVEL_CHANGE,
+        help="Terminate and autoreset benchmark lanes when levelHi/levelLo changes.",
+    )
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
@@ -198,6 +214,15 @@ def parse_states(value: str) -> tuple[str, ...]:
 
 def lane_states(num_envs: int, states: tuple[str, ...]) -> list[str]:
     return [states[index % len(states)] for index in range(num_envs)]
+
+
+def benchmark_done_on(args: argparse.Namespace) -> dict[str, Any] | None:
+    done_on: dict[str, Any] = {}
+    if args.terminate_on_life_loss:
+        done_on["life_loss"] = ("lives", "decrease")
+    if args.terminate_on_level_change:
+        done_on["level_change"] = (("levelHi", "levelLo"), "change")
+    return done_on or None
 
 
 def retro_button_names(retro, rom_path: Path) -> tuple[str | None, ...]:
@@ -279,6 +304,7 @@ def build_result(
             "grayscale": not args.rgb,
             "crop_top": args.crop_top,
             "crop_bottom": args.crop_bottom,
+            "obs_crop_mode": args.obs_crop_mode,
             "resize_width": args.resize_width,
             "resize_height": args.resize_height,
             "states": list(states),
@@ -286,6 +312,9 @@ def build_result(
             "action": args.action,
             "obs_copy": args.obs_copy,
             "obs_resize_algorithm": args.obs_resize_algorithm,
+            "terminate_on_life_loss": args.terminate_on_life_loss,
+            "terminate_on_level_change": args.terminate_on_level_change,
+            "done_on": list(benchmark_done_on(args) or ()),
         },
         "observation": {
             "shape": list(obs.shape),
@@ -327,6 +356,7 @@ def main() -> None:
         render_mode="rgb_array",
         use_restricted_actions=retro.Actions.ALL,
         obs_crop=crop,
+        obs_crop_mode=args.obs_crop_mode,
         obs_resize=(args.resize_height, args.resize_width),
         obs_grayscale=not args.rgb,
         obs_resize_algorithm=args.obs_resize_algorithm,
@@ -339,7 +369,7 @@ def main() -> None:
         sticky_action_prob=0.0,
         reward_clip=False,
         info_filter="none",
-        done_on=None,
+        done_on=benchmark_done_on(args),
     )
     try:
         obs = env.reset()

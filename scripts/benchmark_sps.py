@@ -31,6 +31,9 @@ DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
 DEFAULT_BENCHMARK_ACTIONS = ("noop", "right", "right_b", "right_a")
 DEFAULT_ACTION_SEED = 0
+DEFAULT_OBS_CROP_MODE = "mask"
+DEFAULT_TERMINATE_ON_LIFE_LOSS = True
+DEFAULT_TERMINATE_ON_LEVEL_CHANGE = True
 DEFAULT_MIN_START_LOAD_LIMIT = 4.0
 DEFAULT_START_LOAD_CPU_FRACTION = 0.5
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
@@ -68,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rgb", action="store_true")
     parser.add_argument("--crop-top", type=int, default=32)
     parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--obs-crop-mode", choices=("remove", "mask"), default=DEFAULT_OBS_CROP_MODE)
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
@@ -96,6 +100,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument(
+        "--terminate-on-life-loss",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_TERMINATE_ON_LIFE_LOSS,
+        help="Terminate and autoreset benchmark lanes when lives decrease.",
+    )
+    parser.add_argument(
+        "--terminate-on-level-change",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_TERMINATE_ON_LEVEL_CHANGE,
+        help="Terminate and autoreset benchmark lanes when levelHi/levelLo changes.",
+    )
     parser.add_argument(
         "--include-info",
         action="store_true",
@@ -213,6 +229,15 @@ def benchmark_state(args: argparse.Namespace) -> str | list[str] | None:
 
 def has_initial_state(args: argparse.Namespace) -> bool:
     return args.state is not None or args.parsed_states is not None
+
+
+def benchmark_done_on(args: argparse.Namespace) -> dict[str, Any] | None:
+    done_on: dict[str, Any] = {}
+    if args.terminate_on_life_loss:
+        done_on["life_loss"] = ("lives", "decrease")
+    if args.terminate_on_level_change:
+        done_on["level_change"] = (("levelHi", "levelLo"), "change")
+    return done_on or None
 
 
 def default_max_start_load() -> float:
@@ -428,6 +453,7 @@ def build_result(
             "grayscale": not args.rgb,
             "crop_top": args.crop_top,
             "crop_bottom": args.crop_bottom,
+            "obs_crop_mode": args.obs_crop_mode,
             "resize_width": args.resize_width,
             "resize_height": args.resize_height,
             "obs_resize_algorithm": "area",
@@ -441,6 +467,9 @@ def build_result(
             "state_dir": str(args.state_dir) if args.state_dir is not None else None,
             "include_info": True,
             "terminate_on_flag": args.terminate_on_flag,
+            "terminate_on_life_loss": args.terminate_on_life_loss,
+            "terminate_on_level_change": args.terminate_on_level_change,
+            "done_on": list(benchmark_done_on(args) or ()),
             "start_game": (
                 not args.no_start_game
                 and not has_initial_state(args)
@@ -474,10 +503,13 @@ def print_human(result: dict[str, Any]) -> None:
         f"num_envs={config['num_envs']} steps={config['steps']} repeats={config['repeats']} "
         f"frame_skip={config['frame_skip']} frame_stack={config['frame_stack']} "
         f"grayscale={config['grayscale']} crop=({config['crop_top']},{config['crop_bottom']}) "
+        f"obs_crop_mode={config['obs_crop_mode']} "
         f"resize={config['resize_width']}x{config['resize_height']} "
         f"action_set={config['action_set']} actions={config['actions']} "
         f"action_seed={config['action_seed']} "
         f"state={config['state']} states={config['states']} "
+        f"terminate_on_life_loss={config['terminate_on_life_loss']} "
+        f"terminate_on_level_change={config['terminate_on_level_change']} "
         f"include_info={config['include_info']}"
     )
     if config["lane_states"] is not None:
@@ -536,9 +568,11 @@ def main() -> None:
         obs_grayscale=not args.rgb,
         frame_stack=args.frame_stack,
         obs_crop=(args.crop_top, args.crop_bottom, 0, 0),
+        obs_crop_mode=args.obs_crop_mode,
         obs_resize=(args.resize_height, args.resize_width),
         obs_resize_algorithm="area",
         obs_layout="chw",
+        done_on=benchmark_done_on(args),
     )
     if args.profile_output is not None:
         env.enable_profiler()

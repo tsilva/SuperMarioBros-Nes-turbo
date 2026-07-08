@@ -123,6 +123,7 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "grayscale": True,
         "crop_top": 32,
         "crop_bottom": 0,
+        "obs_crop_mode": "mask",
         "resize": [84, 84],
         "states": list(DEFAULT_STATES),
         "action_set": "simple",
@@ -131,6 +132,9 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "action_seed": DEFAULT_ACTION_SEED,
         "include_info": True,
         "obs_resize_algorithm": "area",
+        "terminate_on_life_loss": True,
+        "terminate_on_level_change": True,
+        "done_on": ["life_loss", "level_change"],
     }
 
 
@@ -367,6 +371,7 @@ def require_raw_payload_matches_workload(
         "grayscale": workload_payload["grayscale"],
         "crop_top": workload_payload["crop_top"],
         "crop_bottom": workload_payload["crop_bottom"],
+        "obs_crop_mode": workload_payload["obs_crop_mode"],
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
@@ -467,9 +472,12 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--state-dir {quote(args.state_dir)} "
         f"--num-envs {args.num_envs} --steps {args.steps} --repeats {args.repeats} "
         f"--warmup {args.warmup} --frame-skip 4 --frame-stack 4 "
-        "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
+        "--crop-top 32 --crop-bottom 0 --obs-crop-mode mask "
+        "--resize-width 84 --resize-height 84 "
         f"--states {quote(states)} --action-set simple --actions {quote(','.join(DEFAULT_ACTIONS))} "
-        f"--action-seed {DEFAULT_ACTION_SEED} --include-info --no-start-game "
+        f"--action-seed {DEFAULT_ACTION_SEED} "
+        "--terminate-on-life-loss --terminate-on-level-change "
+        "--include-info --no-start-game "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])

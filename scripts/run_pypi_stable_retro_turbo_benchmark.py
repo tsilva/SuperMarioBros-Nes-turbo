@@ -94,11 +94,15 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "grayscale": True,
         "crop_top": 32,
         "crop_bottom": 0,
+        "obs_crop_mode": "mask",
         "resize": [84, 84],
         "states": list(DEFAULT_STATES),
         "action": "noop",
         "obs_copy": "safe_view",
         "obs_resize_algorithm": "area",
+        "terminate_on_life_loss": True,
+        "terminate_on_level_change": True,
+        "done_on": ["life_loss", "level_change"],
     }
 
 
@@ -319,6 +323,7 @@ def require_raw_payload_matches_workload(
         "grayscale": workload_payload["grayscale"],
         "crop_top": workload_payload["crop_top"],
         "crop_bottom": workload_payload["crop_bottom"],
+        "obs_crop_mode": workload_payload["obs_crop_mode"],
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "states": workload_payload["states"],
@@ -416,8 +421,10 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--num-envs {args.num_envs} --num-threads {args.num_threads} "
         f"--steps {args.steps} --repeats {args.repeats} --warmup {args.warmup} "
         "--frame-skip 4 --frame-stack 4 "
-        "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
+        "--crop-top 32 --crop-bottom 0 --obs-crop-mode mask "
+        "--resize-width 84 --resize-height 84 "
         f"--states {quote(states)} --action noop --obs-copy safe_view --obs-resize-algorithm area "
+        "--terminate-on-life-loss --terminate-on-level-change "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])

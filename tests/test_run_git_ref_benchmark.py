@@ -64,6 +64,7 @@ def benchmark_raw_config(
         "grayscale": True,
         "crop_top": 32,
         "crop_bottom": 0,
+        "obs_crop_mode": "mask",
         "resize_width": 84,
         "resize_height": 84,
         "obs_resize_algorithm": "area",
@@ -76,6 +77,9 @@ def benchmark_raw_config(
         "state_dir": plan.state_dir,
         "include_info": True,
         "terminate_on_flag": False,
+        "terminate_on_life_loss": True,
+        "terminate_on_level_change": True,
+        "done_on": ["life_loss", "level_change"],
         "start_game": False,
     }
 
@@ -630,6 +634,7 @@ def test_aggregate_single_uses_convergence_helper(tmp_path: Path) -> None:
     assert aggregate["workload"]["state_dir"] == plan.state_dir
     assert aggregate["workload"]["warmup"] == 100
     assert aggregate["workload"]["crop_bottom"] == 0
+    assert aggregate["workload"]["obs_crop_mode"] == "mask"
     assert aggregate["workload"]["obs_resize_algorithm"] == "area"
     assert aggregate["workload"]["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert aggregate["workload"]["rom_sha256"] is None
