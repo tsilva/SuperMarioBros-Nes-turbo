@@ -539,7 +539,6 @@ impl RetroVecEnv {
         });
         Ok(())
     }
-
 }
 
 impl RetroVecEnv {
