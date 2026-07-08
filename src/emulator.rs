@@ -928,31 +928,6 @@ impl Ppu {
         mask
     }
 
-    fn sprite_scanline_mask_region(
-        &self,
-        crop_top: usize,
-        crop_bottom: usize,
-    ) -> [u64; NES_HEIGHT] {
-        let mut mask = [0u64; NES_HEIGHT];
-        let mut counts = [0u8; NES_HEIGHT];
-        let crop_top = crop_top.min(NES_HEIGHT);
-        let crop_bottom = crop_bottom.min(NES_HEIGHT);
-        for sprite in 0..64usize {
-            let base = sprite * 4;
-            let sprite_y = self.oam[base] as i16 + 1;
-            let start = (sprite_y.max(crop_top as i16)) as usize;
-            let end = (sprite_y + 8).min(crop_bottom as i16).max(0) as usize;
-            for screen_y in start..end {
-                if counts[screen_y] >= 8 {
-                    continue;
-                }
-                counts[screen_y] += 1;
-                mask[screen_y] |= 1u64 << sprite;
-            }
-        }
-        mask
-    }
-
     fn draw_sprites_gray(&self, dst: &mut [u8]) {
         if self.mask & 0x10 == 0 {
             return;
@@ -1026,8 +1001,7 @@ impl Ppu {
         } else {
             0x0000
         };
-        let sprite_scanline_mask =
-            self.sprite_scanline_mask_region(crop_top as usize, crop_bottom as usize);
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
@@ -1098,8 +1072,7 @@ impl Ppu {
         } else {
             0x0000
         };
-        let sprite_scanline_mask =
-            self.sprite_scanline_mask_region(crop_top as usize, crop_bottom as usize);
+        let sprite_scanline_mask = self.sprite_scanline_mask();
         for sprite in (0..64).rev() {
             let base = sprite * 4;
             let sprite_y = self.oam[base] as i16 + 1;
