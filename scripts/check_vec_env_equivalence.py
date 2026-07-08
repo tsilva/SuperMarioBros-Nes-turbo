@@ -63,7 +63,7 @@ def step_uniform(
     actions = action_batch(action, env.num_envs)
     result = None
     for _ in range(count):
-        result = env.step_fast(actions)
+        result = env.step(actions)[:4]
     assert result is not None
     return result
 
@@ -134,9 +134,9 @@ def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
 
     action_names = ["noop", "right", "a", "start", "noop", "right", "a", "start"]
     actions = action_batch(action_names, 8)
-    obs, rewards, terminated, truncated = vec.step_fast(actions)
+    obs, rewards, terminated, truncated = vec.step(actions)[:4]
     for lane, ref in enumerate(refs):
-        ref_obs, ref_rewards, ref_terminated, ref_truncated = ref.step_fast(action_batch(action_names[lane], 1))
+        ref_obs, ref_rewards, ref_terminated, ref_truncated = ref.step(action_batch(action_names[lane], 1))[:4]
         np.testing.assert_array_equal(obs[lane], ref_obs[0])
         assert rewards[lane] == ref_rewards[0]
         assert terminated[lane] == ref_terminated[0]

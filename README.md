@@ -33,9 +33,10 @@ paths:
 - **Rust-side batch execution**: vector lanes step in Rust with Rayon when the
   batch is large enough, so the Python side only submits action arrays and reads
   already-filled result buffers.
-- **`step_fast()` info bypass**: training and benchmark loops can skip per-env
-  Python `info` dictionaries and keep x-position, score, lives, level,
-  timer, and scroll values in typed arrays.
+- **Fast `step()` path**: training and benchmark loops exercise the same
+  Gymnasium vector `step()` API users call, while native code keeps x-position,
+  score, lives, level, timer, and scroll values in typed arrays before
+  assembling vector `infos`.
 - **Fused RL preprocessing**: frame skip, optional max-pool, reward accumulation,
   termination checks, grayscale/RGB rendering, crop, area resize, and frame-stack
   writes happen in the native step loop before data returns to Python.
@@ -121,7 +122,7 @@ env = SuperMarioBrosNesTurboVecEnv(
 
 Mask crop is useful for hiding HUD or other static regions during initial training while preserving spatial compatibility for later finetuning on full observations.
 
-`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. The native env uses same-step per-lane autoreset and sets `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`; for a completed lane, the returned observation is the reset observation and the completed episode data is exposed through `infos["final_obs"]` and `infos["final_info"]`. Use `step_fast()` when you do not need Gymnasium info dictionaries and want the lowest-overhead typed-array path. Stable Baselines3 adaptation is intentionally not provided here; rlab or another downstream adapter should translate Gymnasium vector output to SB3 when needed.
+`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. The native env uses same-step per-lane autoreset and sets `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`; for a completed lane, the returned observation is the reset observation and the completed episode data is exposed through `infos["final_obs"]` and `infos["final_info"]`. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call. Stable Baselines3 adaptation is intentionally not provided here; rlab or another downstream adapter should translate Gymnasium vector output to SB3 when needed.
 
 Initial states can be a single stable-retro state, one state per env slot, or a weighted mapping sampled independently for each lane on reset:
 

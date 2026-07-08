@@ -49,6 +49,20 @@ def require_stable_retro_oracle() -> None:
     assert version == compare.EXPECTED_STABLE_RETRO_VERSION
 
 
+def test_button_mask_core_action_lookup_matches_semantic_mapper() -> None:
+    env = object.__new__(SuperMarioBrosNesTurboVecEnv)
+    env.num_buttons = len(NES_BUTTONS)
+    lookup = env._build_mask_to_core_action_ids()
+    for mask_index, core_action_id in enumerate(lookup):
+        mask = ((mask_index & env_module.MASK_BIT_WEIGHTS) != 0).astype(np.uint8)
+        assert int(core_action_id) == int(env._mask_to_core_action(mask))
+
+
+def test_no_alternate_step_api_is_exposed() -> None:
+    removed_name = "_".join(("step", "fast"))
+    assert not hasattr(SuperMarioBrosNesTurboVecEnv, removed_name)
+
+
 def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
     try:
         return SuperMarioBrosNesTurboVecEnv(
@@ -545,45 +559,6 @@ def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
         assert infos == {}
     finally:
         env.close()
-
-
-def test_step_fast_matches_step_return_values_for_grouped_lanes() -> None:
-    rom_path = require_rom()
-    states = ["Level1-1", "Level1-2", "Level1-3", "Level1-4"] * 4
-    options = {
-        "state": states,
-        "num_envs": 16,
-        "num_threads": 12,
-        "rom_path": str(rom_path),
-        "render_mode": "rgb_array",
-        "use_restricted_actions": Actions.ALL,
-        "obs_crop": (32, 0, 0, 0),
-        "obs_resize": (84, 84),
-        "obs_grayscale": True,
-        "obs_resize_algorithm": "area",
-        "obs_layout": "chw",
-        "frame_skip": 4,
-        "frame_stack": 4,
-        "info_filter": "none",
-    }
-    full_env = SuperMarioBrosNesTurboVecEnv(compare.DEFAULT_STABLE_RETRO_GAME, **options)
-    fast_env = SuperMarioBrosNesTurboVecEnv(compare.DEFAULT_STABLE_RETRO_GAME, **options)
-    try:
-        full_obs, _infos = full_env.reset(seed=123)
-        fast_obs, _infos = fast_env.reset(seed=123)
-        np.testing.assert_array_equal(full_obs, fast_obs)
-
-        masks = np.zeros((16, full_env.num_buttons), dtype=np.uint8)
-        for _ in range(10):
-            full_step = full_env.step(masks)
-            fast_step = fast_env.step_fast(masks)
-            np.testing.assert_array_equal(full_step[0], fast_step[0])
-            np.testing.assert_allclose(full_step[1], fast_step[1])
-            np.testing.assert_array_equal(full_step[2], fast_step[2])
-            np.testing.assert_array_equal(full_step[3], fast_step[3])
-    finally:
-        full_env.close()
-        fast_env.close()
 
 
 def _make_level1_1_obs_env(rom_path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:

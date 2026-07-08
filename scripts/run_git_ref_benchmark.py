@@ -557,6 +557,7 @@ def benchmark_command(
         "--warmup 100 --frame-skip 4 --frame-stack 4 "
         "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
         f"--states {quote(states)} --action-set simple --action noop "
+        "--include-info "
         f"--max-start-load {args.max_load} "
         "--no-start-game "
         f"--json --output-json {quote(output)} "
@@ -631,7 +632,7 @@ def require_raw_payload_matches_plan(
         "state": None,
         "states": list(STATE_NAMES),
         "state_dir": plan.state_dir,
-        "include_info": False,
+        "include_info": True,
         "terminate_on_flag": False,
         "start_game": False,
     }
@@ -865,7 +866,7 @@ def workload_payload(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str,
         "action_set": "simple",
         "action": "noop",
         "obs_resize_algorithm": "area",
-        "include_info": False,
+        "include_info": True,
         "terminate_on_flag": False,
         "start_game": False,
     }

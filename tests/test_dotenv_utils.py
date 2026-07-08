@@ -209,7 +209,7 @@ def test_direct_benchmark_results_record_rom_identity(
         state=None,
         parsed_states=("Level1-1",),
         state_dir=None,
-        include_info=False,
+        include_info=True,
         terminate_on_flag=False,
         no_start_game=False,
     )
@@ -1049,7 +1049,7 @@ def test_pypi_wrappers_capture_load_after_warmups(
         ):
             assert expected in measured_command
         if runner is run_smb_pypi_invocations:
-            assert "--action-set simple --action noop --no-start-game" in measured_command
+            assert "--action-set simple --action noop --include-info --no-start-game" in measured_command
         else:
             assert (
                 "--action noop --obs-copy safe_view --obs-resize-algorithm area"

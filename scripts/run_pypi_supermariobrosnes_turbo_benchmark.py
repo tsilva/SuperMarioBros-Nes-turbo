@@ -125,7 +125,7 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "states": list(DEFAULT_STATES),
         "action_set": "simple",
         "action": "noop",
-        "include_info": False,
+        "include_info": True,
         "obs_resize_algorithm": "area",
     }
 
@@ -462,7 +462,7 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--num-envs {args.num_envs} --steps {args.steps} --repeats {args.repeats} "
         f"--warmup {args.warmup} --frame-skip 4 --frame-stack 4 "
         "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action-set simple --action noop --no-start-game "
+        f"--states {quote(states)} --action-set simple --action noop --include-info --no-start-game "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])

@@ -62,7 +62,7 @@ def main() -> None:
     print(f"reset_sum={int(obs.sum())} {info_summary(env)}")
 
     for _ in range(20):
-        env.step_fast(actions(env, "noop"))
+        obs, _rewards, _terminated, _truncated, _infos = env.step(actions(env, "noop"))
     print(
         f"after_noop_sum={int(obs.sum())} "
         f"{info_summary(env)} "
@@ -70,9 +70,9 @@ def main() -> None:
     )
 
     for _ in range(10):
-        env.step_fast(actions(env, "start"))
+        obs, _rewards, _terminated, _truncated, _infos = env.step(actions(env, "start"))
     for _ in range(60):
-        env.step_fast(actions(env, "noop"))
+        obs, _rewards, _terminated, _truncated, _infos = env.step(actions(env, "noop"))
     print(
         f"after_start_sum={int(obs.sum())} "
         f"{info_summary(env)} "

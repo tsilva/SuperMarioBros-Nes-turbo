@@ -39,6 +39,7 @@ ACTION_BUTTONS = {
     "left": ("LEFT",),
     "start": ("START",),
 }
+MASK_BIT_WEIGHTS = (1 << np.arange(len(NES_BUTTONS), dtype=np.uint16)).astype(np.uint16)
 SMB_EVENT_SPECS = {
     "life_loss": {
         "description": "Player lost a life.",
@@ -826,6 +827,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self.num_envs = self._core.num_envs
         self.num_threads = self.num_envs if num_threads is None else int(num_threads)
         self.num_buttons = len(NES_BUTTONS)
+        self._mask_to_core_action_ids = self._build_mask_to_core_action_ids()
         self.button_combos = [list(combo) for combo in self._BUTTON_COMBOS]
         self.use_restricted_actions = use_restricted_actions
         self._action_mode = action_mode
@@ -1015,9 +1017,22 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
                 )
         if self._last_action_masks is not None and np.array_equal(masks, self._last_action_masks):
             return self._last_action_ids
-        self._last_action_ids[:] = [self._mask_to_core_action(mask) for mask in masks]
+        self._last_action_ids[:] = self._mask_to_core_action_ids[
+            self._button_mask_indices(masks)
+        ]
         self._last_action_masks = masks.copy()
         return self._last_action_ids
+
+    @staticmethod
+    def _button_mask_indices(masks: np.ndarray) -> np.ndarray:
+        return (masks.astype(np.uint16, copy=False) @ MASK_BIT_WEIGHTS).astype(np.uint16, copy=False)
+
+    def _build_mask_to_core_action_ids(self) -> np.ndarray:
+        lookup = np.empty(1 << self.num_buttons, dtype=np.uint8)
+        for mask_index in range(lookup.size):
+            mask = ((mask_index & MASK_BIT_WEIGHTS) != 0).astype(np.uint8)
+            lookup[mask_index] = self._mask_to_core_action(mask)
+        return lookup
 
     def _discrete_actions_to_masks(self, actions: Any) -> np.ndarray:
         values = np.asarray(actions, dtype=np.int64).reshape(-1)
@@ -1092,18 +1107,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         infos = self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
         return obs, rewards, terminated, truncated, infos
 
-    def step_wait_fast(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Step the whole batch without allocating per-env info dictionaries."""
-        self._core.step_fast_into(
-            self._actions,
-            self._obs,
-            self._rewards,
-            self._terminated,
-            self._truncated,
-        )
-        self._finish_native_step()
-        return self._return_obs(), self._return_rewards(), self._terminated, self._truncated
-
     def _finish_native_step(self) -> None:
         has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
         if has_terminal:
@@ -1167,10 +1170,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         actions: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         return self.step(actions)
-
-    def step_fast(self, actions: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        self.step_async(actions)
-        return self.step_wait_fast()
 
     def _write_info_arrays(self) -> None:
         self._core.info_into(

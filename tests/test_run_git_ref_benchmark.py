@@ -70,7 +70,7 @@ def benchmark_raw_config(
         "state": None,
         "states": list(STATE_NAMES),
         "state_dir": plan.state_dir,
-        "include_info": False,
+        "include_info": True,
         "terminate_on_flag": False,
         "start_game": False,
     }

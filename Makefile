@@ -1,4 +1,4 @@
-.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop release test test-python test-rust test-retro-oracle
+.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop develop-release release test test-python test-rust test-retro-oracle
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -22,7 +22,10 @@ PYTEST_ARGS ?=
 develop:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) $(PYTHON) -m maturin develop
 
-benchmark: benchmark-local
+develop-release:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) $(PYTHON) -m maturin develop --release
+
+benchmark: develop-release benchmark-local
 
 benchmark-local:
 	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_LOAD_ARGS) $(BENCHMARK_ARGS)

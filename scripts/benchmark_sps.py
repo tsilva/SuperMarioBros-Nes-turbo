@@ -80,7 +80,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--state-dir", type=Path, default=None)
-    parser.add_argument("--include-info", action="store_true")
+    parser.add_argument(
+        "--include-info",
+        action="store_true",
+        default=True,
+        help="Deprecated compatibility flag; benchmark_sps always uses step().",
+    )
     parser.add_argument("--terminate-on-flag", action="store_true")
     parser.add_argument("--no-start-game", action="store_true")
     parser.add_argument("--pre-start-steps", type=int, default=30)
@@ -274,10 +279,8 @@ def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...
 
 
 def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, include_info: bool) -> None:
-    if include_info:
-        env.step(actions)
-    else:
-        env.step_fast(actions)
+    del include_info
+    env.step(actions)
 
 
 def step_repeated(
@@ -367,7 +370,7 @@ def build_result(
             "states": list(args.parsed_states) if args.parsed_states is not None else None,
             "lane_states": list(active_states) if has_initial_state(args) else None,
             "state_dir": str(args.state_dir) if args.state_dir is not None else None,
-            "include_info": args.include_info,
+            "include_info": True,
             "terminate_on_flag": args.terminate_on_flag,
             "start_game": (
                 not args.no_start_game
