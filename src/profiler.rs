@@ -11,7 +11,6 @@ pub struct Profiler {
     totals: ProfileTotals,
     timings: ProfileTimings,
     cpu: CpuProfile,
-    vec_env: VecEnvProfile,
 }
 
 #[derive(Clone, Default)]
@@ -26,8 +25,6 @@ struct ProfileTotals {
     render_calls: u64,
     resize_calls: u64,
     stack_shifts: u64,
-    grouped_peer_copies: u64,
-    grouped_materializations: u64,
 }
 
 #[derive(Clone, Default)]
@@ -36,9 +33,6 @@ struct ProfileTimings {
     rendering_ns: u64,
     resize_ns: u64,
     stack_shift_ns: u64,
-    grouped_lane_copy_ns: u64,
-    scalar_info_copy_ns: u64,
-    materialization_ns: u64,
 }
 
 #[derive(Clone)]
@@ -56,19 +50,6 @@ impl Default for CpuProfile {
     }
 }
 
-#[derive(Clone, Default)]
-struct VecEnvProfile {
-    group_leaders: u64,
-    peer_copies: u64,
-    materialized_lanes: u64,
-    materialization_events: u64,
-    uniform_action_group_hits: u64,
-    uniform_action_group_misses: u64,
-    copied_observation_bytes: u64,
-    copied_info_lanes: u64,
-    first_lane_broadcasts: u64,
-}
-
 impl Profiler {
     pub fn new() -> Self {
         Self::default()
@@ -81,7 +62,6 @@ impl Profiler {
     pub fn add(&mut self, other: &Self) {
         self.totals.add(&other.totals);
         self.timings.add(&other.timings);
-        self.vec_env.add(&other.vec_env);
         for (dst, src) in self
             .cpu
             .opcode_counts
@@ -139,42 +119,6 @@ impl Profiler {
         self.timings.stack_shift_ns += duration_ns(elapsed);
     }
 
-    pub fn record_group_hit(&mut self, group_count: usize, leader_count: usize) {
-        self.vec_env.uniform_action_group_hits += 1;
-        self.vec_env.group_leaders += leader_count as u64;
-        if group_count > leader_count {
-            self.vec_env.peer_copies += (group_count - leader_count) as u64;
-        }
-    }
-
-    pub fn record_group_miss(&mut self) {
-        self.vec_env.uniform_action_group_misses += 1;
-    }
-
-    pub fn record_first_lane_broadcast(&mut self, peer_count: usize, obs_bytes: usize) {
-        self.vec_env.first_lane_broadcasts += 1;
-        self.vec_env.peer_copies += peer_count as u64;
-        self.vec_env.copied_observation_bytes += obs_bytes as u64;
-    }
-
-    pub fn record_grouped_copy(&mut self, peer_count: usize, obs_bytes: usize, elapsed: Duration) {
-        self.totals.grouped_peer_copies += peer_count as u64;
-        self.vec_env.copied_observation_bytes += obs_bytes as u64;
-        self.timings.grouped_lane_copy_ns += duration_ns(elapsed);
-    }
-
-    pub fn record_info_copy(&mut self, lanes: usize, elapsed: Duration) {
-        self.vec_env.copied_info_lanes += lanes as u64;
-        self.timings.scalar_info_copy_ns += duration_ns(elapsed);
-    }
-
-    pub fn record_materialization(&mut self, lanes: usize, elapsed: Duration) {
-        self.totals.grouped_materializations += 1;
-        self.vec_env.materialization_events += 1;
-        self.vec_env.materialized_lanes += lanes as u64;
-        self.timings.materialization_ns += duration_ns(elapsed);
-    }
-
     pub fn to_json(&self, top_n: usize) -> String {
         let mut out = String::new();
         let ppu_cycles_per_tick = div_u64(self.totals.ppu_tick_cycles, self.totals.ppu_tick_calls);
@@ -182,11 +126,6 @@ impl Profiler {
         let cpu_steps_per_env_step = div_u64(self.totals.cpu_steps, self.totals.env_steps);
         let render_ns_per_env_step = div_u64(self.timings.rendering_ns, self.totals.env_steps);
         let resize_ns_per_env_step = div_u64(self.timings.resize_ns, self.totals.env_steps);
-        let copy_ns_per_env_step =
-            div_u64(self.timings.grouped_lane_copy_ns, self.totals.env_steps);
-        let group_attempts =
-            self.vec_env.uniform_action_group_hits + self.vec_env.uniform_action_group_misses;
-        let group_hit_rate = div_u64(self.vec_env.uniform_action_group_hits, group_attempts);
 
         out.push_str("{\n");
         out.push_str("  \"enabled\": true,\n");
@@ -194,7 +133,7 @@ impl Profiler {
         out.push_str("  \"totals\": {");
         write!(
             out,
-            "\"env_steps\":{},\"batch_steps\":{},\"frame_steps\":{},\"cpu_steps\":{},\"ppu_tick_calls\":{},\"ppu_tick_cycles\":{},\"ppu_completed_frames\":{},\"render_calls\":{},\"resize_calls\":{},\"stack_shifts\":{},\"grouped_peer_copies\":{},\"grouped_materializations\":{}",
+            "\"env_steps\":{},\"batch_steps\":{},\"frame_steps\":{},\"cpu_steps\":{},\"ppu_tick_calls\":{},\"ppu_tick_cycles\":{},\"ppu_completed_frames\":{},\"render_calls\":{},\"resize_calls\":{},\"stack_shifts\":{}",
             self.totals.env_steps,
             self.totals.batch_steps,
             self.totals.frame_steps,
@@ -205,22 +144,18 @@ impl Profiler {
             self.totals.render_calls,
             self.totals.resize_calls,
             self.totals.stack_shifts,
-            self.totals.grouped_peer_copies,
-            self.totals.grouped_materializations,
         )
         .unwrap();
         out.push_str("},\n");
         out.push_str("  \"derived\": {");
         write!(
             out,
-            "\"cpu_steps_per_frame\":{},\"cpu_steps_per_env_step\":{},\"ppu_cycles_per_tick_call\":{},\"render_ns_per_env_step\":{},\"resize_ns_per_env_step\":{},\"grouped_copy_ns_per_env_step\":{},\"group_hit_rate\":{}",
+            "\"cpu_steps_per_frame\":{},\"cpu_steps_per_env_step\":{},\"ppu_cycles_per_tick_call\":{},\"render_ns_per_env_step\":{},\"resize_ns_per_env_step\":{}",
             json_f64(cpu_steps_per_frame),
             json_f64(cpu_steps_per_env_step),
             json_f64(ppu_cycles_per_tick),
             json_f64(render_ns_per_env_step),
             json_f64(resize_ns_per_env_step),
-            json_f64(copy_ns_per_env_step),
-            json_f64(group_hit_rate),
         )
         .unwrap();
         out.push_str("},\n");
@@ -246,33 +181,14 @@ impl Profiler {
             "range",
         );
         out.push_str("\n  },\n");
-        out.push_str("  \"vec_env\": {");
-        write!(
-            out,
-            "\"group_leaders\":{},\"peer_copies\":{},\"materialized_lanes\":{},\"materialization_events\":{},\"uniform_action_group_hits\":{},\"uniform_action_group_misses\":{},\"copied_observation_bytes\":{},\"copied_info_lanes\":{},\"first_lane_broadcasts\":{}",
-            self.vec_env.group_leaders,
-            self.vec_env.peer_copies,
-            self.vec_env.materialized_lanes,
-            self.vec_env.materialization_events,
-            self.vec_env.uniform_action_group_hits,
-            self.vec_env.uniform_action_group_misses,
-            self.vec_env.copied_observation_bytes,
-            self.vec_env.copied_info_lanes,
-            self.vec_env.first_lane_broadcasts,
-        )
-        .unwrap();
-        out.push_str("},\n");
         out.push_str("  \"timings_ns\": {");
         write!(
             out,
-            "\"frame_stepping\":{},\"rendering\":{},\"resize\":{},\"stack_shift\":{},\"grouped_lane_copy\":{},\"scalar_info_copy\":{},\"materialization\":{}",
+            "\"frame_stepping\":{},\"rendering\":{},\"resize\":{},\"stack_shift\":{}",
             self.timings.frame_stepping_ns,
             self.timings.rendering_ns,
             self.timings.resize_ns,
             self.timings.stack_shift_ns,
-            self.timings.grouped_lane_copy_ns,
-            self.timings.scalar_info_copy_ns,
-            self.timings.materialization_ns,
         )
         .unwrap();
         out.push_str("}\n");
@@ -293,8 +209,6 @@ impl ProfileTotals {
         self.render_calls += other.render_calls;
         self.resize_calls += other.resize_calls;
         self.stack_shifts += other.stack_shifts;
-        self.grouped_peer_copies += other.grouped_peer_copies;
-        self.grouped_materializations += other.grouped_materializations;
     }
 }
 
@@ -304,23 +218,6 @@ impl ProfileTimings {
         self.rendering_ns += other.rendering_ns;
         self.resize_ns += other.resize_ns;
         self.stack_shift_ns += other.stack_shift_ns;
-        self.grouped_lane_copy_ns += other.grouped_lane_copy_ns;
-        self.scalar_info_copy_ns += other.scalar_info_copy_ns;
-        self.materialization_ns += other.materialization_ns;
-    }
-}
-
-impl VecEnvProfile {
-    fn add(&mut self, other: &Self) {
-        self.group_leaders += other.group_leaders;
-        self.peer_copies += other.peer_copies;
-        self.materialized_lanes += other.materialized_lanes;
-        self.materialization_events += other.materialization_events;
-        self.uniform_action_group_hits += other.uniform_action_group_hits;
-        self.uniform_action_group_misses += other.uniform_action_group_misses;
-        self.copied_observation_bytes += other.copied_observation_bytes;
-        self.copied_info_lanes += other.copied_info_lanes;
-        self.first_lane_broadcasts += other.first_lane_broadcasts;
     }
 }
 

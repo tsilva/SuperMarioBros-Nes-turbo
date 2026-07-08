@@ -80,6 +80,7 @@ INFO_KEYS = (
     "xscrollLo",
 )
 _BASE_INFO_ARRAYS = (
+    ("x_pos", "_x_pos"),
     ("coins", "_coins"),
     ("levelHi", "_level_hi"),
     ("levelLo", "_level_lo"),
@@ -832,8 +833,8 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             normalized_crop_fill,
             self.obs_resize_algorithm,
         )
-        self.initial_state_names = tuple(self._core.initial_state_names)
         self._state_policy_names = tuple(self._core.initial_state_policy_names())
+        self.initial_state_names = self._state_policy_names
         self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
         self.num_envs = self._core.num_envs
         self.num_threads = self.num_envs if num_threads is None else int(num_threads)
@@ -915,11 +916,15 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._xscroll_hi = np.empty((self.num_envs,), dtype=np.uint8)
         self._xscroll_lo = np.empty((self.num_envs,), dtype=np.uint8)
         self._active_state_indices = np.empty((self.num_envs,), dtype=np.int32)
+        self._active_state_labels: tuple[str | None, ...] = tuple(None for _ in range(self.num_envs))
         self._info_all_lanes_mask = np.ones((self.num_envs,), dtype=np.bool_)
         self._done_on_info: list[dict[str, dict[str, Any]]] = [
             {} for _ in range(self.num_envs)
         ]
         self._terminal_observations: list[np.ndarray | None] = [
+            None for _ in range(self.num_envs)
+        ]
+        self._terminal_infos: list[dict[str, int] | None] = [
             None for _ in range(self.num_envs)
         ]
         self._rgb_frames: np.ndarray | None = (
@@ -929,7 +934,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         )
         self._write_active_state_indices()
 
-    def set_state(self, state: Any) -> None:
+    def set_state_policy(self, state: Any) -> None:
         """Update the state reset policy used by future resets and autoresets."""
         state = _normalize_retro_state(state)
         self._state_collection = isinstance(state, Mapping) or (
@@ -945,19 +950,19 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             list(initial_state_names),
             initial_state_weights,
         )
-        self.initial_state_names = tuple(self._core.initial_state_names)
         self._state_policy_names = tuple(self._core.initial_state_policy_names())
+        self.initial_state_names = self._state_policy_names
         self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
 
     def set_state_sampling_weights(self, weights: Mapping[str, float] | Sequence[float]) -> None:
         if isinstance(weights, Mapping):
-            self.set_state(weights)
+            self.set_state_policy(weights)
             return
         if isinstance(weights, (str, bytes, bytearray)) or not isinstance(weights, Sequence):
             raise ValueError("state sampling weights must be a mapping or sequence")
         if len(weights) != len(self._state_policy_names):
             raise ValueError("state sampling weight sequence length must match current state policy")
-        self.set_state(dict(zip(self._state_policy_names, weights, strict=True)))
+        self.set_state_policy(dict(zip(self._state_policy_names, weights, strict=True)))
 
     def state_sampling_weights(self) -> dict[str, float]:
         return dict(zip(self._state_policy_names, self._state_sampling_weights, strict=True))
@@ -981,6 +986,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._truncated.fill(False)
         self._done_on_info = [{} for _ in range(self.num_envs)]
         self._terminal_observations = [None for _ in range(self.num_envs)]
+        self._terminal_infos = [None for _ in range(self.num_envs)]
         self._write_active_state_indices()
         self._write_info_arrays()
         infos = self._vector_infos(
@@ -1124,6 +1130,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         if has_terminal:
             self._write_active_state_indices()
             self._write_terminal_observations()
+            self._write_terminal_infos()
         if self.done_on_info_rules:
             self._write_done_on_info()
         return has_terminal
@@ -1178,6 +1185,17 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
                 terminal_obs = np.asarray(report, dtype=np.uint8).reshape(obs_shape)
             self._terminal_observations.append(self._public_single_obs(terminal_obs))
 
+    def _write_terminal_infos(self) -> None:
+        reports = self._core.terminal_infos()
+        self._terminal_infos = []
+        for report in reports:
+            if report is None:
+                self._terminal_infos.append(None)
+                continue
+            self._terminal_infos.append(
+                {key: int(value) for key, value in zip(INFO_KEYS, report)}
+            )
+
     def step_gymnasium(
         self,
         actions: np.ndarray,
@@ -1199,10 +1217,22 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         )
 
     def _write_active_state_indices(self) -> None:
-        self._active_state_indices[:] = np.asarray(
-            self._core.active_state_indices(),
-            dtype=np.int32,
-        )
+        raw_indices = np.asarray(self._core.active_state_indices(), dtype=np.int32)
+        core_names = tuple(self._core.initial_state_names)
+        policy_indices = {name: index for index, name in enumerate(self._state_policy_names)}
+        active_labels: list[str | None] = []
+        public_indices = raw_indices.copy()
+        for lane, raw_index in enumerate(raw_indices):
+            if int(raw_index) < 0:
+                active_labels.append(None)
+                public_indices[lane] = -1
+                continue
+            label = core_names[int(raw_index)]
+            active_labels.append(label)
+            if label in policy_indices:
+                public_indices[lane] = policy_indices[label]
+        self._active_state_labels = tuple(active_labels)
+        self._active_state_indices[:] = public_indices
 
     def _return_obs(self) -> np.ndarray:
         public = self._public_obs_view()
@@ -1262,7 +1292,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         if terminal:
             reset_info = self._reset_info_dict(index)
             info.update(reset_info)
-            final_info: dict[str, Any] = {}
+            final_info: dict[str, Any] = dict(self._terminal_infos[index] or {})
             if done_on_info and include_done_on_info:
                 final_info["done_on_info"] = done_on_info
             if bool(self._terminated[index]):
@@ -1292,6 +1322,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
 
     def _base_info_dict(self, index: int) -> dict[str, Any]:
         return {
+            "x_pos": int(self._x_pos[index]),
             "coins": int(self._coins[index]),
             "levelHi": int(self._level_hi[index]),
             "levelLo": int(self._level_lo[index]),
@@ -1306,12 +1337,9 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
     def _reset_info_dict(self, index: int) -> dict[str, Any]:
         if not self._state_collection:
             return {}
-        if len(self.initial_state_names) == 0:
+        state = self._active_state_labels[index]
+        if state is None:
             return {}
-        state_index = int(self._active_state_indices[index])
-        if state_index < 0:
-            return {}
-        state = self.initial_state_names[state_index]
         return {
             "state": state,
             "start_state": state,
@@ -1363,11 +1391,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         return view
 
     def active_states(self) -> tuple[str | None, ...]:
-        names = self.initial_state_names
-        return tuple(
-            None if int(index) < 0 else names[int(index)]
-            for index in self._active_state_indices
-        )
+        return self._active_state_labels
 
     def close(self) -> None:
         self.closed = True

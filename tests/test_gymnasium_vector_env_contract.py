@@ -237,6 +237,9 @@ def test_gymnasium_reset_step_contract_and_spaces() -> None:
         assert terminations.dtype == np.bool_
         assert truncations.shape == (2,)
         assert truncations.dtype == np.bool_
+        assert "x_pos" in infos
+        assert lane_has(infos, "x_pos", 0)
+        assert lane_has(infos, "x_pos", 1)
         assert "xscrollHi" in infos
         assert lane_has(infos, "xscrollHi", 0)
         assert lane_has(infos, "xscrollHi", 1)
@@ -338,11 +341,50 @@ def test_done_lane_includes_final_obs_and_final_info() -> None:
                 assert final_obs.shape == (1, 84, 84)
                 assert final_obs.shape == obs.shape[1:]
                 assert bool(nested_lane_value(infos, ("final_info", "terminated"), 0)) is True
+                x_progress = final_done_on_info(infos, 0, "x_progress")
+                assert nested_lane_value(infos, ("final_info", "x_pos"), 0) == x_progress["next"][0]
+                assert nested_lane_value(infos, ("final_info", "score"), 0) == lane_value(
+                    infos,
+                    "score",
+                    0,
+                )
                 assert "terminal_observation" not in infos
                 assert "TimeLimit.truncated" not in infos
                 break
         else:
             pytest.fail("x_pos did not increase enough to trigger done_on_info")
+    finally:
+        env.close()
+
+
+def test_same_step_final_info_only_reports_terminal_lanes() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=2,
+        done_on={"x_progress": ("x_pos", "increase")},
+    )
+    actions = make_action_batch(env.num_envs, ["right", "noop"])
+
+    try:
+        env.reset()
+        for _ in range(300):
+            _obs, _rewards, terminations, truncations, infos = env.step(actions)
+            if not bool(terminations[0] or truncations[0]):
+                continue
+
+            assert terminations.tolist() == [True, False]
+            assert truncations.tolist() == [False, False]
+            assert lane_has(infos, "final_obs", 0)
+            assert not lane_has(infos, "final_obs", 1)
+            assert lane_has(infos, "final_info", 0)
+            assert not lane_has(infos, "final_info", 1)
+            x_progress = final_done_on_info(infos, 0, "x_progress")
+            assert nested_lane_value(infos, ("final_info", "x_pos"), 0) == x_progress["next"][0]
+            assert lane_has(infos["final_info"], "score", 0)
+            assert not lane_has(infos["final_info"], "score", 1)
+            break
+        else:
+            pytest.fail("x_pos did not increase enough to trigger lane-local terminal info")
     finally:
         env.close()
 
@@ -401,7 +443,7 @@ def test_weighted_state_sampling_survives_lane_local_autoreset() -> None:
         env.close()
 
 
-def test_set_state_updates_sampling_on_next_reset() -> None:
+def test_set_state_policy_updates_sampling_on_next_reset() -> None:
     env = make_env(
         require_rom(),
         state={"Level1-1": 1.0, "Level1-2": 1.0},
@@ -412,7 +454,8 @@ def test_set_state_updates_sampling_on_next_reset() -> None:
         env.reset()
         assert set(env.active_states()) <= {"Level1-1", "Level1-2"}
 
-        env.set_state({"Level1-1": 0.0, "Level1-2": 1.0})
+        assert not hasattr(env, "set_state")
+        env.set_state_policy({"Level1-1": 0.0, "Level1-2": 1.0})
         assert env.state_sampling_weights() == {"Level1-1": 0.0, "Level1-2": 1.0}
         assert set(env.active_states()) <= {"Level1-1", "Level1-2"}
 
@@ -422,7 +465,7 @@ def test_set_state_updates_sampling_on_next_reset() -> None:
         env.close()
 
 
-def test_set_state_string_and_list_match_constructor_state_forms() -> None:
+def test_set_state_policy_string_and_list_match_constructor_state_forms() -> None:
     env = make_env(
         require_rom(),
         state={"Level1-1": 1.0, "Level1-2": 1.0, "Level1-3": 1.0},
@@ -431,19 +474,25 @@ def test_set_state_string_and_list_match_constructor_state_forms() -> None:
     try:
         env.reset()
 
-        env.set_state("Level1-3")
+        env.set_state_policy("Level1-3")
         env.reset()
+        assert env.initial_state_names == ("Level1-3",)
+        np.testing.assert_array_equal(
+            env.active_state_indices(),
+            np.zeros(env.num_envs, dtype=np.int32),
+        )
         assert env.active_states() == ("Level1-3",) * env.num_envs
 
         fixed_states = ["Level1-1", "Level1-2", "Level1-1", "Level1-2"]
-        env.set_state(fixed_states)
+        env.set_state_policy(fixed_states)
         env.reset()
+        assert env.initial_state_names == tuple(fixed_states)
         assert env.active_states() == tuple(fixed_states)
     finally:
         env.close()
 
 
-def test_set_state_does_not_change_active_lanes_before_boundary() -> None:
+def test_set_state_policy_does_not_change_active_lanes_before_boundary() -> None:
     env = make_env(
         require_rom(),
         state=["Level1-1", "Level1-2"],
@@ -454,7 +503,7 @@ def test_set_state_does_not_change_active_lanes_before_boundary() -> None:
         before_states = env.active_states()
         before_indices = env.active_state_indices().copy()
 
-        env.set_state("Level1-3")
+        env.set_state_policy("Level1-3")
 
         assert env.active_states() == before_states
         np.testing.assert_array_equal(env.active_state_indices(), before_indices)
@@ -462,7 +511,7 @@ def test_set_state_does_not_change_active_lanes_before_boundary() -> None:
         env.close()
 
 
-def test_set_state_applies_to_lane_autoreset_only_after_done() -> None:
+def test_set_state_policy_applies_to_lane_autoreset_only_after_done() -> None:
     env = make_env(
         require_rom(),
         state=["Level1-1", "Level1-1"],
@@ -474,7 +523,7 @@ def test_set_state_applies_to_lane_autoreset_only_after_done() -> None:
         env.reset()
         assert env.active_states() == ("Level1-1", "Level1-1")
 
-        env.set_state({"Level1-2": 1.0})
+        env.set_state_policy({"Level1-2": 1.0})
         assert env.active_states() == ("Level1-1", "Level1-1")
 
         for _ in range(300):

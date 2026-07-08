@@ -257,6 +257,12 @@ impl RetroVecEnv {
         self.inner.terminal_observations().to_vec()
     }
 
+    pub fn terminal_infos(
+        &self,
+    ) -> Vec<Option<(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)>> {
+        self.inner.terminal_infos()
+    }
+
     pub fn rgb_frame_shape(&self) -> (usize, usize, usize, usize) {
         (
             self.inner.config().num_envs,

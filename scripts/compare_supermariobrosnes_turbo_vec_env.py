@@ -37,6 +37,7 @@ INFO_KEY_MAP = {
     "xscrollHi": "xscroll_hi",
     "xscrollLo": "xscroll_lo",
 }
+NATIVE_ONLY_INFO_KEYS = frozenset({"x_pos"})
 SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH = (
     "sha256:f5000bb13abcc81d000892b6b0d5ebb7fb101f729859af9ec8ca524a5b2b02f8"
 )
@@ -599,6 +600,21 @@ def normalize_infos(infos: Any) -> Any:
     return normalize_info_value(infos)
 
 
+def prune_native_only_info_keys(fast: Any, retro: Any) -> Any:
+    if not isinstance(fast, dict) or not isinstance(retro, dict):
+        return fast
+    result: dict[str, Any] = {}
+    for key, value in fast.items():
+        public_key = key[1:] if key.startswith("_") else key
+        if key not in retro and public_key in NATIVE_ONLY_INFO_KEYS:
+            continue
+        if key in retro:
+            result[key] = prune_native_only_info_keys(value, retro[key])
+        else:
+            result[key] = value
+    return result
+
+
 def lane_info(infos: Any, lane: int) -> dict[str, Any]:
     if isinstance(infos, (list, tuple)):
         return dict(infos[lane])
@@ -638,6 +654,7 @@ def compare_infos(
 ) -> None:
     fast = normalize_infos(fast_infos)
     retro = normalize_infos(retro_infos)
+    fast = prune_native_only_info_keys(fast, retro)
     if fast == retro:
         return
     payload: dict[str, Any] = {

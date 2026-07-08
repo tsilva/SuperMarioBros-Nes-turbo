@@ -13,7 +13,10 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
 - Preserve preprocessing options: grayscale/RGB, frame skip, optional max-pooling, crop remove or mask mode, resize, frame stack, and CHW/HWC layouts.
 - Preserve stable-retro-style state handling: packaged/named states, paths/bytes, per-lane states, weighted mappings, `set_state(...)`, active-state reporting, state sampling weights, and documented SMB states including `Level1-1` through `Level1-4`.
 - Preserve native game-over and flag-completion termination plus additive `done_on`/`done_on_info` semantics, named events, `change`/`increase`/`decrease`, Gymnasium vector `infos` payloads, and same-step `final_obs`/`final_info` terminal data.
-- Maintain deterministic seeding and lane behavior; grouped/synced lane optimizations may only preserve the public vector-env contract.
+- Maintain deterministic seeding and lane behavior; every lane must execute its
+  own emulator state during vector steps, without repeated-state or
+  uniform-action leader/peer copy shortcuts that do not apply to stochastic PPO
+  rollout collection.
 - Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, deterministic sampled action workload, and comparable JSON.
 - Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
 - Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; ad hoc timings are not acceptance evidence.

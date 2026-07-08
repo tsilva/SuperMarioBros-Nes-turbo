@@ -88,7 +88,7 @@ def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
     return obs
 
 
-def check_uniform_sync(rom_path: Path) -> None:
+def check_uniform_lanes_match_single_lane_reference(rom_path: Path) -> None:
     vec = make_env(rom_path, 16)
     one = make_env(rom_path, 1)
     obs_vec = reset_obs(vec)
@@ -120,7 +120,7 @@ def check_uniform_sync(rom_path: Path) -> None:
             np.testing.assert_array_equal(vec_obs[0], vec_obs[lane])
 
 
-def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
+def check_divergent_actions_match_independent_lane_references(rom_path: Path) -> None:
     vec = make_env(rom_path, 8)
     refs = [make_env(rom_path, 1) for _ in range(8)]
     vec.reset()
@@ -146,8 +146,8 @@ def check_divergence_materializes_independent_lanes(rom_path: Path) -> None:
 
 def main() -> None:
     rom_path = resolve_required_rom_path(DEFAULT_ROM)
-    check_uniform_sync(rom_path)
-    check_divergence_materializes_independent_lanes(rom_path)
+    check_uniform_lanes_match_single_lane_reference(rom_path)
+    check_divergent_actions_match_independent_lane_references(rom_path)
     print("equivalence=ok obs_shape=(16, 4, 84, 84) obs_dtype=uint8")
 
 
