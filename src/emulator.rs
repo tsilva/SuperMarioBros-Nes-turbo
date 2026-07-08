@@ -46,7 +46,6 @@ const FLAG_B: u8 = 0x10;
 const FLAG_U: u8 = 0x20;
 const FLAG_V: u8 = 0x40;
 const FLAG_N: u8 = 0x80;
-const ZN_FLAG_TABLE: [u8; 256] = build_zn_flag_table();
 
 const BUTTON_A: u8 = 1 << 0;
 const BUTTON_B: u8 = 1 << 1;
@@ -2305,7 +2304,14 @@ impl NesEmulator {
 
     #[inline]
     fn set_zn(&mut self, value: u8) {
-        self.cpu.p = (self.cpu.p & !(FLAG_Z | FLAG_N)) | FLAG_U | zn_flags(value);
+        let mut p = self.cpu.p & !(FLAG_Z | FLAG_N);
+        if value == 0 {
+            p |= FLAG_Z;
+        }
+        if value & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
@@ -3199,11 +3205,17 @@ impl NesEmulator {
     #[inline]
     fn cmp(&mut self, reg: u8, value: u8) {
         let result = reg.wrapping_sub(value);
-        let mut p = (self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N)) | FLAG_U | zn_flags(result);
+        let mut p = self.cpu.p & !(FLAG_C | FLAG_Z | FLAG_N);
         if reg >= value {
             p |= FLAG_C;
         }
-        self.cpu.p = p;
+        if result == 0 {
+            p |= FLAG_Z;
+        }
+        if result & 0x80 != 0 {
+            p |= FLAG_N;
+        }
+        self.cpu.p = p | FLAG_U;
     }
 
     #[inline]
@@ -3389,28 +3401,6 @@ impl NesEmulator {
 #[inline]
 fn page_crossed(a: u16, b: u16) -> bool {
     (a & 0xff00) != (b & 0xff00)
-}
-
-const fn build_zn_flag_table() -> [u8; 256] {
-    let mut table = [0u8; 256];
-    let mut value = 0usize;
-    while value < 256 {
-        let mut flags = 0u8;
-        if value == 0 {
-            flags |= FLAG_Z;
-        }
-        if value & 0x80 != 0 {
-            flags |= FLAG_N;
-        }
-        table[value] = flags;
-        value += 1;
-    }
-    table
-}
-
-#[inline]
-fn zn_flags(value: u8) -> u8 {
-    ZN_FLAG_TABLE[value as usize]
 }
 
 #[cfg(test)]
