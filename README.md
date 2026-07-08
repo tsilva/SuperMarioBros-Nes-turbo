@@ -155,8 +155,8 @@ make test                           # Rust tests + HF policy completion/parity o
 uv run python scripts/smoke_smb.py --rom-path /path/to/SuperMarioBros.nes  # quick ROM/emulator smoke check
 uv run python scripts/benchmark_sps.py --rom-path /path/to/SuperMarioBros.nes --num-envs 16 --steps 500 --repeats 3
 
-uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode external      # raw SDL2 play view
-uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode external --view preprocessed --scale 4
+make play PLAY_ARGS="--rom-path /path/to/SuperMarioBros.nes"                              # SDL2 RGB + frame-stack play view
+uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode external
 uv run python scripts/play_policy.py https://huggingface.co/tsilva/SuperMarioBros-NES_Level1 --rom-path /path/to/SuperMarioBros.nes
 ```
 
@@ -235,7 +235,7 @@ single-action loop.
 - For `SuperMarioBrosNesTurboVecEnv`, `done_on` accepts stable-retro-style compact rules like `{"life_loss": ("lives", "decrease")}`, named events such as `["life_loss"]`, and verbose event objects with `variables`/`keys`, `op`, `compare`, and `triggers`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired terminal rules are reported through Gymnasium vector infos under `infos["final_info"]["done_on_info"]` with `trigger`, `op`, `compare`, `keys`, `variables`, `prev`, `next`, and `triggers` fields.
 - Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post8` for new benchmarks and comparisons, and constructs the upstream vector env with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
-- Play mode uses the native SDL2 library. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
+- Play mode uses the native SDL2 library and opens RGB gameplay plus the grayscale frame stack in separate windows. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
 - ROM files are not included in the repository; use the SHA-256 digest above to confirm test inputs when needed.
 
 ## Architecture

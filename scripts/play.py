@@ -102,33 +102,103 @@ class SdlUnavailableError(RuntimeError):
     pass
 
 
+class SdlTextureWindow:
+    def __init__(
+        self,
+        owner: "SdlExternalVecPlayer",
+        title: str,
+        initial_frame: np.ndarray,
+        scale: int,
+        x: int,
+        y: int,
+    ) -> None:
+        if scale <= 0:
+            raise ValueError("window scale must be positive")
+        self.owner = owner
+        self.sdl = owner.sdl
+        self.title = title
+        self.scale = scale
+        self.texture = None
+        self.renderer = None
+        self.window = None
+
+        frame = rgb_frame(initial_frame)
+        self.height, self.width = frame.shape[:2]
+        self.window = self.sdl.SDL_CreateWindow(
+            title.encode("utf-8"),
+            x,
+            y,
+            self.width * scale,
+            self.height * scale,
+            SDL_WINDOW_SHOWN,
+        )
+        if not self.window:
+            raise SdlUnavailableError(owner.sdl_error())
+        self.renderer = self.sdl.SDL_CreateRenderer(self.window, -1, SDL_RENDERER_ACCELERATED)
+        if not self.renderer:
+            error = owner.sdl_error()
+            self.close()
+            raise SdlUnavailableError(error)
+        self.texture = self.sdl.SDL_CreateTexture(
+            self.renderer,
+            SDL_PIXELFORMAT_RGB24,
+            SDL_TEXTUREACCESS_STREAMING,
+            self.width,
+            self.height,
+        )
+        if not self.texture:
+            error = owner.sdl_error()
+            self.close()
+            raise SdlUnavailableError(error)
+        self.render(frame)
+
+    @property
+    def pixel_width(self) -> int:
+        return self.width * self.scale
+
+    def render(self, frame: np.ndarray) -> None:
+        frame = rgb_frame(frame)
+        if frame.shape[:2] != (self.height, self.width):
+            raise ValueError(
+                f"{self.title} frame size changed from {(self.height, self.width)} to {frame.shape[:2]}"
+            )
+        if self.sdl.SDL_UpdateTexture(
+            self.texture,
+            None,
+            frame.ctypes.data_as(ctypes.c_void_p),
+            frame.strides[0],
+        ) != 0:
+            raise RuntimeError(self.owner.sdl_error())
+        self.sdl.SDL_RenderClear(self.renderer)
+        self.sdl.SDL_RenderCopy(self.renderer, self.texture, None, None)
+        self.sdl.SDL_RenderPresent(self.renderer)
+
+    def set_title(self, title: str) -> None:
+        if self.window:
+            self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
+
+    def close(self) -> None:
+        if self.texture:
+            self.sdl.SDL_DestroyTexture(self.texture)
+            self.texture = None
+        if self.renderer:
+            self.sdl.SDL_DestroyRenderer(self.renderer)
+            self.renderer = None
+        if self.window:
+            self.sdl.SDL_DestroyWindow(self.window)
+            self.window = None
+
+
 class SdlExternalVecPlayer:
     """Keyboard player that feeds actions through a one-lane vector env."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        self.view = args.view
-        if self.view == "preprocessed":
-            if args.frame_skip <= 0:
-                raise ValueError("--frame-skip must be positive")
-            if args.frame_stack <= 0:
-                raise ValueError("--frame-stack must be positive")
-            if args.crop_top < 0 or args.crop_bottom < 0:
-                raise ValueError("--crop-top and --crop-bottom must be non-negative")
-            frame_skip = args.frame_skip
-            grayscale = True
-            frame_stack = args.frame_stack
-            crop_top = args.crop_top
-            crop_bottom = args.crop_bottom
-            resize_width = args.resize_width
-            resize_height = args.resize_height
-        else:
-            frame_skip = 1
-            grayscale = False
-            frame_stack = 1
-            crop_top = 0
-            crop_bottom = 0
-            resize_width = NES_WIDTH
-            resize_height = NES_HEIGHT
+        if args.frame_skip <= 0:
+            raise ValueError("--frame-skip must be positive")
+        if args.frame_stack <= 0:
+            raise ValueError("--frame-stack must be positive")
+        if args.crop_top < 0 or args.crop_bottom < 0:
+            raise ValueError("--crop-top and --crop-bottom must be non-negative")
 
         self.env = SuperMarioBrosNesTurboVecEnv(
             "SuperMarioBros-Nes-v0",
@@ -136,20 +206,19 @@ class SdlExternalVecPlayer:
             rom_path=resolve_required_rom_path(args.rom_path),
             num_envs=1,
             use_restricted_actions=Actions.ALL,
-            frame_skip=frame_skip,
-            obs_grayscale=grayscale,
-            frame_stack=frame_stack,
-            obs_crop=(crop_top, crop_bottom, 0, 0),
-            obs_resize=(resize_height, resize_width),
+            render_mode="rgb_array",
+            frame_skip=args.frame_skip,
+            obs_grayscale=True,
+            frame_stack=args.frame_stack,
+            obs_crop=(args.crop_top, args.crop_bottom, 0, 0),
+            obs_resize=(args.resize_height, args.resize_width),
             obs_resize_algorithm="area",
             obs_layout="chw",
         )
-        self.display_grayscale = grayscale
         self.scale = args.scale
+        self.stack_scale = args.stack_scale
         self.frame_delay_s = 1.0 / max(1, args.fps)
-        self.obs = self.reset_one()
-        initial_frame = display_frame_from_obs(self.obs, self.display_grayscale)
-        self.display_height, self.display_width = initial_frame.shape[:2]
+        self.stack_obs = self.reset_one()
         self.reward = 0.0
         self.terminated = False
         self.truncated = False
@@ -157,42 +226,39 @@ class SdlExternalVecPlayer:
         self.frames_rendered = 0
         self.auto_close_frames = args.auto_close_frames
 
-        self.sdl = load_sdl2()
+        try:
+            self.sdl = load_sdl2()
+        except Exception:
+            self.env.close()
+            raise
         configure_sdl(self.sdl)
+        self.windows: list[SdlTextureWindow] = []
         if self.sdl.SDL_Init(SDL_INIT_VIDEO) != 0:
+            self.env.close()
             raise SdlUnavailableError(self.sdl_error())
         self.sdl.SDL_SetHint(b"SDL_RENDER_SCALE_QUALITY", b"nearest")
-        self.window = self.sdl.SDL_CreateWindow(
-            b"SuperMarioBros-Nes-turbo external vector player",
-            SDL_WINDOWPOS_CENTERED,
-            SDL_WINDOWPOS_CENTERED,
-            self.display_width * self.scale,
-            self.display_height * self.scale,
-            SDL_WINDOW_SHOWN,
-        )
-        if not self.window:
-            error = self.sdl_error()
-            self.sdl.SDL_Quit()
-            raise SdlUnavailableError(error)
-        self.renderer = self.sdl.SDL_CreateRenderer(self.window, -1, SDL_RENDERER_ACCELERATED)
-        if not self.renderer:
-            error = self.sdl_error()
-            self.sdl.SDL_DestroyWindow(self.window)
-            self.sdl.SDL_Quit()
-            raise SdlUnavailableError(error)
-        self.texture = self.sdl.SDL_CreateTexture(
-            self.renderer,
-            SDL_PIXELFORMAT_RGB24,
-            SDL_TEXTUREACCESS_STREAMING,
-            self.display_width,
-            self.display_height,
-        )
-        if not self.texture:
-            error = self.sdl_error()
-            self.sdl.SDL_DestroyRenderer(self.renderer)
-            self.sdl.SDL_DestroyWindow(self.window)
-            self.sdl.SDL_Quit()
-            raise SdlUnavailableError(error)
+        try:
+            self.rgb_window = SdlTextureWindow(
+                self,
+                "SuperMarioBros-Nes-turbo RGB",
+                self.raw_rgb_frame(),
+                self.scale,
+                64,
+                64,
+            )
+            self.windows.append(self.rgb_window)
+            self.stack_window = SdlTextureWindow(
+                self,
+                "SuperMarioBros-Nes-turbo frame stack",
+                display_frame_from_obs(self.stack_obs, grayscale=True),
+                self.stack_scale,
+                64 + self.rgb_window.pixel_width + 24,
+                64,
+            )
+            self.windows.append(self.stack_window)
+        except Exception:
+            self.close()
+            raise
 
         self.pressed_keys: set[int] = set()
         self.pressed_scancodes: set[int] = set()
@@ -209,10 +275,10 @@ class SdlExternalVecPlayer:
             while self.running:
                 self.poll_events()
                 action = self.current_action()
-                self.obs, reward, self.terminated, self.truncated, self.info = self.step_one(action)
+                self.stack_obs, reward, self.terminated, self.truncated, self.info = self.step_one(action)
                 self.reward += reward
                 if self.terminated or self.truncated:
-                    self.obs = self.reset_one()
+                    self.stack_obs = self.reset_one()
                     self.reward = 0.0
 
                 self.render()
@@ -256,39 +322,21 @@ class SdlExternalVecPlayer:
                     self.pressed_keys.discard(keycode)
 
     def render(self) -> None:
-        frame = display_frame_from_obs(self.obs, self.display_grayscale)
-        if frame.ndim == 2:
-            height, width = frame.shape
-            rgb = np.empty((height, width, 3), dtype=np.uint8)
-            rgb[:, :, 0] = frame
-            rgb[:, :, 1] = frame
-            rgb[:, :, 2] = frame
-            frame = rgb
-        else:
-            frame = np.ascontiguousarray(frame)
-
-        if self.sdl.SDL_UpdateTexture(
-            self.texture,
-            None,
-            frame.ctypes.data_as(ctypes.c_void_p),
-            frame.strides[0],
-        ) != 0:
-            raise RuntimeError(self.sdl_error())
-        self.sdl.SDL_RenderClear(self.renderer)
-        self.sdl.SDL_RenderCopy(self.renderer, self.texture, None, None)
-        self.sdl.SDL_RenderPresent(self.renderer)
+        self.rgb_window.render(self.raw_rgb_frame())
+        self.stack_window.render(display_frame_from_obs(self.stack_obs, grayscale=True))
 
         now = time.perf_counter()
         if now >= self.next_status_update:
             self.next_status_update = now + 0.1
-            title = (
-                "SuperMarioBros-Nes-turbo external vector player  "
-                f"view={self.view} obs={tuple(self.obs.shape)} "
+            gameplay_title = (
+                "SuperMarioBros-Nes-turbo RGB  "
                 f"action={ACTION_MEANINGS[self.current_action()]} "
                 f"x={self.info.get('x_pos', 0)} lives={self.info.get('lives', 0)} "
                 f"reward={self.reward:.1f} fps={self.display_fps:.0f}"
             )
-            self.sdl.SDL_SetWindowTitle(self.window, title.encode("utf-8"))
+            stack_title = f"SuperMarioBros-Nes-turbo frame stack  obs={tuple(self.stack_obs.shape)}"
+            self.rgb_window.set_title(gameplay_title)
+            self.stack_window.set_title(stack_title)
 
     def step_one(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
         action_name = ACTION_MEANINGS[action]
@@ -309,6 +357,12 @@ class SdlExternalVecPlayer:
     def reset_one(self) -> np.ndarray:
         obs, _infos = self.env.reset()
         return obs[0]
+
+    def raw_rgb_frame(self) -> np.ndarray:
+        frame = self.env.render()
+        if frame is None:
+            raise RuntimeError("render_mode='rgb_array' did not return a frame")
+        return np.ascontiguousarray(frame)
 
     def current_action(self) -> int:
         if SDLK_RETURN in self.pressed_keys:
@@ -339,16 +393,10 @@ class SdlExternalVecPlayer:
         return action_id("noop")
 
     def close(self) -> None:
+        for window in reversed(getattr(self, "windows", [])):
+            window.close()
+        self.windows = []
         self.env.close()
-        if getattr(self, "texture", None):
-            self.sdl.SDL_DestroyTexture(self.texture)
-            self.texture = None
-        if getattr(self, "renderer", None):
-            self.sdl.SDL_DestroyRenderer(self.renderer)
-            self.renderer = None
-        if getattr(self, "window", None):
-            self.sdl.SDL_DestroyWindow(self.window)
-            self.window = None
         if getattr(self, "sdl", None):
             self.sdl.SDL_Quit()
 
@@ -460,6 +508,19 @@ def display_frame_from_obs(obs: np.ndarray, grayscale: bool) -> np.ndarray:
     return tile_grayscale_channels(obs)
 
 
+def rgb_frame(frame: np.ndarray) -> np.ndarray:
+    if frame.ndim == 2:
+        height, width = frame.shape
+        rgb = np.empty((height, width, 3), dtype=np.uint8)
+        rgb[:, :, 0] = frame
+        rgb[:, :, 1] = frame
+        rgb[:, :, 2] = frame
+        return np.ascontiguousarray(rgb)
+    if frame.ndim == 3 and frame.shape[2] == 3:
+        return np.ascontiguousarray(frame)
+    raise ValueError(f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}")
+
+
 def grid_size(n: int) -> tuple[int, int]:
     cols = 1
     while cols * cols < n:
@@ -529,7 +590,6 @@ def png_from_frame(frame: np.ndarray) -> bytes:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("external",), default="external")
-    parser.add_argument("--view", choices=("raw", "preprocessed"), default="raw")
     parser.add_argument(
         "--rom-path",
         type=Path,
@@ -537,7 +597,8 @@ def parse_args() -> argparse.Namespace:
         help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--fps", type=int, default=60)
-    parser.add_argument("--scale", type=int, default=3)
+    parser.add_argument("--scale", type=int, default=3, help="Scale for the main RGB gameplay window.")
+    parser.add_argument("--stack-scale", type=int, default=3, help="Scale for the side frame-stack window.")
     parser.add_argument("--frame-skip", type=int, default=1)
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--crop-top", type=int, default=32)

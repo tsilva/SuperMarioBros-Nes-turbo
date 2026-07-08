@@ -1,4 +1,4 @@
-.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop develop-release play play-preprocessed release test test-python test-rust test-retro-oracle
+.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop develop-release play release test test-python test-rust test-retro-oracle
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -15,7 +15,6 @@ BENCHMARK_WARMUP ?= 500
 BENCHMARK_LOAD_ARGS ?= --skip-load-preflight
 BENCHMARK_ARGS ?=
 PLAY_ARGS ?=
-PLAY_PREPROCESSED_ARGS ?= --scale 4
 BASELINE_REF ?=
 CANDIDATE_REF ?=
 CALIBRATE_REF ?= HEAD
@@ -34,9 +33,6 @@ benchmark-local:
 
 play: develop-release
 	$(PYTHON) scripts/play.py --mode external $(PLAY_ARGS)
-
-play-preprocessed: develop-release
-	$(PYTHON) scripts/play.py --mode external --view preprocessed $(PLAY_PREPROCESSED_ARGS)
 
 autoresearch-diagnose:
 	$(PYTHON) scripts/autoresearch.py diagnose
