@@ -2212,22 +2212,20 @@ fn check_done_on_info(
     let current = InfoSnapshot::from_env(env);
     let mut fired_any = false;
     for rule in rules {
-        let mut fired = false;
-        let mut previous_values = Vec::with_capacity(rule.keys.len());
-        let mut current_values = Vec::with_capacity(rule.keys.len());
-        for key in &rule.keys {
-            let previous = baseline.value(*key);
-            let next = current.value(*key);
-            previous_values.push(previous);
-            current_values.push(next);
-            if done_on_info_value_fired(rule.op, previous, next) {
-                fired = true;
-            }
-        }
-        if !fired {
+        if !rule
+            .keys
+            .iter()
+            .any(|key| done_on_info_value_fired(rule.op, baseline.value(*key), current.value(*key)))
+        {
             continue;
         }
         fired_any = true;
+        let mut previous_values = Vec::with_capacity(rule.keys.len());
+        let mut current_values = Vec::with_capacity(rule.keys.len());
+        for key in &rule.keys {
+            previous_values.push(baseline.value(*key));
+            current_values.push(current.value(*key));
+        }
         fired_rules.push(FiredDoneOnInfoRule {
             name: rule.name.clone(),
             keys: rule.keys.clone(),
