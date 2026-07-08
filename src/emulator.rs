@@ -1909,39 +1909,54 @@ impl NesEmulator {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
             }
-            if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if self.ppu.tick(pending_ppu_cycles)
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    pending_ppu_cycles = 0;
-                    break;
-                }
-                pending_ppu_cycles = 0;
-                continue;
-            }
-            if self.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if self.ppu.tick(pending_ppu_cycles)
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    pending_ppu_cycles = 0;
-                    break;
-                }
-                pending_ppu_cycles = 0;
-                continue;
-            }
-            if self.try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    if self.ppu.tick(pending_ppu_cycles)
-                        || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+            match self.cpu.pc {
+                SMB_IDLE_JMP_PC => {
+                    if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
                     {
+                        if self.ppu.tick(pending_ppu_cycles)
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            pending_ppu_cycles = 0;
+                            break;
+                        }
                         pending_ppu_cycles = 0;
-                        break;
+                        continue;
                     }
-                    pending_ppu_cycles = 0;
                 }
-                continue;
+                SMB_SPRITE0_POLL_PC => {
+                    if self.try_fast_forward_sprite0_poll(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        if self.ppu.tick(pending_ppu_cycles)
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            pending_ppu_cycles = 0;
+                            break;
+                        }
+                        pending_ppu_cycles = 0;
+                        continue;
+                    }
+                }
+                SMB_OAM_CLEAR_PC => {
+                    if self
+                        .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+                    {
+                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            if self.ppu.tick(pending_ppu_cycles)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                        }
+                        continue;
+                    }
+                }
+                _ => {}
             }
             let cycles = self.cpu_step() as usize;
             cpu_cycle_guard += cycles;
@@ -1971,39 +1986,54 @@ impl NesEmulator {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
             }
-            if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    pending_ppu_cycles = 0;
-                    break;
-                }
-                pending_ppu_cycles = 0;
-                continue;
-            }
-            if self.try_fast_forward_sprite0_poll(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    pending_ppu_cycles = 0;
-                    break;
-                }
-                pending_ppu_cycles = 0;
-                continue;
-            }
-            if self.try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles) {
-                if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                {
-                    if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                        || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+            match self.cpu.pc {
+                SMB_IDLE_JMP_PC => {
+                    if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
                     {
+                        if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            pending_ppu_cycles = 0;
+                            break;
+                        }
                         pending_ppu_cycles = 0;
-                        break;
+                        continue;
                     }
-                    pending_ppu_cycles = 0;
                 }
-                continue;
+                SMB_SPRITE0_POLL_PC => {
+                    if self.try_fast_forward_sprite0_poll(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            pending_ppu_cycles = 0;
+                            break;
+                        }
+                        pending_ppu_cycles = 0;
+                        continue;
+                    }
+                }
+                SMB_OAM_CLEAR_PC => {
+                    if self
+                        .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+                    {
+                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                        }
+                        continue;
+                    }
+                }
+                _ => {}
             }
             let cycles = self.cpu_step_profiled(profiler) as usize;
             cpu_cycle_guard += cycles;
