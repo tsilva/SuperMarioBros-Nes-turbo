@@ -1356,14 +1356,20 @@ fn check_done_on_info(
     if rules.is_empty() {
         return false;
     }
-    let current = InfoSnapshot::from_env(env);
     let mut fired_any = false;
     for rule in rules {
-        if !rule
-            .keys
-            .iter()
-            .any(|key| done_on_info_value_fired(rule.op, baseline.value(*key), current.value(*key)))
-        {
+        let mut fired = false;
+        for key in &rule.keys {
+            if done_on_info_value_fired(
+                rule.op,
+                baseline.value(*key),
+                info_value_from_env(env, *key),
+            ) {
+                fired = true;
+                break;
+            }
+        }
+        if !fired {
             continue;
         }
         fired_any = true;
@@ -1371,7 +1377,7 @@ fn check_done_on_info(
         let mut current_values = Vec::with_capacity(rule.keys.len());
         for key in &rule.keys {
             previous_values.push(baseline.value(*key));
-            current_values.push(current.value(*key));
+            current_values.push(info_value_from_env(env, *key));
         }
         fired_rules.push(FiredDoneOnInfoRule {
             name: rule.name.clone(),
@@ -1382,6 +1388,21 @@ fn check_done_on_info(
         });
     }
     fired_any
+}
+
+fn info_value_from_env(env: &NesEmulator, key: InfoKey) -> i64 {
+    match key {
+        InfoKey::XPos => i64::from(env.x_pos()),
+        InfoKey::Coins => i64::from(env.coins()),
+        InfoKey::LevelHi => i64::from(env.level_hi()),
+        InfoKey::LevelLo => i64::from(env.level_lo()),
+        InfoKey::Lives => i64::from(env.lives()),
+        InfoKey::Score => i64::from(env.score()),
+        InfoKey::Scrolling => i64::from(env.scrolling()),
+        InfoKey::Time => i64::from(env.time()),
+        InfoKey::XScrollHi => i64::from(env.xscroll_hi()),
+        InfoKey::XScrollLo => i64::from(env.xscroll_lo()),
+    }
 }
 
 fn done_on_info_value_fired(op: DoneOnInfoOp, baseline: i64, current: i64) -> bool {
