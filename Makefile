@@ -8,10 +8,10 @@ RUSTFLAGS_EXT ?= -C link-arg=-undefined -C link-arg=dynamic_lookup
 else
 RUSTFLAGS_EXT ?=
 endif
-BENCHMARK_NUM_ENVS ?= 16
 BENCHMARK_STEPS ?= 5000
 BENCHMARK_REPEATS ?= 3
 BENCHMARK_WARMUP ?= 500
+BENCHMARK_ENV_ARGS ?= $(shell $(PYTHON) scripts/benchmark_workload.py)
 BENCHMARK_LOAD_ARGS ?= --skip-load-preflight
 BENCHMARK_ARGS ?=
 PLAY_ARGS ?=
@@ -29,7 +29,7 @@ develop-release:
 benchmark: develop-release benchmark-local
 
 benchmark-local:
-	$(PYTHON) scripts/benchmark_sps.py --num-envs $(BENCHMARK_NUM_ENVS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_LOAD_ARGS) $(BENCHMARK_ARGS)
+	$(PYTHON) scripts/benchmark_sps.py $(BENCHMARK_ENV_ARGS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_LOAD_ARGS) $(BENCHMARK_ARGS)
 
 play: develop-release
 	$(PYTHON) scripts/play.py --mode external $(PLAY_ARGS)

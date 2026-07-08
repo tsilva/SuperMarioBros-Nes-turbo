@@ -10,7 +10,10 @@ from gymnasium import spaces
 from gymnasium.vector import AutoresetMode, VectorEnv
 
 from supermariobrosnes_turbo import (
+    ACTION_BUTTONS,
+    BUTTON_TO_INDEX,
     Actions,
+    NES_BUTTONS,
     SuperMarioBrosNesTurboVecEnv,
     list_available_states,
 )
@@ -18,12 +21,6 @@ from rom_helpers import require_rom
 from supermariobrosnes_turbo.env import _normalize_initial_state_config, _resolve_state_path
 
 
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-}
 EXPECTED_PACKAGED_STATES = {
     "Level1-1",
     "Level1-1-99lives",

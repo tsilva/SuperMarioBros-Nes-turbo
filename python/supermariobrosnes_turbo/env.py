@@ -349,6 +349,36 @@ def _action_masks(action_meanings: tuple[str, ...]) -> np.ndarray:
     return masks
 
 
+def action_mask(action_name: str) -> np.ndarray:
+    """Return a single SMB button mask for a named core action."""
+    if action_name not in ACTION_BUTTONS:
+        valid = ", ".join(CORE_ACTION_MEANINGS)
+        raise ValueError(f"unknown action {action_name!r}; valid actions: {valid}")
+    mask = np.zeros((len(NES_BUTTONS),), dtype=np.uint8)
+    for button in ACTION_BUTTONS[action_name]:
+        mask[BUTTON_TO_INDEX[button]] = 1
+    return mask
+
+
+def action_batch(actions: str | Sequence[str], num_envs: int) -> np.ndarray:
+    """Return an `(num_envs, num_buttons)` SMB action mask batch."""
+    if num_envs <= 0:
+        raise ValueError("num_envs must be positive")
+    if isinstance(actions, str):
+        names = [actions] * num_envs
+    else:
+        names = [str(action) for action in actions]
+        if len(names) != num_envs:
+            raise ValueError(
+                "action sequences must provide exactly one action per env slot: "
+                f"got {len(names)} actions for num_envs={num_envs}"
+            )
+    masks = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
+    for env_idx, name in enumerate(names):
+        masks[env_idx] = action_mask(name)
+    return masks
+
+
 def _normalize_action_mode(value: Any) -> str:
     name = getattr(value, "name", value)
     text = str(name).split(".")[-1].upper()

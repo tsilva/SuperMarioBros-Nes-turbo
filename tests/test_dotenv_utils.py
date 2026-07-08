@@ -1081,7 +1081,6 @@ def test_pypi_wrappers_capture_load_after_warmups(
                 "--actions",
                 "noop,right,right_b,right_a",
                 "--action-seed 0",
-                "--include-info",
                 "--no-start-game",
             ):
                 assert expected in measured_command

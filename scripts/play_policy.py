@@ -27,24 +27,18 @@ from play import (
     display_frame_from_obs,
     load_sdl2,
 )
-from supermariobrosnes_turbo import ACTION_SETS, Actions, SuperMarioBrosNesTurboVecEnv, resolve_required_rom_path
+from supermariobrosnes_turbo import (
+    ACTION_BUTTONS,
+    ACTION_SETS,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
+    resolve_required_rom_path,
+)
 
 
 DEFAULT_HF_FILENAME = "ppo_supermariobros-nes-v0_4500000_steps.zip"
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
 HF_URL_RE = re.compile(r"^https?://huggingface\.co/(?P<repo>[^/]+/[^/]+)(?:/(?P<rest>.*))?$")
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-    "right_b": ("RIGHT", "B"),
-    "right_a": ("RIGHT", "A"),
-    "right_a_b": ("RIGHT", "A", "B"),
-    "a": ("A",),
-    "left": ("LEFT",),
-    "start": ("START",),
-}
-
-
 class ModelResolutionError(RuntimeError):
     pass
 

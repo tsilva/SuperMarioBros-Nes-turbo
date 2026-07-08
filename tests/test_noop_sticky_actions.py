@@ -5,20 +5,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from supermariobrosnes_turbo import ACTION_MEANINGS, Actions, SuperMarioBrosNesTurboVecEnv
+from supermariobrosnes_turbo import (
+    ACTION_BUTTONS,
+    ACTION_MEANINGS,
+    BUTTON_TO_INDEX,
+    NES_BUTTONS,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
+)
 from rom_helpers import require_rom
-
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-    "right_b": ("RIGHT", "B"),
-    "right_a": ("RIGHT", "A"),
-    "right_a_b": ("RIGHT", "A", "B"),
-    "a": ("A",),
-    "left": ("LEFT",),
-}
 
 
 def action_masks(names: list[str]) -> np.ndarray:

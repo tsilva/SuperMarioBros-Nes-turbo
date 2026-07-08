@@ -5,16 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_turbo import (
+    ACTION_BUTTONS,
+    BUTTON_TO_INDEX,
+    CORE_ACTION_MEANINGS as ACTION_MEANINGS,
+    NES_BUTTONS,
+)
 from supermariobrosnes_turbo import Actions
 from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
-
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "start": ("START",),
-}
 
 
 def parse_args() -> argparse.Namespace:

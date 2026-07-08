@@ -6,13 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
-import importlib.util
 import json
 import os
 import statistics
-import sys
 import time
-import types
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +17,38 @@ import numpy as np
 
 try:
     from benchmark_rom import validate_rom_hash
+    from benchmark_workload import (
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        joined_states,
+    )
+    from stable_retro_compat import install_sb3_vecenv_shim_if_needed
 except ModuleNotFoundError:
     from scripts.benchmark_rom import validate_rom_hash
+    from scripts.benchmark_workload import (
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        joined_states,
+    )
+    from scripts.stable_retro_compat import install_sb3_vecenv_shim_if_needed
 
 
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
@@ -31,10 +58,10 @@ DEFAULT_ROM = (
     if ROM_PATH_ENV_VAR in os.environ
     else None
 )
-DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-DEFAULT_OBS_CROP_MODE = "mask"
-DEFAULT_TERMINATE_ON_LIFE_LOSS = True
-DEFAULT_TERMINATE_ON_LEVEL_CHANGE = True
+DEFAULT_STATES = CANONICAL_STATE_NAMES
+DEFAULT_OBS_CROP_MODE = CANONICAL_OBS_CROP_MODE
+DEFAULT_TERMINATE_ON_LIFE_LOSS = CANONICAL_TERMINATE_ON_LIFE_LOSS
+DEFAULT_TERMINATE_ON_LEVEL_CHANGE = CANONICAL_TERMINATE_ON_LEVEL_CHANGE
 ACTION_BUTTONS = {
     "noop": (),
     "right": ("RIGHT",),
@@ -97,62 +124,6 @@ def dotenv_rom_path(dotenv_path: Path = Path(".env")) -> Path | None:
     return None
 
 
-def install_sb3_vecenv_shim_if_needed() -> None:
-    if "stable_baselines3.common.vec_env" in sys.modules:
-        return
-    try:
-        has_vec_env = importlib.util.find_spec("stable_baselines3.common.vec_env") is not None
-    except (ModuleNotFoundError, ValueError):
-        has_vec_env = False
-    if has_vec_env:
-        return
-
-    stable_baselines3 = types.ModuleType("stable_baselines3")
-    common = types.ModuleType("stable_baselines3.common")
-    vec_env = types.ModuleType("stable_baselines3.common.vec_env")
-
-    class VecEnv:
-        def __init__(self, num_envs: int, observation_space: Any, action_space: Any) -> None:
-            self.num_envs = int(num_envs)
-            self.observation_space = observation_space
-            self.action_space = action_space
-            self._seeds = [None for _ in range(self.num_envs)]
-            self._options = [{} for _ in range(self.num_envs)]
-            self.reset_infos = [{} for _ in range(self.num_envs)]
-
-        def seed(self, seed: int | None = None) -> list[int | None]:
-            self._seeds = (
-                [None for _ in range(self.num_envs)]
-                if seed is None
-                else [int(seed) + index for index in range(self.num_envs)]
-            )
-            return list(self._seeds)
-
-        def step(self, actions: Any):
-            self.step_async(actions)
-            return self.step_wait()
-
-        def _reset_seeds(self) -> None:
-            self._seeds = [None for _ in range(self.num_envs)]
-
-        def _reset_options(self) -> None:
-            self._options = [{} for _ in range(self.num_envs)]
-
-        def _get_indices(self, indices: Any = None) -> list[int]:
-            if indices is None:
-                return list(range(self.num_envs))
-            if isinstance(indices, int):
-                return [indices]
-            return [int(index) for index in indices]
-
-    vec_env.VecEnv = VecEnv
-    common.vec_env = vec_env
-    stable_baselines3.common = common
-    sys.modules["stable_baselines3"] = stable_baselines3
-    sys.modules["stable_baselines3.common"] = common
-    sys.modules["stable_baselines3.common.vec_env"] = vec_env
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -162,20 +133,20 @@ def parse_args() -> argparse.Namespace:
         help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
-    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument("--num-envs", type=int, default=CANONICAL_NUM_ENVS)
     parser.add_argument("--num-threads", type=int, default=12)
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=100)
-    parser.add_argument("--frame-skip", type=int, default=4)
-    parser.add_argument("--frame-stack", type=int, default=4)
+    parser.add_argument("--frame-skip", type=int, default=CANONICAL_FRAME_SKIP)
+    parser.add_argument("--frame-stack", type=int, default=CANONICAL_FRAME_STACK)
     parser.add_argument("--rgb", action="store_true")
-    parser.add_argument("--crop-top", type=int, default=32)
-    parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--crop-top", type=int, default=CANONICAL_CROP_TOP)
+    parser.add_argument("--crop-bottom", type=int, default=CANONICAL_CROP_BOTTOM)
     parser.add_argument("--obs-crop-mode", choices=("remove", "mask"), default=DEFAULT_OBS_CROP_MODE)
-    parser.add_argument("--resize-width", type=int, default=84)
-    parser.add_argument("--resize-height", type=int, default=84)
-    parser.add_argument("--states", default=",".join(DEFAULT_STATES))
+    parser.add_argument("--resize-width", type=int, default=CANONICAL_RESIZE_WIDTH)
+    parser.add_argument("--resize-height", type=int, default=CANONICAL_RESIZE_HEIGHT)
+    parser.add_argument("--states", default=joined_states())
     parser.add_argument("--action", choices=sorted(ACTION_BUTTONS), default="noop")
     parser.add_argument("--obs-copy", default="safe_view")
     parser.add_argument("--obs-resize-algorithm", default="area")

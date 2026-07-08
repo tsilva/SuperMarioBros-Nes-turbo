@@ -4,19 +4,11 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import Actions
+from supermariobrosnes_turbo import ACTION_BUTTONS, BUTTON_TO_INDEX, NES_BUTTONS, Actions
 from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
 
 DEFAULT_ROM = default_rom_path()
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-    "a": ("A",),
-    "start": ("START",),
-}
 INFO_ARRAYS = (
     ("x_pos", np.uint16),
     ("coins", np.uint8),

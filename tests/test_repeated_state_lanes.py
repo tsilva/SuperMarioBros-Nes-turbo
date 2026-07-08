@@ -4,22 +4,14 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import ACTION_MEANINGS, Actions, SuperMarioBrosNesTurboVecEnv
+from supermariobrosnes_turbo import (
+    ACTION_MEANINGS,
+    Actions,
+    SuperMarioBrosNesTurboVecEnv,
+    action_batch,
+)
 from rom_helpers import require_rom
 GROUP_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-}
-
-
-def action_batch(name: str, num_envs: int) -> np.ndarray:
-    masks = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
-    for button in ACTION_BUTTONS[name]:
-        masks[:, BUTTON_TO_INDEX[button]] = 1
-    return masks
 
 
 def make_env(rom_path: Path, state: str | list[str], num_envs: int) -> SuperMarioBrosNesTurboVecEnv:

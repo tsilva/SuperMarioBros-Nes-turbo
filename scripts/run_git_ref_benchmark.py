@@ -30,6 +30,26 @@ try:
         summary,
     )
     from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_ACTION_SET,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_START_GAME,
+        CANONICAL_TERMINATE_ON_FLAG,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        canonical_env_args,
+        shell_args,
+    )
     from dotenv_utils import (
         env_or_dotenv_path,
         require_arg_or_env_or_dotenv_path,
@@ -45,6 +65,26 @@ except ModuleNotFoundError:
         summary,
     )
     from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from scripts.benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_ACTION_SET,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_START_GAME,
+        CANONICAL_TERMINATE_ON_FLAG,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        canonical_env_args,
+        shell_args,
+    )
     from scripts.dotenv_utils import (
         env_or_dotenv_path,
         require_arg_or_env_or_dotenv_path,
@@ -55,9 +95,9 @@ except ModuleNotFoundError:
 AUTORESEARCH_ROOT_ENV = "AUTORESEARCH_ROOT_PATH"
 BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
 BENCHMARK_STATE_SUBDIR = Path("states") / "SuperMarioBros-Nes-v0"
-STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-ACTION_NAMES = ("noop", "right", "right_b", "right_a")
-ACTION_SEED = 0
+STATE_NAMES = CANONICAL_STATE_NAMES
+ACTION_NAMES = CANONICAL_ACTION_NAMES
+ACTION_SEED = CANONICAL_ACTION_SEED
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 ARCHIVE_SUBDIR = Path("local-archives")
@@ -548,21 +588,16 @@ def benchmark_command(
 ) -> str:
     source_dir = f"{plan.run_dir}/sources/{role}"
     output = f"{plan.run_dir}/raw/{output_name}.json"
-    states = ",".join(STATE_NAMES)
+    workload_args = shell_args(canonical_env_args())
     return (
         f"cd {quote(source_dir)} && "
         "RAYON_NUM_THREADS=12 .venv/bin/python scripts/benchmark_sps.py "
         f"--rom-path {quote(plan.rom_path)} "
         f"--state-dir {quote(plan.state_dir)} "
-        "--num-envs 16 "
+        f"{workload_args} "
         f"--steps {steps} --repeats {repeats} "
-        "--warmup 100 --frame-skip 4 --frame-stack 4 "
-        "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action-set simple --actions {quote(','.join(ACTION_NAMES))} "
-        f"--action-seed {ACTION_SEED} "
-        "--include-info "
+        "--warmup 100 "
         f"--max-start-load {args.max_load} "
-        "--no-start-game "
         f"--json --output-json {quote(output)} "
         f"> {quote(output + '.stdout.json')}"
     )
@@ -618,20 +653,20 @@ def require_raw_payload_matches_plan(
         "rom_path": plan.rom_path,
         "rom_sha256": EXPECTED_SMB_ROM_SHA256,
         "rayon_num_threads": 12,
-        "num_envs": 16,
+        "num_envs": CANONICAL_NUM_ENVS,
         "steps": expected_steps,
         "repeats": expected_repeats,
         "warmup": 100,
-        "frame_skip": 4,
-        "frame_stack": 4,
+        "frame_skip": CANONICAL_FRAME_SKIP,
+        "frame_stack": CANONICAL_FRAME_STACK,
         "grayscale": True,
-        "crop_top": 32,
-        "crop_bottom": 0,
-        "obs_crop_mode": "mask",
-        "resize_width": 84,
-        "resize_height": 84,
+        "crop_top": CANONICAL_CROP_TOP,
+        "crop_bottom": CANONICAL_CROP_BOTTOM,
+        "obs_crop_mode": CANONICAL_OBS_CROP_MODE,
+        "resize_width": CANONICAL_RESIZE_WIDTH,
+        "resize_height": CANONICAL_RESIZE_HEIGHT,
         "obs_resize_algorithm": "area",
-        "action_set": "simple",
+        "action_set": CANONICAL_ACTION_SET,
         "action": None,
         "actions": list(ACTION_NAMES),
         "action_seed": ACTION_SEED,
@@ -639,11 +674,11 @@ def require_raw_payload_matches_plan(
         "states": list(STATE_NAMES),
         "state_dir": plan.state_dir,
         "include_info": True,
-        "terminate_on_flag": False,
-        "terminate_on_life_loss": True,
-        "terminate_on_level_change": True,
+        "terminate_on_flag": CANONICAL_TERMINATE_ON_FLAG,
+        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
         "done_on": ["life_loss", "level_change"],
-        "start_game": False,
+        "start_game": CANONICAL_START_GAME,
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"
@@ -861,26 +896,26 @@ def workload_payload(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str,
         "rom_path": plan.rom_path,
         "state_dir": plan.state_dir,
         "rayon_num_threads": 12,
-        "num_envs": 16,
+        "num_envs": CANONICAL_NUM_ENVS,
         "steps": args.steps,
         "repeats": args.repeats,
         "warmup": 100,
-        "frame_skip": 4,
-        "frame_stack": 4,
+        "frame_skip": CANONICAL_FRAME_SKIP,
+        "frame_stack": CANONICAL_FRAME_STACK,
         "grayscale": True,
-        "crop_top": 32,
-        "crop_bottom": 0,
-        "obs_crop_mode": "mask",
-        "resize": [84, 84],
+        "crop_top": CANONICAL_CROP_TOP,
+        "crop_bottom": CANONICAL_CROP_BOTTOM,
+        "obs_crop_mode": CANONICAL_OBS_CROP_MODE,
+        "resize": [CANONICAL_RESIZE_WIDTH, CANONICAL_RESIZE_HEIGHT],
         "states": list(STATE_NAMES),
-        "action_set": "simple",
+        "action_set": CANONICAL_ACTION_SET,
         "action": None,
         "actions": list(ACTION_NAMES),
         "action_seed": ACTION_SEED,
         "obs_resize_algorithm": "area",
         "include_info": True,
-        "terminate_on_flag": False,
-        "start_game": False,
+        "terminate_on_flag": CANONICAL_TERMINATE_ON_FLAG,
+        "start_game": CANONICAL_START_GAME,
     }
 
 

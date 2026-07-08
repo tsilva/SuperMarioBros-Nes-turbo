@@ -10,7 +10,13 @@ from pathlib import Path
 
 import numpy as np
 
-from supermariobrosnes_turbo import Actions, CORE_ACTION_MEANINGS as ACTION_MEANINGS
+from supermariobrosnes_turbo import (
+    ACTION_BUTTONS,
+    BUTTON_TO_INDEX,
+    NES_BUTTONS,
+    Actions,
+    CORE_ACTION_MEANINGS as ACTION_MEANINGS,
+)
 from supermariobrosnes_turbo import ROM_PATH_ENV_VAR
 from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
 
@@ -51,18 +57,6 @@ def play_default_rom_path() -> Path | None:
 DEFAULT_ROM = play_default_rom_path()
 NES_WIDTH = 256
 NES_HEIGHT = 240
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-    "right_b": ("RIGHT", "B"),
-    "right_a": ("RIGHT", "A"),
-    "right_a_b": ("RIGHT", "A", "B"),
-    "a": ("A",),
-    "left": ("LEFT",),
-    "start": ("START",),
-}
 
 
 def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:

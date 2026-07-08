@@ -20,12 +20,48 @@ from typing import Any
 
 try:
     from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_ACTION_SET,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        canonical_env_args,
+        shell_args,
+    )
     from dotenv_utils import (
         require_arg_or_env_or_dotenv_path,
         require_env_or_dotenv_path,
     )
 except ModuleNotFoundError:
     from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from scripts.benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_ACTION_SET,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        canonical_env_args,
+        shell_args,
+    )
     from scripts.dotenv_utils import (
         require_arg_or_env_or_dotenv_path,
         require_env_or_dotenv_path,
@@ -37,9 +73,9 @@ BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
 BENCHMARK_STATE_SUBDIR = Path("states") / "SuperMarioBros-Nes-v0"
 LOCAL_RESULTS_SUBDIR = Path("local-results")
 PYPI_CACHE_SUBDIR = LOCAL_RESULTS_SUBDIR / "pypi-supermariobrosnes-turbo"
-DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-DEFAULT_ACTIONS = ("noop", "right", "right_b", "right_a")
-DEFAULT_ACTION_SEED = 0
+DEFAULT_STATES = CANONICAL_STATE_NAMES
+DEFAULT_ACTIONS = CANONICAL_ACTION_NAMES
+DEFAULT_ACTION_SEED = CANONICAL_ACTION_SEED
 PACKAGE = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -118,22 +154,22 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "warmup": args.warmup,
         "warmup_invocations": args.warmup_invocations,
         "measured_invocations": args.measured_invocations,
-        "frame_skip": 4,
-        "frame_stack": 4,
+        "frame_skip": CANONICAL_FRAME_SKIP,
+        "frame_stack": CANONICAL_FRAME_STACK,
         "grayscale": True,
-        "crop_top": 32,
-        "crop_bottom": 0,
-        "obs_crop_mode": "mask",
-        "resize": [84, 84],
+        "crop_top": CANONICAL_CROP_TOP,
+        "crop_bottom": CANONICAL_CROP_BOTTOM,
+        "obs_crop_mode": CANONICAL_OBS_CROP_MODE,
+        "resize": [CANONICAL_RESIZE_WIDTH, CANONICAL_RESIZE_HEIGHT],
         "states": list(DEFAULT_STATES),
-        "action_set": "simple",
+        "action_set": CANONICAL_ACTION_SET,
         "action": None,
         "actions": list(DEFAULT_ACTIONS),
         "action_seed": DEFAULT_ACTION_SEED,
         "include_info": True,
         "obs_resize_algorithm": "area",
-        "terminate_on_life_loss": True,
-        "terminate_on_level_change": True,
+        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
         "done_on": ["life_loss", "level_change"],
     }
 
@@ -455,6 +491,8 @@ def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     (run_dir / "scripts").mkdir(parents=True, exist_ok=True)
     shutil.copy2("scripts/benchmark_sps.py", run_dir / "scripts")
+    shutil.copy2("scripts/benchmark_rom.py", run_dir / "scripts")
+    shutil.copy2("scripts/benchmark_workload.py", run_dir / "scripts")
     setup = (
         f"cd {quote(str(run_dir))} && "
         f"uv venv --python {quote(args.python)} .venv && "
@@ -464,20 +502,15 @@ def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
 
 
 def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
-    states = ",".join(DEFAULT_STATES)
+    workload_args = shell_args(canonical_env_args())
     base_cmd = (
         f"cd {quote(str(run_dir))} && "
         f"RAYON_NUM_THREADS={args.num_threads} .venv/bin/python scripts/benchmark_sps.py "
         f"--rom-path {quote(args.rom_path)} "
         f"--state-dir {quote(args.state_dir)} "
-        f"--num-envs {args.num_envs} --steps {args.steps} --repeats {args.repeats} "
-        f"--warmup {args.warmup} --frame-skip 4 --frame-stack 4 "
-        "--crop-top 32 --crop-bottom 0 --obs-crop-mode mask "
-        "--resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action-set simple --actions {quote(','.join(DEFAULT_ACTIONS))} "
-        f"--action-seed {DEFAULT_ACTION_SEED} "
-        "--terminate-on-life-loss --terminate-on-level-change "
-        "--include-info --no-start-game "
+        f"{workload_args} "
+        f"--steps {args.steps} --repeats {args.repeats} "
+        f"--warmup {args.warmup} "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])
@@ -676,7 +709,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_ROOT_SUBDIR}/{PYPI_CACHE_SUBDIR}."
         ),
     )
-    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument("--num-envs", type=int, default=CANONICAL_NUM_ENVS)
     parser.add_argument("--num-threads", type=int, default=12)
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--repeats", type=int, default=3)

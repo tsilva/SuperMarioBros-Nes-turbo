@@ -17,37 +17,56 @@ from supermariobrosnes_turbo import (
     CORE_ACTION_MEANINGS,
     Actions,
     SuperMarioBrosNesTurboVecEnv,
+    action_batch,
     default_rom_path,
     resolve_required_rom_path,
 )
 
 try:
     from benchmark_rom import validate_rom_hash
+    from benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+    )
 except ModuleNotFoundError:
     from scripts.benchmark_rom import validate_rom_hash
+    from scripts.benchmark_workload import (
+        CANONICAL_ACTION_NAMES,
+        CANONICAL_ACTION_SEED,
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+    )
 
 
 DEFAULT_ROM = default_rom_path()
-DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-DEFAULT_BENCHMARK_ACTIONS = ("noop", "right", "right_b", "right_a")
-DEFAULT_ACTION_SEED = 0
-DEFAULT_OBS_CROP_MODE = "mask"
-DEFAULT_TERMINATE_ON_LIFE_LOSS = True
-DEFAULT_TERMINATE_ON_LEVEL_CHANGE = True
+DEFAULT_STATES = CANONICAL_STATE_NAMES
+DEFAULT_BENCHMARK_ACTIONS = CANONICAL_ACTION_NAMES
+DEFAULT_ACTION_SEED = CANONICAL_ACTION_SEED
+DEFAULT_OBS_CROP_MODE = CANONICAL_OBS_CROP_MODE
+DEFAULT_TERMINATE_ON_LIFE_LOSS = CANONICAL_TERMINATE_ON_LIFE_LOSS
+DEFAULT_TERMINATE_ON_LEVEL_CHANGE = CANONICAL_TERMINATE_ON_LEVEL_CHANGE
 DEFAULT_MIN_START_LOAD_LIMIT = 4.0
 DEFAULT_START_LOAD_CPU_FRACTION = 0.5
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
-ACTION_BUTTONS = {
-    "noop": (),
-    "right": ("RIGHT",),
-    "right_b": ("RIGHT", "B"),
-    "right_a": ("RIGHT", "A"),
-    "right_a_b": ("RIGHT", "A", "B"),
-    "a": ("A",),
-    "left": ("LEFT",),
-    "start": ("START",),
-}
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 
@@ -62,18 +81,18 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ROM,
         help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
-    parser.add_argument("--num-envs", type=int, default=64)
+    parser.add_argument("--num-envs", type=int, default=CANONICAL_NUM_ENVS)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=100)
-    parser.add_argument("--frame-skip", type=int, default=4)
-    parser.add_argument("--frame-stack", type=int, default=4)
+    parser.add_argument("--frame-skip", type=int, default=CANONICAL_FRAME_SKIP)
+    parser.add_argument("--frame-stack", type=int, default=CANONICAL_FRAME_STACK)
     parser.add_argument("--rgb", action="store_true")
-    parser.add_argument("--crop-top", type=int, default=32)
-    parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--crop-top", type=int, default=CANONICAL_CROP_TOP)
+    parser.add_argument("--crop-bottom", type=int, default=CANONICAL_CROP_BOTTOM)
     parser.add_argument("--obs-crop-mode", choices=("remove", "mask"), default=DEFAULT_OBS_CROP_MODE)
-    parser.add_argument("--resize-width", type=int, default=84)
-    parser.add_argument("--resize-height", type=int, default=84)
+    parser.add_argument("--resize-width", type=int, default=CANONICAL_RESIZE_WIDTH)
+    parser.add_argument("--resize-height", type=int, default=CANONICAL_RESIZE_HEIGHT)
     parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
     parser.add_argument(
         "--actions",
@@ -116,7 +135,7 @@ def parse_args() -> argparse.Namespace:
         "--include-info",
         action="store_true",
         default=True,
-        help="Deprecated compatibility flag; benchmark_sps always uses step().",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--terminate-on-flag", action="store_true")
     parser.add_argument("--no-start-game", action="store_true")
@@ -329,10 +348,7 @@ def rayon_num_threads() -> int | str | None:
 
 def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...]) -> np.ndarray:
     del action_meanings
-    actions = np.zeros((num_envs, len(NES_BUTTONS)), dtype=np.uint8)
-    for button in ACTION_BUTTONS[action_name]:
-        actions[:, BUTTON_TO_INDEX[button]] = 1
-    return actions
+    return action_batch(action_name, num_envs)
 
 
 def action_templates(
@@ -357,8 +373,7 @@ def sampled_action_sequence(
     return tuple(templates[int(index)] for index in indices)
 
 
-def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, include_info: bool) -> None:
-    del include_info
+def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray) -> None:
     env.step(actions)
 
 
@@ -366,19 +381,17 @@ def step_repeated(
     env: SuperMarioBrosNesTurboVecEnv,
     actions: np.ndarray,
     count: int,
-    include_info: bool,
 ) -> None:
     for _ in range(count):
-        step_env(env, actions, include_info)
+        step_env(env, actions)
 
 
 def step_action_sequence(
     env: SuperMarioBrosNesTurboVecEnv,
     actions: Sequence[np.ndarray],
-    include_info: bool,
 ) -> None:
     for action in actions:
-        step_env(env, action, include_info)
+        step_env(env, action)
 
 
 def prepare_game(
@@ -391,9 +404,9 @@ def prepare_game(
         return
     noop = fill_action(args.num_envs, "noop", action_meanings)
     start = fill_action(args.num_envs, "start", action_meanings)
-    step_repeated(env, noop, args.pre_start_steps, args.include_info)
-    step_repeated(env, start, args.start_steps, args.include_info)
-    step_repeated(env, noop, args.post_start_steps, args.include_info)
+    step_repeated(env, noop, args.pre_start_steps)
+    step_repeated(env, start, args.start_steps)
+    step_repeated(env, noop, args.post_start_steps)
 
 
 def run_once(
@@ -402,7 +415,7 @@ def run_once(
     args: argparse.Namespace,
 ) -> dict[str, float]:
     start = time.perf_counter()
-    step_action_sequence(env, actions, args.include_info)
+    step_action_sequence(env, actions)
     elapsed = time.perf_counter() - start
     batch_sps = args.steps / elapsed
     env_sps = batch_sps * args.num_envs
@@ -582,7 +595,7 @@ def main() -> None:
     warmup_actions = sampled_action_sequence(templates, args.warmup, args.action_seed + 1)
     measured_actions = sampled_action_sequence(templates, args.steps, args.action_seed)
     prepare_game(env, args, action_meanings)
-    step_action_sequence(env, warmup_actions, args.include_info)
+    step_action_sequence(env, warmup_actions)
     if args.profile_output is not None:
         env.reset_profiler()
     runs = [run_once(env, measured_actions, args) for _ in range(args.repeats)]

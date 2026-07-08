@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from benchmark_workload import canonical_noop_env_args
     from dotenv_utils import require_arg_or_env_or_dotenv_path
     from run_git_ref_benchmark import (
         AUTORESEARCH_ROOT_ENV,
@@ -21,6 +22,7 @@ try:
         RESULTS_TSV_COLUMNS,
     )
 except ModuleNotFoundError:
+    from scripts.benchmark_workload import canonical_noop_env_args
     from scripts.dotenv_utils import require_arg_or_env_or_dotenv_path
     from scripts.run_git_ref_benchmark import (
         AUTORESEARCH_ROOT_ENV,
@@ -32,7 +34,6 @@ except ModuleNotFoundError:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_SCRIPT = REPO_ROOT / "scripts" / "run_git_ref_benchmark.py"
 BENCHMARK_SPS_SCRIPT = REPO_ROOT / "scripts" / "benchmark_sps.py"
-BENCHMARK_STATES = "Level1-1,Level1-2,Level1-3,Level1-4"
 DIAGNOSE_STEPS = "5000"
 DIAGNOSE_REPEATS = "3"
 DIAGNOSE_WARMUP = "500"
@@ -131,33 +132,13 @@ def build_diagnose_command(root: Path, *, profile: bool, quick: bool = False) ->
     command = [
         sys.executable,
         str(BENCHMARK_SPS_SCRIPT),
-        "--num-envs",
-        "16",
+        *canonical_noop_env_args(),
         "--steps",
         steps,
         "--repeats",
         repeats,
         "--warmup",
         warmup,
-        "--frame-skip",
-        "4",
-        "--frame-stack",
-        "4",
-        "--crop-top",
-        "32",
-        "--crop-bottom",
-        "0",
-        "--resize-width",
-        "84",
-        "--resize-height",
-        "84",
-        "--states",
-        BENCHMARK_STATES,
-        "--action-set",
-        "simple",
-        "--action",
-        "noop",
-        "--no-start-game",
     ]
     if profile:
         command += ["--profile-output", str(root / "benchmarks" / "local-profile.json")]
@@ -169,33 +150,13 @@ def build_probe_command(root: Path) -> list[str]:
     return [
         sys.executable,
         str(BENCHMARK_SPS_SCRIPT),
-        "--num-envs",
-        "16",
+        *canonical_noop_env_args(),
         "--steps",
         PROBE_STEPS,
         "--repeats",
         PROBE_REPEATS,
         "--warmup",
         PROBE_WARMUP,
-        "--frame-skip",
-        "4",
-        "--frame-stack",
-        "4",
-        "--crop-top",
-        "32",
-        "--crop-bottom",
-        "0",
-        "--resize-width",
-        "84",
-        "--resize-height",
-        "84",
-        "--states",
-        BENCHMARK_STATES,
-        "--action-set",
-        "simple",
-        "--action",
-        "noop",
-        "--no-start-game",
         "--json",
         "--output-json",
         str(output),

@@ -11,16 +11,15 @@ from scripts import compare_supermariobrosnes_turbo_vec_env as compare
 from supermariobrosnes_turbo import env as env_module
 from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
 from supermariobrosnes_turbo import (
+    BUTTON_TO_INDEX,
     Actions,
     Integrations,
+    NES_BUTTONS,
     Observations,
     State,
     SuperMarioBrosNesTurboVecEnv,
 )
 from rom_helpers import require_rom
-
-NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
-BUTTON_TO_INDEX = {name: index for index, name in enumerate(NES_BUTTONS) if name is not None}
 
 
 def resize_chw_area_native_reference(src: np.ndarray, width: int, height: int) -> np.ndarray:

@@ -20,9 +20,37 @@ from typing import Any
 
 try:
     from benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from benchmark_workload import (
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        joined_states,
+    )
     from dotenv_utils import require_arg_or_env_or_dotenv_path, require_env_or_dotenv_path
 except ModuleNotFoundError:
     from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256, validate_rom_hash
+    from scripts.benchmark_workload import (
+        CANONICAL_CROP_BOTTOM,
+        CANONICAL_CROP_TOP,
+        CANONICAL_FRAME_SKIP,
+        CANONICAL_FRAME_STACK,
+        CANONICAL_NUM_ENVS,
+        CANONICAL_OBS_CROP_MODE,
+        CANONICAL_RESIZE_HEIGHT,
+        CANONICAL_RESIZE_WIDTH,
+        CANONICAL_STATE_NAMES,
+        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
+        CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        joined_states,
+    )
     from scripts.dotenv_utils import (
         require_arg_or_env_or_dotenv_path,
         require_env_or_dotenv_path,
@@ -33,7 +61,7 @@ AUTORESEARCH_ROOT_ENV = "AUTORESEARCH_ROOT_PATH"
 BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
 LOCAL_RESULTS_SUBDIR = Path("local-results")
 PYPI_CACHE_SUBDIR = LOCAL_RESULTS_SUBDIR / "pypi-stable-retro-turbo"
-DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+DEFAULT_STATES = CANONICAL_STATE_NAMES
 PACKAGE = "stable-retro-turbo"
 IMPORT_PACKAGE = "stable_retro"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -89,19 +117,19 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "warmup": args.warmup,
         "warmup_invocations": args.warmup_invocations,
         "measured_invocations": args.measured_invocations,
-        "frame_skip": 4,
-        "frame_stack": 4,
+        "frame_skip": CANONICAL_FRAME_SKIP,
+        "frame_stack": CANONICAL_FRAME_STACK,
         "grayscale": True,
-        "crop_top": 32,
-        "crop_bottom": 0,
-        "obs_crop_mode": "mask",
-        "resize": [84, 84],
+        "crop_top": CANONICAL_CROP_TOP,
+        "crop_bottom": CANONICAL_CROP_BOTTOM,
+        "obs_crop_mode": CANONICAL_OBS_CROP_MODE,
+        "resize": [CANONICAL_RESIZE_WIDTH, CANONICAL_RESIZE_HEIGHT],
         "states": list(DEFAULT_STATES),
         "action": "noop",
         "obs_copy": "safe_view",
         "obs_resize_algorithm": "area",
-        "terminate_on_life_loss": True,
-        "terminate_on_level_change": True,
+        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
+        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
         "done_on": ["life_loss", "level_change"],
     }
 
@@ -404,6 +432,9 @@ def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     (run_dir / "scripts").mkdir(parents=True, exist_ok=True)
     shutil.copy2("scripts/benchmark_stable_retro_turbo_pypi.py", run_dir / "scripts")
+    shutil.copy2("scripts/benchmark_rom.py", run_dir / "scripts")
+    shutil.copy2("scripts/benchmark_workload.py", run_dir / "scripts")
+    shutil.copy2("scripts/stable_retro_compat.py", run_dir / "scripts")
     setup = (
         f"cd {quote(str(run_dir))} && "
         f"uv venv --python {quote(args.python)} .venv && "
@@ -413,17 +444,17 @@ def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
 
 
 def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
-    states = ",".join(DEFAULT_STATES)
     base_cmd = (
         f"cd {quote(str(run_dir))} && "
         f"RAYON_NUM_THREADS={args.num_threads} .venv/bin/python scripts/benchmark_stable_retro_turbo_pypi.py "
         f"--rom-path {quote(args.rom_path)} "
         f"--num-envs {args.num_envs} --num-threads {args.num_threads} "
         f"--steps {args.steps} --repeats {args.repeats} --warmup {args.warmup} "
-        "--frame-skip 4 --frame-stack 4 "
-        "--crop-top 32 --crop-bottom 0 --obs-crop-mode mask "
-        "--resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action noop --obs-copy safe_view --obs-resize-algorithm area "
+        f"--frame-skip {CANONICAL_FRAME_SKIP} --frame-stack {CANONICAL_FRAME_STACK} "
+        f"--crop-top {CANONICAL_CROP_TOP} --crop-bottom {CANONICAL_CROP_BOTTOM} "
+        f"--obs-crop-mode {CANONICAL_OBS_CROP_MODE} "
+        f"--resize-width {CANONICAL_RESIZE_WIDTH} --resize-height {CANONICAL_RESIZE_HEIGHT} "
+        f"--states {quote(joined_states())} --action noop --obs-copy safe_view --obs-resize-algorithm area "
         "--terminate-on-life-loss --terminate-on-level-change "
         f"--json --output-json "
     )
@@ -594,7 +625,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             f"{AUTORESEARCH_ROOT_ENV}/{BENCHMARK_ROOT_SUBDIR}/{PYPI_CACHE_SUBDIR}."
         ),
     )
-    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument("--num-envs", type=int, default=CANONICAL_NUM_ENVS)
     parser.add_argument("--num-threads", type=int, default=12)
     parser.add_argument("--steps", type=int, default=50000)
     parser.add_argument("--repeats", type=int, default=3)
