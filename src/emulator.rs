@@ -562,6 +562,7 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
+        let bg_palettes = self.bg_gray_palettes(palette_gray);
 
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
@@ -598,16 +599,12 @@ impl Ppu {
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
                 let run = (8 - fine_x).min(NES_WIDTH - x);
+                let colors = bg_palettes[palette_id as usize];
 
                 for col in 0..run {
                     let bit = 7 - (fine_x + col);
                     let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                    let gray = if pixel == 0 {
-                        palette_gray[0]
-                    } else {
-                        palette_gray[(palette_id as usize) * 4 + pixel as usize]
-                    };
-                    dst[row_start + x + col] = gray;
+                    dst[row_start + x + col] = colors[pixel as usize];
                 }
 
                 x += run;
@@ -628,6 +625,7 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
+        let bg_palettes = self.bg_gray_palettes(palette_gray);
 
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
@@ -669,14 +667,7 @@ impl Ppu {
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
                 let run = (8 - fine_x).min(width - out_x);
-                let bg_gray = palette_gray[0];
-                let palette_base = (palette_id as usize) * 4;
-                let colors = [
-                    bg_gray,
-                    palette_gray[palette_base + 1],
-                    palette_gray[palette_base + 2],
-                    palette_gray[palette_base + 3],
-                ];
+                let colors = bg_palettes[palette_id as usize];
 
                 if fine_x == 0 && run >= 8 {
                     write_full_bg_tile_gray(
@@ -709,6 +700,7 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
+        let bg_palettes = self.bg_gray_palettes(palette_gray);
 
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
@@ -747,14 +739,7 @@ impl Ppu {
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
                 let run = (8 - fine_x).min(VISIBLE_FRAME_WIDTH - out_x);
-                let bg_gray = palette_gray[0];
-                let palette_base = (palette_id as usize) * 4;
-                let colors = [
-                    bg_gray,
-                    palette_gray[palette_base + 1],
-                    palette_gray[palette_base + 2],
-                    palette_gray[palette_base + 3],
-                ];
+                let colors = bg_palettes[palette_id as usize];
 
                 if fine_x == 0 && run >= 8 {
                     write_full_bg_tile_gray(
@@ -1357,6 +1342,22 @@ impl Ppu {
             *dst = NES_GRAY_PALETTE[color as usize];
         }
         out
+    }
+
+    #[inline]
+    fn bg_gray_palettes(&self, palette_gray: [u8; 32]) -> [[u8; 4]; 4] {
+        let bg_gray = palette_gray[0];
+        [
+            [bg_gray, palette_gray[1], palette_gray[2], palette_gray[3]],
+            [bg_gray, palette_gray[5], palette_gray[6], palette_gray[7]],
+            [bg_gray, palette_gray[9], palette_gray[10], palette_gray[11]],
+            [
+                bg_gray,
+                palette_gray[13],
+                palette_gray[14],
+                palette_gray[15],
+            ],
+        ]
     }
 
     #[inline]
