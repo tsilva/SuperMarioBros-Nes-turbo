@@ -138,6 +138,8 @@ RESULTS_TSV_COLUMNS = (
 
 Mode = Literal["single", "compare"]
 STACK_ACCEPTANCE_CHECKPOINTS = (3, 5, 7)
+LOAD_GATE_START_MARGIN = 0.85
+LOAD_GATE_POLL_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -390,6 +392,64 @@ def require_load_gate(args: argparse.Namespace, load_value: float | None, phase:
         )
 
 
+def cooldown_load_label(base_label: str, attempt: int) -> str:
+    return base_label if attempt == 0 else f"{base_label}-retry-{attempt:02d}"
+
+
+def wait_for_load_headroom(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    base_label: str,
+    phase: str,
+    *,
+    start_time: float | None = None,
+) -> tuple[str, float | None]:
+    target_load = args.max_load * LOAD_GATE_START_MARGIN
+    attempt = 0
+    while True:
+        label = cooldown_load_label(base_label, attempt)
+        load_value, _ = capture_load(args, plan, label)
+        if load_value is None:
+            require_load_gate(args, load_value, phase)
+        if load_value < target_load:
+            return label, load_value
+        if start_time is not None:
+            require_wall_clock_budget(args, start_time, f"load cooldown before {phase}")
+        time.sleep(LOAD_GATE_POLL_SECONDS)
+        attempt += 1
+
+
+def wait_for_invocation_load_gate(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    output_name: str,
+    *,
+    start_time: float | None = None,
+) -> None:
+    if args.force_busy:
+        return
+    wait_for_load_headroom(
+        args,
+        plan,
+        f"before-{output_name}",
+        output_name,
+        start_time=start_time,
+    )
+
+
+def capture_load_gate_snapshot(
+    args: argparse.Namespace,
+    plan: BenchmarkPlan,
+    label: str,
+    phase: str,
+    *,
+    start_time: float,
+) -> tuple[str, float | None]:
+    if args.force_busy:
+        return label, capture_load(args, plan, label)[0]
+    return wait_for_load_headroom(args, plan, label, phase, start_time=start_time)
+
+
 def load_gate_stop_reason(args: argparse.Namespace, load_value: float | None) -> str | None:
     if args.force_busy:
         return None
@@ -611,7 +671,9 @@ def run_invocation(
     *,
     steps: int,
     repeats: int,
+    start_time: float | None = None,
 ) -> None:
+    wait_for_invocation_load_gate(args, plan, output_name, start_time=start_time)
     target_run_stream(
         args,
         plan,
@@ -990,14 +1052,36 @@ def run_single(
     setup_load_snapshots: list[tuple[str, float | None]] | None = None,
 ) -> dict[str, Any]:
     require_wall_clock_budget(args, start_time, "single-ref smoke")
-    run_invocation(args, plan, "ref", "smoke-ref", steps=1000, repeats=1)
+    run_invocation(
+        args,
+        plan,
+        "ref",
+        "smoke-ref",
+        steps=1000,
+        repeats=1,
+        start_time=start_time,
+    )
     for index in range(plan.warmups):
         require_wall_clock_budget(args, start_time, f"single-ref warmup {index}")
-        run_invocation(args, plan, "ref", f"warmup-ref-{index:02d}", steps=args.steps, repeats=args.repeats)
+        run_invocation(
+            args,
+            plan,
+            "ref",
+            f"warmup-ref-{index:02d}",
+            steps=args.steps,
+            repeats=args.repeats,
+            start_time=start_time,
+        )
 
     load_snapshots = list(setup_load_snapshots or [])
-    before_measured_load = capture_load(args, plan, "before-measured")[0]
-    load_snapshots.append(("before-measured", before_measured_load))
+    before_measured_label, before_measured_load = capture_load_gate_snapshot(
+        args,
+        plan,
+        "before-measured",
+        "measured phase",
+        start_time=start_time,
+    )
+    load_snapshots.append((before_measured_label, before_measured_load))
     load_values = [value for _label, value in load_snapshots]
     load_labels = [label for label, _value in load_snapshots]
     require_load_gate(args, before_measured_load, "measured phase")
@@ -1025,10 +1109,17 @@ def run_single(
                 f"measured-ref-{measured_count:02d}",
                 steps=args.steps,
                 repeats=args.repeats,
+                start_time=start_time,
             )
             measured_count += 1
-        checkpoint_load = capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0]
-        load_snapshots.append((f"after-checkpoint-{checkpoint}", checkpoint_load))
+        checkpoint_label, checkpoint_load = capture_load_gate_snapshot(
+            args,
+            plan,
+            f"after-checkpoint-{checkpoint}",
+            f"checkpoint {checkpoint}",
+            start_time=start_time,
+        )
+        load_snapshots.append((checkpoint_label, checkpoint_load))
         load_values = [value for _label, value in load_snapshots]
         load_labels = [label for label, _value in load_snapshots]
         aggregate = aggregate_single(
@@ -1063,9 +1154,25 @@ def run_compare(
     setup_load_snapshots: list[tuple[str, float | None]] | None = None,
 ) -> dict[str, Any]:
     require_wall_clock_budget(args, start_time, "baseline smoke")
-    run_invocation(args, plan, "baseline", "smoke-baseline", steps=1000, repeats=1)
+    run_invocation(
+        args,
+        plan,
+        "baseline",
+        "smoke-baseline",
+        steps=1000,
+        repeats=1,
+        start_time=start_time,
+    )
     require_wall_clock_budget(args, start_time, "candidate smoke")
-    run_invocation(args, plan, "candidate", "smoke-candidate", steps=1000, repeats=1)
+    run_invocation(
+        args,
+        plan,
+        "candidate",
+        "smoke-candidate",
+        steps=1000,
+        repeats=1,
+        start_time=start_time,
+    )
     for index in range(plan.warmups):
         for role in pair_order(index):
             require_wall_clock_budget(args, start_time, f"{role} warmup {index}")
@@ -1076,11 +1183,18 @@ def run_compare(
                 f"warmup-{role}-{index:02d}",
                 steps=args.steps,
                 repeats=args.repeats,
+                start_time=start_time,
             )
 
     load_snapshots = list(setup_load_snapshots or [])
-    before_measured_load = capture_load(args, plan, "before-measured")[0]
-    load_snapshots.append(("before-measured", before_measured_load))
+    before_measured_label, before_measured_load = capture_load_gate_snapshot(
+        args,
+        plan,
+        "before-measured",
+        "measured phase",
+        start_time=start_time,
+    )
+    load_snapshots.append((before_measured_label, before_measured_load))
     load_values = [value for _label, value in load_snapshots]
     load_labels = [label for label, _value in load_snapshots]
     require_load_gate(args, before_measured_load, "measured phase")
@@ -1115,11 +1229,18 @@ def run_compare(
                     f"measured-{role}-{measured_count:02d}",
                     steps=args.steps,
                     repeats=args.repeats,
+                    start_time=start_time,
                 )
                 completed_roles.append(role)
             measured_count += 1
-        checkpoint_load = capture_load(args, plan, f"after-checkpoint-{checkpoint}")[0]
-        load_snapshots.append((f"after-checkpoint-{checkpoint}", checkpoint_load))
+        checkpoint_label, checkpoint_load = capture_load_gate_snapshot(
+            args,
+            plan,
+            f"after-checkpoint-{checkpoint}",
+            f"checkpoint {checkpoint}",
+            start_time=start_time,
+        )
+        load_snapshots.append((checkpoint_label, checkpoint_load))
         load_values = [value for _label, value in load_snapshots]
         load_labels = [label for label, _value in load_snapshots]
         aggregate = aggregate_compare(
@@ -1353,12 +1474,18 @@ def execute(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str, Any]:
         if plan.mode == "single"
         else run_compare(args, plan, start_time, [("before-setup", initial_load)])
     )
-    after_measured_load = capture_load(args, plan, "after-measured")[0]
+    after_measured_label, after_measured_load = capture_load_gate_snapshot(
+        args,
+        plan,
+        "after-measured",
+        "after measured phase",
+        start_time=start_time,
+    )
     aggregate = aggregate_with_extra_load_snapshot(
         args,
         plan,
         aggregate,
-        label="after-measured",
+        label=after_measured_label,
         load_value=after_measured_load,
     )
     write_aggregate(args, plan, aggregate)

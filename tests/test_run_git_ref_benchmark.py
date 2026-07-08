@@ -36,6 +36,7 @@ from scripts.run_git_ref_benchmark import (
     prepared_source_is_usable,
     require_load_gate,
     require_wall_clock_budget,
+    run_invocation,
     run_compare,
     source_cache_root_for_plan,
     link_prepared_source,
@@ -427,6 +428,63 @@ def test_benchmark_command_pins_canonical_workload_flags(tmp_path: Path) -> None
         "--no-start-game",
     ):
         assert expected in command
+
+
+def test_run_invocation_waits_for_load_headroom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = BenchmarkPlan(
+        mode="compare",
+        run_name="load-wait-test",
+        run_dir=str(tmp_path / "run"),
+        refs=[
+            BenchmarkRef("baseline", "base", "1" * 40, tmp_path / "base.tar.gz"),
+            BenchmarkRef("candidate", "cand", "2" * 40, tmp_path / "cand.tar.gz"),
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(1,),
+        warmups=0,
+        measured_cap=1,
+    )
+    args = SimpleNamespace(
+        force_busy=False,
+        max_load=4.0,
+        max_wall_clock_minutes=None,
+    )
+    loads = iter([(3.9, ""), (3.8, ""), (3.3, "")])
+    labels: list[str] = []
+    sleeps: list[float] = []
+    commands: list[str] = []
+
+    def fake_capture_load(_args: object, _plan: BenchmarkPlan, label: str) -> tuple[float, str]:
+        labels.append(label)
+        return next(loads)
+
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.capture_load", fake_capture_load)
+    monkeypatch.setattr("scripts.run_git_ref_benchmark.time.sleep", sleeps.append)
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.target_run_stream",
+        lambda _args, _plan, shell: commands.append(shell),
+    )
+
+    run_invocation(
+        args,
+        plan,
+        "candidate",
+        "measured-candidate-00",
+        steps=50000,
+        repeats=3,
+        start_time=0.0,
+    )
+
+    assert labels == [
+        "before-measured-candidate-00",
+        "before-measured-candidate-00-retry-01",
+        "before-measured-candidate-00-retry-02",
+    ]
+    assert sleeps == [15.0, 15.0]
+    assert len(commands) == 1
 
 
 def test_execute_dry_run_reports_tier_and_workload_hash(tmp_path: Path) -> None:
@@ -915,12 +973,13 @@ def test_run_compare_blocks_measured_pairs_when_pre_measured_load_is_busy(
     args = SimpleNamespace(
         force_busy=False,
         max_load=1.0,
-        max_wall_clock_minutes=None,
+        max_wall_clock_minutes=0.0,
         max_measured_invocations=None,
         steps=50000,
         repeats=3,
     )
     invocations: list[str] = []
+    wall_checks = iter([False, False, True])
 
     def fake_run_invocation(
         _args: object,
@@ -933,15 +992,22 @@ def test_run_compare_blocks_measured_pairs_when_pre_measured_load_is_busy(
         invocations.append(output_name)
 
     monkeypatch.setattr("scripts.run_git_ref_benchmark.capture_load", lambda *_args: (2.0, ""))
+    monkeypatch.setattr(
+        "scripts.run_git_ref_benchmark.wall_clock_limit_exceeded",
+        lambda *_args: next(wall_checks),
+    )
     monkeypatch.setattr("scripts.run_git_ref_benchmark.run_invocation", fake_run_invocation)
 
-    with pytest.raises(SystemExit, match="benchmark load 2.00 meets or exceeds max 1.00 before measured phase"):
+    with pytest.raises(
+        SystemExit,
+        match="wall-clock limit exhausted before load cooldown before measured phase",
+    ):
         run_compare(args, plan, start_time=0.0)
 
     assert invocations == ["smoke-baseline", "smoke-candidate"]
 
 
-def test_run_compare_stops_when_load_fails_after_checkpoint(
+def test_run_compare_waits_when_load_is_high_after_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plan = BenchmarkPlan(
@@ -967,7 +1033,7 @@ def test_run_compare_stops_when_load_fails_after_checkpoint(
         repeats=3,
     )
     invocations: list[str] = []
-    loads = iter([(0.1, ""), (2.0, "")])
+    loads = iter([(0.1, ""), (2.0, ""), (0.5, ""), (0.1, "")])
     written: list[dict[str, object]] = []
 
     def fake_run_invocation(
@@ -998,9 +1064,11 @@ def test_run_compare_stops_when_load_fails_after_checkpoint(
         "smoke-candidate",
         "measured-baseline-00",
         "measured-candidate-00",
+        "measured-candidate-01",
+        "measured-baseline-01",
     ]
-    assert aggregate["limit_stop_reason"] == "load_gate_failed"
-    assert written[-1]["limit_stop_reason"] == "load_gate_failed"
+    assert aggregate["should_stop"] is False
+    assert "limit_stop_reason" not in written[-1]
 
 
 def test_aggregate_with_extra_load_snapshot_refreshes_validity(
