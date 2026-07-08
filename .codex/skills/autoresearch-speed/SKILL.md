@@ -1,6 +1,6 @@
 ---
 name: autoresearch-speed
-description: Lightweight Super Mario Bros NES throughput optimization loop for this repo. Use when optimizing, profiling, benchmarking, or iterating on emulator speed around env_steps_per_sec without feature or accuracy regressions.
+description: Lightweight Super Mario Bros NES throughput optimization loop for this repo. Use when optimizing, profiling, benchmarking, or iterating on emulator speed around env_steps_per_sec without feature or accuracy regressions, including repeated +10% cumulative improvement rounds resumed from AUTORESEARCH_ROOT_PATH state.
 ---
 
 # Autoresearch Speed
@@ -23,6 +23,36 @@ SMB ROM and `AUTORESEARCH_ROOT_PATH` for mutable research state. Keep mutable
 artifacts out of the repo; the controller owns the root's `benchmarks/`,
 `states/`, `candidates/`, `current.json`, `results.tsv`, `ideas.md`, and
 `scratchpad.md`.
+
+## Round Contract
+
+Each time this skill is launched for open-ended throughput work, run one
+improvement round. The round goal is always at least a 10% cumulative
+`env_steps_per_sec` gain over the round baseline, unless the user explicitly
+asks for a larger target in the current turn. Do not finish a round by merely
+rediscovering that an older accepted commit is already fast enough.
+
+At orientation, derive the round baseline from `AUTORESEARCH_ROOT_PATH`:
+
+- Read `results.tsv`, `current.json`, `scratchpad.md`, and `status`.
+- Select the latest recorded accepted result with status `keep`, `keep_stack`,
+  or `keep_small_gain` as the baseline for the new round.
+- If no accepted result exists, use the current checked-out `HEAD` as the first
+  baseline after running a calibration or equivalent controller-supported
+  baseline measurement.
+- Treat the selected round baseline as fixed for that skill invocation. Small
+  accepted gains can be stacked, but the round is complete only when the
+  candidate is accepted against the fixed round baseline at ratio `>= 1.10`.
+- If live `HEAD` already contains unaccepted work above the baseline, it can be
+  part of the round only after controller evidence accepts it against the fixed
+  baseline. Otherwise continue optimizing from the live tree and do not claim
+  completion.
+
+When the round reaches `>= 1.10` with accepted evidence, finish like any other
+accepted stack: record the aggregate, write the lesson to `scratchpad.md`, leave
+the work committed on the current branch, report the artifacts and next
+baseline, and stop. On the next launch, use the latest accepted result stored in
+`AUTORESEARCH_ROOT_PATH` as the new round baseline and repeat the same process.
 
 ## Control Plane
 
@@ -50,8 +80,9 @@ code disagree, trust the code and fix the prose.
 
 ## Loop
 
-1. `orient`: run `status`, read specs, inspect `ideas.md` and latest results,
-   then run `next`.
+1. `orient`: run `status`, read specs, inspect `ideas.md`, `current.json`,
+   `scratchpad.md`, and latest `results.tsv` entries. Lock the round baseline
+   and target from the Round Contract, then run `next`.
 2. `falsify`: use source inspection, prior rejects, `probe`,
    `diagnose --quick`, `diagnose --profile`, or a narrow equivalence check.
    These can justify discard or continued work, never a keep.
@@ -71,8 +102,9 @@ code disagree, trust the code and fix the prose.
    `scripts/autoresearch.py accept-stack <baseline_ref> <candidate_ref>`.
    Use this when the bundle plausibly has at least 5% upside, has one obvious
    monster candidate, reaches about three good candidates, or follows about
-   eight cheap screens. The proof unit is the whole stack; attribution cleanup
-   is optional after acceptance.
+   eight cheap screens. For round completion, `<baseline_ref>` must be the fixed
+   round baseline and the accepted median ratio must be `>= 1.10`. The proof
+   unit is the whole stack; attribution cleanup is optional after acceptance.
 7. `accept`: for strongest final evidence, contract-sensitive changes, public
    claims, baseline resets, or direct user requests, run full controller checks
    and `scripts/autoresearch.py accept <baseline_ref> <candidate_ref>`. Use
@@ -87,7 +119,9 @@ code disagree, trust the code and fix the prose.
 `local_triage` is screening only. `stack_acceptance` can justify `keep_stack`
 for a bundled patch stack, but does not prove individual attribution.
 `local_acceptance` remains the strongest tier for `keep`, `keep_small_gain`,
-accepted speedups, or baseline updates that need gold-standard evidence.
+accepted speedups, or baseline updates that need gold-standard evidence. Do not
+mark a round complete from `inconclusive`, load-failed, busy-machine, or
+non-recorded evidence, even if the raw ratio is above 1.10.
 
 Discard when the likely gain is smaller than the cost of proving it. Treat
 failures as regressions unless proven unrelated. Do not accept busy-machine or
@@ -118,4 +152,5 @@ included, two candidates die for the same reason, or the user asks to stop.
 
 At session end, report branch, baseline/candidate refs, latest aggregate,
 accepted commits, rejects, checks, changed files, cleanup status, benchmark
-limits, artifacts, and the next experiment.
+limits, artifacts, round baseline, round target, cumulative ratio versus the
+round baseline, and the next experiment.
