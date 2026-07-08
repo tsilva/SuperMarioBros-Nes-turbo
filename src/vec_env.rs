@@ -279,6 +279,20 @@ impl VecEnvConfig {
     fn uses_default_gray_area_resize(&self) -> bool {
         false
     }
+
+    fn uses_default_gray_mask_top_area_resize(&self) -> bool {
+        self.grayscale
+            && self.crop_mode == CropMode::Mask
+            && self.crop_top == 32
+            && self.crop_bottom == 0
+            && self.crop_left == 0
+            && self.crop_right == 0
+            && self.resize_algorithm == ResizeAlgorithm::Area
+            && self.source_width() == VISIBLE_FRAME_WIDTH
+            && self.source_height() == VISIBLE_FRAME_HEIGHT
+            && self.resize_width == DEFAULT_AREA_DST_WIDTH
+            && self.resize_height == DEFAULT_AREA_DST_HEIGHT
+    }
 }
 
 pub struct MarioVecEnv {
@@ -1489,6 +1503,10 @@ fn write_current_frame(
         env.write_gray_frame_cropped_area_84x84(dst, scratch);
         return;
     }
+    if config.uses_default_gray_mask_top_area_resize() {
+        write_default_gray_mask_top_area_frame(config, resize_plan, env, scratch, dst);
+        return;
+    }
 
     if config.needs_resize() {
         let native_len = native_frame_len(config);
@@ -1514,6 +1532,12 @@ fn write_current_frame_profiled(
         profiler.record_render(start.elapsed());
         return;
     }
+    if config.uses_default_gray_mask_top_area_resize() {
+        let render_start = Instant::now();
+        write_default_gray_mask_top_area_frame(config, resize_plan, env, scratch, dst);
+        profiler.record_render(render_start.elapsed());
+        return;
+    }
 
     if config.needs_resize() {
         let native_len = native_frame_len(config);
@@ -1529,6 +1553,27 @@ fn write_current_frame_profiled(
         write_native_frame(config, env, dst);
         profiler.record_render(start.elapsed());
     }
+}
+
+fn write_default_gray_mask_top_area_frame(
+    config: VecEnvConfig,
+    resize_plan: &AreaResizePlan,
+    env: &NesEmulator,
+    scratch: &mut [u8],
+    dst: &mut [u8],
+) {
+    let native_len = VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT;
+    let top_len = config.crop_top * VISIBLE_FRAME_WIDTH;
+    let native = &mut scratch[..native_len];
+    native[..top_len].fill(config.crop_fill);
+    env.write_gray_visible_frame_region(
+        &mut native[top_len..],
+        config.crop_top,
+        0,
+        VISIBLE_FRAME_WIDTH,
+        VISIBLE_FRAME_HEIGHT - config.crop_top,
+    );
+    resize_frame_area(config, resize_plan, native, dst);
 }
 
 fn write_native_frame(config: VecEnvConfig, env: &NesEmulator, dst: &mut [u8]) {
@@ -2137,6 +2182,21 @@ const fn build_default_area_axis_count(src_len: usize) -> [u16; DEFAULT_AREA_DST
 mod tests {
     use super::*;
 
+    fn make_render_test_env() -> NesEmulator {
+        let prg_rom = vec![0; 32768];
+        let chr_rom = (0..8192)
+            .map(|idx| ((idx * 17 + idx / 13 + 29) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        NesEmulator::new_with_options(
+            Cartridge {
+                prg_rom,
+                chr_rom,
+                vertical_mirroring: true,
+            },
+            true,
+        )
+    }
+
     fn reference_resize_plane_area(
         src: &[u8],
         dst: &mut [u8],
@@ -2247,6 +2307,53 @@ mod tests {
         );
 
         assert_eq!(optimized, reference);
+    }
+
+    #[test]
+    fn default_gray_mask_top_area_frame_matches_legacy_path() {
+        let config = VecEnvConfig {
+            num_envs: 16,
+            frame_skip: 4,
+            grayscale: true,
+            frame_stack: 4,
+            frame_maxpool: false,
+            noop_reset_max: 0,
+            sticky_action_prob: 0.0,
+            terminate_on_flag: true,
+            crop_top: 32,
+            crop_bottom: 0,
+            crop_left: 0,
+            crop_right: 0,
+            crop_mode: CropMode::Mask,
+            crop_fill: 7,
+            resize_width: 84,
+            resize_height: 84,
+            resize_algorithm: ResizeAlgorithm::Area,
+        };
+        let resize_plan = AreaResizePlan::new(
+            config.source_width(),
+            config.source_height(),
+            config.resize_width,
+            config.resize_height,
+        );
+        let env = make_render_test_env();
+        let mut native = vec![0; native_frame_len(config)];
+        let mut scratch = vec![0; native_frame_len(config)];
+        let mut expected = vec![0; frame_len(config)];
+        let mut actual = vec![0; frame_len(config)];
+
+        assert!(config.uses_default_gray_mask_top_area_resize());
+        write_native_frame(config, &env, &mut native);
+        resize_frame(config, &resize_plan, &native, &mut expected);
+        write_default_gray_mask_top_area_frame(
+            config,
+            &resize_plan,
+            &env,
+            &mut scratch,
+            &mut actual,
+        );
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
