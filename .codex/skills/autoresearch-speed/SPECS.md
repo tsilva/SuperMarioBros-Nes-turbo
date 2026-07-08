@@ -18,6 +18,9 @@ without weakening correctness, comparability, or experiment validity.
   do not change benchmark scripts, commands, workload parameters, sampling,
   load gates, statistical checks, comparison refs, reported metrics, or
   acceptance criteria to make a candidate pass.
+- Use the user-approved default acceptance cap of three measured comparison
+  pairs for `scripts/autoresearch.py accept`; reserve `accept --full` for the
+  longer sequential stability ladder.
 - Do not represent invalid, incomparable, or contract-weakening measurements as
   accepted throughput improvements.
 - Keep mutable autoresearch state and artifacts out of the repo under

@@ -52,7 +52,8 @@ PROBE_REPEATS = "1"
 PROBE_WARMUP = "50"
 ACCEPT_STEPS = "50000"
 ACCEPT_REPEATS = "3"
-DEDICATED_ACCEPT_MEASURED_PAIRS = "11"
+DEDICATED_ACCEPT_MEASURED_PAIRS = "3"
+DEDICATED_CALIBRATE_MEASURED_INVOCATIONS = "11"
 
 
 def autoresearch_root(value: str | Path | None = None) -> Path:
@@ -112,7 +113,10 @@ def build_benchmark_command(
         command = [sys.executable, str(BENCHMARK_SCRIPT), refs[0], "--single"]
         command += ["--steps", ACCEPT_STEPS, "--repeats", ACCEPT_REPEATS]
         if not full:
-            command += ["--max-measured-invocations", DEDICATED_ACCEPT_MEASURED_PAIRS]
+            command += [
+                "--max-measured-invocations",
+                DEDICATED_CALIBRATE_MEASURED_INVOCATIONS,
+            ]
     else:
         raise SystemExit(f"unknown benchmark kind: {kind}")
     return command + extra_args

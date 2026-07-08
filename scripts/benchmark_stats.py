@@ -214,13 +214,15 @@ def comparison_convergence(
     if not pair_ratios:
         raise ValueError("comparison_convergence requires pair ratios")
 
+    quick_acceptance_cap = checkpoints == (3,)
+    effective_stability_window = 1 if quick_acceptance_cap else stability_window
     official_ratio = median(pair_ratios)
     ratio_summary = summary(pair_ratios)
     ci = bootstrap_ci_median(pair_ratios)
     ci_width = relative_width(ci[0], ci[1], official_ratio)
     diagnostics = outliers(pair_ratios, key_prefix="pair_ratio")
     trace = checkpoint_trace(pair_ratios, checkpoints)
-    span = stabilization_span(trace, stability_window)
+    span = stabilization_span(trace, effective_stability_window)
     stable = span is not None and span <= stability_rel_span
 
     candidate_faster_pairs = sum(1 for ratio in pair_ratios if ratio > 1.0)
@@ -275,7 +277,8 @@ def comparison_convergence(
         "candidate_faster_pairs": candidate_faster_pairs,
         "candidate_faster_pairs_required_for_win": needed_faster_pairs,
         "checkpoint_trace": trace,
-        "checkpoint_stability_window": stability_window,
+        "checkpoint_stability_window": effective_stability_window,
+        "quick_acceptance_cap": quick_acceptance_cap,
         "checkpoint_stability_relative_span": span,
         "outlier_diagnostics": diagnostics,
         "stability_gates": stability_gates,

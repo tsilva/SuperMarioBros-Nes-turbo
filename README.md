@@ -198,9 +198,10 @@ screening:
 ```
 
 Acceptance uses the same official exact-ref runner, but the controller defaults
-to the dedicated-host cap of `11` measured pairs. This accepts only when the
-normal validity and decision gates pass; otherwise the result is inconclusive.
-Use the full ladder only when the extra time is warranted:
+to the dedicated-host cap of `3` measured pairs. This keeps the normal
+50,000-step, 3-repeat workload and accepts decisive paired evidence without the
+long sequential stability ladder. Use the full ladder only when the extra time
+is warranted:
 
 ```bash
 .venv/bin/python scripts/autoresearch.py accept <baseline_ref> <candidate_ref>

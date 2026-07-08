@@ -19,7 +19,7 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
   rollout collection.
 - Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, deterministic sampled action workload, and comparable JSON.
 - Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
-- Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; ad hoc timings are not acceptance evidence.
+- Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; default autoresearch acceptance uses three measured comparison pairs, while `--full` remains available for the longer sequential stability ladder. Ad hoc timings are not acceptance evidence.
 - Keep mutable autoresearch state and benchmark artifacts out of the repo by default; ledgers, ideas, scratchpads, candidate bundles, run dirs, source archives, result caches, and indexes live under `AUTORESEARCH_ROOT_PATH`.
 - Preserve parity/regression tests for Gymnasium VectorEnv behavior, native/stable-retro constructor compatibility, state sampling, terminal infos, sticky/no-op actions, benchmark stats, release flow, and benchmark metadata.
 - Preserve release and supply-chain hardening: aligned Python/Rust versions, clean synced release branch, local gates before tags, validated wheels, `uv` lock state, `exclude-newer`, bad-package constraints, and Rust release-profile performance settings.

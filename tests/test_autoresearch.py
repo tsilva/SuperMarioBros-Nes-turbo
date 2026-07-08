@@ -68,7 +68,7 @@ def test_screen_and_accept_commands_are_canonical() -> None:
         "--repeats",
         "3",
         "--max-measured-invocations",
-        "11",
+        "3",
         "--force-busy",
     ]
     assert accept_full == [

@@ -134,6 +134,20 @@ def test_comparison_convergence_uses_paired_ratio_checkpoints() -> None:
     assert result["checkpoint_trace"][-1]["count"] == 15
 
 
+def test_comparison_convergence_accepts_three_pair_cap_when_decisive() -> None:
+    pair_ratios = [1.052, 1.051, 1.053]
+
+    result = comparison_convergence(pair_ratios, checkpoints=(3,))
+
+    assert result["decision"] == "converged_candidate_win"
+    assert result["should_stop"] is True
+    assert result["validity_passed"] is True
+    assert result["quick_acceptance_cap"] is True
+    assert result["checkpoint_stability_window"] == 1
+    assert result["candidate_faster_pairs"] == 3
+    assert result["candidate_faster_pairs_required_for_win"] == 3
+
+
 def test_comparison_convergence_stops_for_stable_no_meaningful_win() -> None:
     pair_ratios = [
         1.004,
