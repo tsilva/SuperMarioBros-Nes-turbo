@@ -79,6 +79,17 @@ INFO_KEYS = (
     "xscrollHi",
     "xscrollLo",
 )
+_BASE_INFO_ARRAYS = (
+    ("coins", "_coins"),
+    ("levelHi", "_level_hi"),
+    ("levelLo", "_level_lo"),
+    ("lives", "_lives"),
+    ("score", "_score"),
+    ("scrolling", "_scrolling"),
+    ("time", "_time"),
+    ("xscrollHi", "_xscroll_hi"),
+    ("xscrollLo", "_xscroll_lo"),
+)
 StateSpec = str | Path | bytes | bytearray | memoryview
 DoneOnInfoSpec = Mapping[str, Any]
 DoneOnInfoRule = tuple[str, str, tuple[str, ...], str, str]
@@ -904,6 +915,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._xscroll_hi = np.empty((self.num_envs,), dtype=np.uint8)
         self._xscroll_lo = np.empty((self.num_envs,), dtype=np.uint8)
         self._active_state_indices = np.empty((self.num_envs,), dtype=np.int32)
+        self._info_all_lanes_mask = np.ones((self.num_envs,), dtype=np.bool_)
         self._done_on_info: list[dict[str, dict[str, Any]]] = [
             {} for _ in range(self.num_envs)
         ]
@@ -1097,23 +1109,24 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             self._xscroll_hi,
             self._xscroll_lo,
         )
-        self._finish_native_step()
+        has_terminal = self._finish_native_step()
         obs, rewards, terminated, truncated = (
             self._return_obs(),
             self._return_rewards(),
             self._terminated,
             self._truncated,
         )
-        infos = self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
+        infos = self._step_infos(has_terminal)
         return obs, rewards, terminated, truncated, infos
 
-    def _finish_native_step(self) -> None:
+    def _finish_native_step(self) -> bool:
         has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
         if has_terminal:
             self._write_active_state_indices()
             self._write_terminal_observations()
         if self.done_on_info_rules:
             self._write_done_on_info()
+        return has_terminal
 
     def _write_done_on_info(self) -> None:
         reports = self._core.done_on_info()
@@ -1223,6 +1236,15 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         np.clip(self._rewards, self.reward_clip_low, self.reward_clip_high, out=self._reward_return)
         return self._reward_return
 
+    def _step_infos(self, has_terminal: bool) -> dict[str, Any]:
+        if self._info_mode == "none":
+            return {}
+        if self._info_mode == "terminal" and not has_terminal:
+            return {}
+        if has_terminal or any(self._done_on_info):
+            return self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
+        return self._base_vector_infos()
+
     def _info_dict(self, index: int) -> dict[str, Any]:
         terminal = bool(self._terminated[index]) or bool(self._truncated[index])
         if self._info_mode == "none":
@@ -1257,6 +1279,15 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         infos: dict[str, Any] = {}
         for index, lane_info in enumerate(lane_infos):
             infos = self._add_info(infos, lane_info, index)
+        return infos
+
+    def _base_vector_infos(self) -> dict[str, Any]:
+        infos: dict[str, Any] = {}
+        for key, attr_name in _BASE_INFO_ARRAYS:
+            if self._info_keys is not None and key not in self._info_keys:
+                continue
+            infos[key] = getattr(self, attr_name).astype(np.int_, copy=True)
+            infos[f"_{key}"] = self._info_all_lanes_mask.copy()
         return infos
 
     def _base_info_dict(self, index: int) -> dict[str, Any]:

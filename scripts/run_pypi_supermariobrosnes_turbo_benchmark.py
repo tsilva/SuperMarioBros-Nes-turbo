@@ -38,6 +38,8 @@ BENCHMARK_STATE_SUBDIR = Path("states") / "SuperMarioBros-Nes-v0"
 LOCAL_RESULTS_SUBDIR = Path("local-results")
 PYPI_CACHE_SUBDIR = LOCAL_RESULTS_SUBDIR / "pypi-supermariobrosnes-turbo"
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+DEFAULT_ACTIONS = ("noop", "right", "right_b", "right_a")
+DEFAULT_ACTION_SEED = 0
 PACKAGE = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 PYPI_JSON = f"https://pypi.org/pypi/{PACKAGE}/json"
@@ -124,7 +126,9 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "resize": [84, 84],
         "states": list(DEFAULT_STATES),
         "action_set": "simple",
-        "action": "noop",
+        "action": None,
+        "actions": list(DEFAULT_ACTIONS),
+        "action_seed": DEFAULT_ACTION_SEED,
         "include_info": True,
         "obs_resize_algorithm": "area",
     }
@@ -369,6 +373,8 @@ def require_raw_payload_matches_workload(
         "states": workload_payload["states"],
         "action_set": workload_payload["action_set"],
         "action": workload_payload["action"],
+        "actions": workload_payload["actions"],
+        "action_seed": workload_payload["action_seed"],
         "include_info": workload_payload["include_info"],
     }
     mismatches = [
@@ -462,7 +468,8 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--num-envs {args.num_envs} --steps {args.steps} --repeats {args.repeats} "
         f"--warmup {args.warmup} --frame-skip 4 --frame-stack 4 "
         "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action-set simple --action noop --include-info --no-start-game "
+        f"--states {quote(states)} --action-set simple --actions {quote(','.join(DEFAULT_ACTIONS))} "
+        f"--action-seed {DEFAULT_ACTION_SEED} --include-info --no-start-game "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])

@@ -8,7 +8,7 @@ import os
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -29,6 +29,8 @@ except ModuleNotFoundError:
 
 DEFAULT_ROM = default_rom_path()
 DEFAULT_STATES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+DEFAULT_BENCHMARK_ACTIONS = ("noop", "right", "right_b", "right_a")
+DEFAULT_ACTION_SEED = 0
 DEFAULT_MIN_START_LOAD_LIMIT = 4.0
 DEFAULT_START_LOAD_CPU_FRACTION = 0.5
 NES_BUTTONS = ("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A")
@@ -69,7 +71,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--action-set", choices=sorted(ACTION_SETS), default="simple")
-    parser.add_argument("--action", choices=CORE_ACTION_MEANINGS, default="noop")
+    parser.add_argument(
+        "--actions",
+        default=None,
+        help=(
+            "Comma-separated actions sampled per vector step. Defaults to "
+            f"{','.join(DEFAULT_BENCHMARK_ACTIONS)}."
+        ),
+    )
+    parser.add_argument(
+        "--action",
+        choices=CORE_ACTION_MEANINGS,
+        default=None,
+        help="Legacy single-action override. If set, --actions is ignored.",
+    )
+    parser.add_argument("--action-seed", type=int, default=DEFAULT_ACTION_SEED)
     parser.add_argument("--state", default=None)
     parser.add_argument(
         "--states",
@@ -143,11 +159,12 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.max_start_load is not None and args.max_start_load <= 0:
         raise ValueError("--max-start-load must be positive")
     action_meanings = ACTION_SETS[args.action_set]
-    if args.action not in action_meanings:
-        raise ValueError(
-            f"--action {args.action!r} is not in action_set={args.action_set!r}; "
-            f"valid actions: {', '.join(action_meanings)}"
-        )
+    for action in selected_actions_for_args(args):
+        if action not in action_meanings:
+            raise ValueError(
+                f"action {action!r} is not in action_set={args.action_set!r}; "
+                f"valid actions: {', '.join(action_meanings)}"
+            )
     if args.state is not None and args.states is not None:
         raise ValueError("--state and --states are mutually exclusive")
 
@@ -159,6 +176,21 @@ def parse_states(states: str | None) -> tuple[str, ...] | None:
     if not parsed or not all(parsed):
         raise ValueError("--states must be a comma-separated list without empty entries")
     return parsed
+
+
+def parse_actions(actions: str | None) -> tuple[str, ...]:
+    if actions is None:
+        return DEFAULT_BENCHMARK_ACTIONS
+    parsed = tuple(action.strip() for action in actions.split(","))
+    if not parsed or not all(parsed):
+        raise ValueError("--actions must be a comma-separated list without empty entries")
+    return parsed
+
+
+def selected_actions_for_args(args: argparse.Namespace) -> tuple[str, ...]:
+    if args.action is not None:
+        return (args.action,)
+    return parse_actions(args.actions)
 
 
 def initial_states_for_args(args: argparse.Namespace) -> tuple[str, ...] | None:
@@ -278,6 +310,28 @@ def fill_action(num_envs: int, action_name: str, action_meanings: tuple[str, ...
     return actions
 
 
+def action_templates(
+    num_envs: int,
+    action_names: Sequence[str],
+    action_meanings: tuple[str, ...],
+) -> tuple[np.ndarray, ...]:
+    return tuple(fill_action(num_envs, action_name, action_meanings) for action_name in action_names)
+
+
+def sampled_action_sequence(
+    templates: Sequence[np.ndarray],
+    count: int,
+    seed: int,
+) -> tuple[np.ndarray, ...]:
+    if count <= 0:
+        return ()
+    if len(templates) == 1:
+        return tuple(templates[0] for _ in range(count))
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(templates), size=count)
+    return tuple(templates[int(index)] for index in indices)
+
+
 def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, include_info: bool) -> None:
     del include_info
     env.step(actions)
@@ -291,6 +345,15 @@ def step_repeated(
 ) -> None:
     for _ in range(count):
         step_env(env, actions, include_info)
+
+
+def step_action_sequence(
+    env: SuperMarioBrosNesTurboVecEnv,
+    actions: Sequence[np.ndarray],
+    include_info: bool,
+) -> None:
+    for action in actions:
+        step_env(env, action, include_info)
 
 
 def prepare_game(
@@ -308,9 +371,13 @@ def prepare_game(
     step_repeated(env, noop, args.post_start_steps, args.include_info)
 
 
-def run_once(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray, args: argparse.Namespace) -> dict[str, float]:
+def run_once(
+    env: SuperMarioBrosNesTurboVecEnv,
+    actions: Sequence[np.ndarray],
+    args: argparse.Namespace,
+) -> dict[str, float]:
     start = time.perf_counter()
-    step_repeated(env, actions, args.steps, args.include_info)
+    step_action_sequence(env, actions, args.include_info)
     elapsed = time.perf_counter() - start
     batch_sps = args.steps / elapsed
     env_sps = batch_sps * args.num_envs
@@ -366,6 +433,8 @@ def build_result(
             "obs_resize_algorithm": "area",
             "action_set": args.action_set,
             "action": args.action,
+            "actions": list(args.parsed_actions),
+            "action_seed": args.action_seed,
             "state": args.state,
             "states": list(args.parsed_states) if args.parsed_states is not None else None,
             "lane_states": list(active_states) if has_initial_state(args) else None,
@@ -406,7 +475,8 @@ def print_human(result: dict[str, Any]) -> None:
         f"frame_skip={config['frame_skip']} frame_stack={config['frame_stack']} "
         f"grayscale={config['grayscale']} crop=({config['crop_top']},{config['crop_bottom']}) "
         f"resize={config['resize_width']}x{config['resize_height']} "
-        f"action_set={config['action_set']} action={config['action']} "
+        f"action_set={config['action_set']} actions={config['actions']} "
+        f"action_seed={config['action_seed']} "
         f"state={config['state']} states={config['states']} "
         f"include_info={config['include_info']}"
     )
@@ -449,6 +519,7 @@ def main() -> None:
     args = parse_args()
     validate_args(args)
     args.parsed_states = initial_states_for_args(args)
+    args.parsed_actions = selected_actions_for_args(args)
     rom_path = resolve_verified_rom_path(args.rom_path)
     load = load_preflight(args)
     action_set = args.action_set
@@ -473,12 +544,14 @@ def main() -> None:
         env.enable_profiler()
     obs, _infos = env.reset()
     active_states = env.active_states()
-    actions = fill_action(args.num_envs, args.action, action_meanings)
+    templates = action_templates(args.num_envs, args.parsed_actions, action_meanings)
+    warmup_actions = sampled_action_sequence(templates, args.warmup, args.action_seed + 1)
+    measured_actions = sampled_action_sequence(templates, args.steps, args.action_seed)
     prepare_game(env, args, action_meanings)
-    step_repeated(env, actions, args.warmup, args.include_info)
+    step_action_sequence(env, warmup_actions, args.include_info)
     if args.profile_output is not None:
         env.reset_profiler()
-    runs = [run_once(env, actions, args) for _ in range(args.repeats)]
+    runs = [run_once(env, measured_actions, args) for _ in range(args.repeats)]
     result = build_result(args, obs, runs, active_states, load, rom_path)
     if args.profile_output is not None:
         result["profiler"] = env.profiler_snapshot()

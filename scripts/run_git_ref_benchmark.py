@@ -56,6 +56,8 @@ AUTORESEARCH_ROOT_ENV = "AUTORESEARCH_ROOT_PATH"
 BENCHMARK_ROOT_SUBDIR = Path("benchmarks")
 BENCHMARK_STATE_SUBDIR = Path("states") / "SuperMarioBros-Nes-v0"
 STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
+ACTION_NAMES = ("noop", "right", "right_b", "right_a")
+ACTION_SEED = 0
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_PACKAGE = "supermariobrosnes_turbo"
 ARCHIVE_SUBDIR = Path("local-archives")
@@ -556,7 +558,8 @@ def benchmark_command(
         f"--steps {steps} --repeats {repeats} "
         "--warmup 100 --frame-skip 4 --frame-stack 4 "
         "--crop-top 32 --crop-bottom 0 --resize-width 84 --resize-height 84 "
-        f"--states {quote(states)} --action-set simple --action noop "
+        f"--states {quote(states)} --action-set simple --actions {quote(','.join(ACTION_NAMES))} "
+        f"--action-seed {ACTION_SEED} "
         "--include-info "
         f"--max-start-load {args.max_load} "
         "--no-start-game "
@@ -628,7 +631,9 @@ def require_raw_payload_matches_plan(
         "resize_height": 84,
         "obs_resize_algorithm": "area",
         "action_set": "simple",
-        "action": "noop",
+        "action": None,
+        "actions": list(ACTION_NAMES),
+        "action_seed": ACTION_SEED,
         "state": None,
         "states": list(STATE_NAMES),
         "state_dir": plan.state_dir,
@@ -864,7 +869,9 @@ def workload_payload(args: argparse.Namespace, plan: BenchmarkPlan) -> dict[str,
         "resize": [84, 84],
         "states": list(STATE_NAMES),
         "action_set": "simple",
-        "action": "noop",
+        "action": None,
+        "actions": list(ACTION_NAMES),
+        "action_seed": ACTION_SEED,
         "obs_resize_algorithm": "area",
         "include_info": True,
         "terminate_on_flag": False,

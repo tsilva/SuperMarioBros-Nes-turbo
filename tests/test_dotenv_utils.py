@@ -10,6 +10,8 @@ import pytest
 
 from scripts.benchmark_rom import EXPECTED_SMB_ROM_SHA256
 from scripts.benchmark_sps import build_result as build_native_benchmark_result
+from scripts.benchmark_sps import DEFAULT_ACTION_SEED
+from scripts.benchmark_sps import DEFAULT_BENCHMARK_ACTIONS
 from scripts.benchmark_sps import load_preflight as native_load_preflight
 from scripts.benchmark_sps import package_metadata as native_package_metadata
 from scripts.benchmark_sps import resolve_verified_rom_path as resolve_native_verified_rom_path
@@ -205,7 +207,9 @@ def test_direct_benchmark_results_record_rom_identity(
         resize_width=84,
         resize_height=84,
         action_set="simple",
-        action="noop",
+        action=None,
+        parsed_actions=DEFAULT_BENCHMARK_ACTIONS,
+        action_seed=DEFAULT_ACTION_SEED,
         state=None,
         parsed_states=("Level1-1",),
         state_dir=None,
@@ -415,6 +419,8 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
         "action_set": workload_payload["action_set"],
         "action": workload_payload["action"],
+        "actions": workload_payload["actions"],
+        "action_seed": workload_payload["action_seed"],
         "state": None,
         "states": workload_payload["states"],
         "lane_states": list(workload_payload["states"]),
@@ -1049,7 +1055,15 @@ def test_pypi_wrappers_capture_load_after_warmups(
         ):
             assert expected in measured_command
         if runner is run_smb_pypi_invocations:
-            assert "--action-set simple --action noop --include-info --no-start-game" in measured_command
+            for expected in (
+                "--action-set simple",
+                "--actions",
+                "noop,right,right_b,right_a",
+                "--action-seed 0",
+                "--include-info",
+                "--no-start-game",
+            ):
+                assert expected in measured_command
         else:
             assert (
                 "--action noop --obs-copy safe_view --obs-resize-algorithm area"

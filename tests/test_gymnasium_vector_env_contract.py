@@ -522,6 +522,35 @@ def test_terminal_info_filter_only_reports_done_lanes() -> None:
         env.close()
 
 
+def test_regular_step_infos_use_direct_vector_arrays() -> None:
+    env = make_env(
+        require_rom(),
+        num_envs=2,
+        info_filter={"keys": ["lives", "time"]},
+    )
+    actions = make_action_batch(env.num_envs, ["noop", "right"])
+
+    def fail_info_dict(_index: int) -> dict[str, object]:
+        raise AssertionError("regular step should not build per-lane info dicts")
+
+    try:
+        env.reset()
+        env._info_dict = fail_info_dict  # type: ignore[method-assign]
+        _obs, _rewards, terminations, truncations, infos = env.step(actions)
+
+        assert not np.any(terminations)
+        assert not np.any(truncations)
+        assert sorted(key for key in infos if not key.startswith("_")) == ["lives", "time"]
+        assert lane_has(infos, "lives", 0)
+        assert lane_has(infos, "lives", 1)
+        assert lane_has(infos, "time", 0)
+        assert lane_has(infos, "time", 1)
+        assert infos["lives"].shape == (2,)
+        assert infos["time"].shape == (2,)
+    finally:
+        env.close()
+
+
 @pytest.mark.parametrize(
     ("obs_layout", "expected_single_shape"),
     [
