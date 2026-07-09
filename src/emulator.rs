@@ -655,7 +655,6 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
-
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
         } else {
@@ -734,6 +733,7 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
+        let gray_quads = build_gray_bg_quad_tables(&palette_gray);
 
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
@@ -782,7 +782,7 @@ impl Ppu {
                     write_full_bg_tile_gray_pixels(
                         &mut dst[row_start + out_x..row_start + out_x + 8],
                         pixels,
-                        colors,
+                        &gray_quads[palette_id as usize],
                     );
                 } else {
                     for col in 0..run {
@@ -1645,19 +1645,40 @@ fn write_full_bg_tile_gray(dst: &mut [u8], lo: u8, hi: u8, colors: [u8; 4]) {
 }
 
 #[inline(always)]
-fn write_full_bg_tile_gray_pixels(dst: &mut [u8], pixels: u16, colors: [u8; 4]) {
+fn write_full_bg_tile_gray_pixels(dst: &mut [u8], pixels: u16, quads: &[u32; 256]) {
     debug_assert!(dst.len() >= 8);
-    // SAFETY: The caller passes at least eight destination pixels for a full tile.
+    let lower = quads[(pixels & 0xff) as usize];
+    let upper = quads[(pixels >> 8) as usize];
+    let packed = u64::from(lower) | (u64::from(upper) << 32);
+    // SAFETY: The caller passes at least eight destination pixels. Writing the
+    // little-endian packed value preserves left-to-right byte order.
     unsafe {
-        *dst.get_unchecked_mut(0) = colors[(pixels & 3) as usize];
-        *dst.get_unchecked_mut(1) = colors[((pixels >> 2) & 3) as usize];
-        *dst.get_unchecked_mut(2) = colors[((pixels >> 4) & 3) as usize];
-        *dst.get_unchecked_mut(3) = colors[((pixels >> 6) & 3) as usize];
-        *dst.get_unchecked_mut(4) = colors[((pixels >> 8) & 3) as usize];
-        *dst.get_unchecked_mut(5) = colors[((pixels >> 10) & 3) as usize];
-        *dst.get_unchecked_mut(6) = colors[((pixels >> 12) & 3) as usize];
-        *dst.get_unchecked_mut(7) = colors[((pixels >> 14) & 3) as usize];
+        dst.as_mut_ptr()
+            .cast::<u64>()
+            .write_unaligned(packed.to_le());
     }
+}
+
+fn build_gray_bg_quad_tables(palette_gray: &[u8; 32]) -> [[u32; 256]; 4] {
+    let mut tables = [[0u32; 256]; 4];
+    for (palette_id, table) in tables.iter_mut().enumerate() {
+        let base = palette_id * 4;
+        let colors = [
+            palette_gray[0],
+            palette_gray[base + 1],
+            palette_gray[base + 2],
+            palette_gray[base + 3],
+        ];
+        for (pixels, packed) in table.iter_mut().enumerate() {
+            *packed = u32::from_le_bytes([
+                colors[pixels & 3],
+                colors[(pixels >> 2) & 3],
+                colors[(pixels >> 4) & 3],
+                colors[(pixels >> 6) & 3],
+            ]);
+        }
+    }
+    tables
 }
 
 fn decode_chr_row_pixels(chr_rom: &[u8]) -> Vec<u16> {
