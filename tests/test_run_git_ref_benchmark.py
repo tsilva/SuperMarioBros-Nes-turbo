@@ -75,6 +75,7 @@ def benchmark_raw_config(
         "action_seed": ACTION_SEED,
         "state": None,
         "states": list(STATE_NAMES),
+        "lane_states": [STATE_NAMES[index % len(STATE_NAMES)] for index in range(16)],
         "state_dir": plan.state_dir,
         "include_info": True,
         "terminate_on_flag": False,
@@ -789,6 +790,37 @@ def test_load_raw_rejects_measured_workload_mismatch(tmp_path: Path) -> None:
     write_raw(raw_dir / "measured-ref-00.json", [1000.0, 1001.0, 999.0], config)
 
     with pytest.raises(SystemExit, match="workload mismatch: config.steps=5000 expected 50000"):
+        load_raw(args, plan, "measured-ref-00")
+
+
+def test_load_raw_rejects_extra_workload_config_keys(tmp_path: Path) -> None:
+    run_dir = tmp_path / "local-extra-config-test"
+    raw_dir = run_dir / "raw"
+    raw_dir.mkdir(parents=True)
+    plan = BenchmarkPlan(
+        mode="single",
+        run_name="local-extra-config-test",
+        run_dir=str(run_dir),
+        refs=[
+            BenchmarkRef(
+                role="ref",
+                ref="HEAD",
+                sha="1" * 40,
+                archive=tmp_path / "ref-111111111111.tar.gz",
+            )
+        ],
+        rom_path=str(tmp_path / "SuperMarioBros.nes"),
+        state_dir=str(tmp_path / "states"),
+        checkpoints=(5,),
+        warmups=0,
+        measured_cap=5,
+    )
+    args = SimpleNamespace(steps=50000, repeats=3)
+    config = benchmark_raw_config(plan, args)
+    config["unexpected"] = "extra"
+    write_raw(raw_dir / "measured-ref-00.json", [1000.0, 1001.0, 999.0], config)
+
+    with pytest.raises(SystemExit, match="workload mismatch: unexpected config key\\(s\\): unexpected"):
         load_raw(args, plan, "measured-ref-00")
 
 

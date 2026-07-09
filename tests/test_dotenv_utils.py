@@ -393,6 +393,7 @@ def test_pypi_smb_state_hashes_require_all_state_files(tmp_path: Path) -> None:
 
 
 def stable_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
+    states = list(workload_payload["states"])
     return {
         "rom_path": workload_payload["rom_path"],
         "rom_sha256": workload_payload["rom_sha256"],
@@ -410,15 +411,19 @@ def stable_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "obs_crop_mode": workload_payload["obs_crop_mode"],
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
-        "states": workload_payload["states"],
-        "lane_states": list(workload_payload["states"]),
+        "states": states,
+        "lane_states": [states[index % len(states)] for index in range(workload_payload["num_envs"])],
         "action": workload_payload["action"],
         "obs_copy": workload_payload["obs_copy"],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
+        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
+        "done_on": workload_payload["done_on"],
     }
 
 
 def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
+    states = list(workload_payload["states"])
     return {
         "rom_path": workload_payload["rom_path"],
         "rom_sha256": workload_payload["rom_sha256"],
@@ -442,10 +447,13 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "actions": workload_payload["actions"],
         "action_seed": workload_payload["action_seed"],
         "state": None,
-        "states": workload_payload["states"],
-        "lane_states": list(workload_payload["states"]),
+        "states": states,
+        "lane_states": [states[index % len(states)] for index in range(workload_payload["num_envs"])],
         "include_info": workload_payload["include_info"],
         "terminate_on_flag": False,
+        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
+        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
+        "done_on": workload_payload["done_on"],
         "start_game": False,
     }
 
@@ -559,6 +567,13 @@ def test_pypi_aggregates_reject_raw_workload_mismatches(tmp_path: Path) -> None:
         write_pypi_raw_bundle(cache_dir, payload)
 
         with pytest.raises(SystemExit, match="workload mismatch: config.rom_sha256"):
+            aggregate(args, cache_dir, run_dir, package, workload_payload)
+
+        payload["config"] = make_config(workload_payload)
+        payload["config"]["unexpected"] = "extra"
+        write_pypi_raw_bundle(cache_dir, payload)
+
+        with pytest.raises(SystemExit, match="workload mismatch: unexpected config key\\(s\\): unexpected"):
             aggregate(args, cache_dir, run_dir, package, workload_payload)
 
         payload["package"] = dict(package)

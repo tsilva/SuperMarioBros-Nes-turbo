@@ -341,6 +341,7 @@ def require_raw_payload_matches_workload(
     expected = {
         "rom_path": workload_payload["rom_path"],
         "rom_sha256": workload_payload["rom_sha256"],
+        "game": "SuperMarioBros-Nes-v0",
         "num_envs": workload_payload["num_envs"],
         "num_threads": workload_payload["num_threads"],
         "steps": workload_payload["steps"],
@@ -355,15 +356,26 @@ def require_raw_payload_matches_workload(
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "states": workload_payload["states"],
+        "lane_states": [
+            workload_payload["states"][index % len(workload_payload["states"])]
+            for index in range(int(workload_payload["num_envs"]))
+        ],
         "action": workload_payload["action"],
         "obs_copy": workload_payload["obs_copy"],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
+        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
+        "done_on": workload_payload["done_on"],
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"
         for key, value in expected.items()
         if config.get(key) != value
     ]
+    extra_keys = sorted(set(config) - set(expected))
+    if extra_keys:
+        names = ", ".join(str(key) for key in extra_keys)
+        raise SystemExit(f"{path} workload mismatch: unexpected config key(s): {names}")
     if mismatches:
         raise SystemExit(f"{path} workload mismatch: " + "; ".join(mismatches))
     env_steps_per_sec_samples(payload, path)
