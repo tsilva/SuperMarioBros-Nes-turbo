@@ -2029,6 +2029,17 @@ impl NesEmulator {
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
+                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            if self.ppu.tick(pending_ppu_cycles)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                        }
                         continue;
                     }
                 }
@@ -2146,6 +2157,17 @@ impl NesEmulator {
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
+                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                        {
+                            if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                        }
                         continue;
                     }
                 }
@@ -2305,49 +2327,43 @@ impl NesEmulator {
             return false;
         }
 
-        let (cycles, last_a) = self.timer_control_loop_cycles_and_last_a(self.cpu.x);
-        let ppu_cycles = cycles * 3;
         let remaining = self
             .ppu
             .cycles_until_next_event()
             .saturating_sub(*pending_ppu_cycles);
-        if ppu_cycles > remaining {
-            return false;
-        }
-
+        let mut cycles = 0usize;
         let mut x = self.cpu.x;
+        let mut last_a = self.cpu.a;
+        let mut completed = false;
         loop {
             let timer = &mut self.ram[0x0780 + x as usize];
+            let iteration_cycles = (if *timer == 0 { 7 } else { 13 }) + if x == 0 { 4 } else { 5 };
+            if (cycles + iteration_cycles) * 3 > remaining {
+                break;
+            }
+            last_a = *timer;
             if *timer != 0 {
                 *timer = timer.wrapping_sub(1);
             }
+            cycles += iteration_cycles;
             x = x.wrapping_sub(1);
             if x & 0x80 != 0 {
+                completed = true;
                 break;
             }
+        }
+        if cycles == 0 {
+            return false;
         }
         self.cpu.a = last_a;
         self.cpu.x = x;
         self.set_zn(x);
-        self.cpu.pc = SMB_TIMER_CONTROL_LOOP_PC + 11;
+        if completed {
+            self.cpu.pc = SMB_TIMER_CONTROL_LOOP_PC + 11;
+        }
         *cpu_cycle_guard += cycles;
-        *pending_ppu_cycles += ppu_cycles;
+        *pending_ppu_cycles += cycles * 3;
         true
-    }
-
-    fn timer_control_loop_cycles_and_last_a(&self, start_x: u8) -> (usize, u8) {
-        let mut cycles = 0usize;
-        let mut x = start_x;
-        let last_a = loop {
-            let value = self.ram[0x0780 + x as usize];
-            cycles += if value == 0 { 7 } else { 13 };
-            x = x.wrapping_sub(1);
-            cycles += if x & 0x80 == 0 { 5 } else { 4 };
-            if x & 0x80 != 0 {
-                break value;
-            }
-        };
-        (cycles, last_a)
     }
 
     #[inline]
@@ -4352,7 +4368,7 @@ mod tests {
     }
 
     #[test]
-    fn timer_control_loop_fast_forward_does_not_cross_ppu_event() {
+    fn timer_control_loop_fast_forward_stops_at_ppu_event() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_TIMER_CONTROL_LOOP_PC - 0x8000) as usize;
         prg[offset..offset + 11].copy_from_slice(&[
@@ -4364,18 +4380,21 @@ mod tests {
         for index in 0..=0x23usize {
             emu.ram[0x0780 + index] = 1;
         }
-        let (cycles, _) = emu.timer_control_loop_cycles_and_last_a(emu.cpu.x);
-        emu.ppu.set_dot(PPU_SPRITE0_DOT - cycles * 3 + 1);
+        let one_iteration_ppu_cycles = 18 * 3;
+        emu.ppu.set_dot(PPU_SPRITE0_DOT - one_iteration_ppu_cycles);
 
         let mut cpu_cycle_guard = 0usize;
         let mut pending_ppu_cycles = 0usize;
         assert!(
-            !emu.try_fast_forward_timer_control_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+            emu.try_fast_forward_timer_control_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
         );
         assert_eq!(emu.cpu.pc, SMB_TIMER_CONTROL_LOOP_PC);
-        assert_eq!(emu.cpu.x, 0x23);
-        assert_eq!(cpu_cycle_guard, 0);
-        assert_eq!(pending_ppu_cycles, 0);
+        assert_eq!(emu.cpu.x, 0x22);
+        assert_eq!(cpu_cycle_guard, 18);
+        assert_eq!(pending_ppu_cycles, one_iteration_ppu_cycles);
+        assert!(
+            !emu.try_fast_forward_timer_control_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+        );
     }
 
     #[test]
