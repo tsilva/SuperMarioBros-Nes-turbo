@@ -3188,8 +3188,10 @@ impl NesEmulator {
             }
             _ => 2,
         };
-        cycles = cycles.saturating_add(self.extra_cycles);
-        self.extra_cycles = 0;
+        if self.extra_cycles != 0 {
+            cycles += self.extra_cycles;
+            self.extra_cycles = 0;
+        }
         cycles
     }
 
@@ -3709,6 +3711,23 @@ mod tests {
         assert_eq!(emu.cpu.pc, SMB_OAM_CLEAR_PC);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    #[test]
+    fn oam_dma_extra_cycles_are_applied_and_cleared() {
+        let mut prg = vec![0xea; 32768];
+        prg[..3].copy_from_slice(&[0x8d, 0x14, 0x40]);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = 0x8000;
+        emu.cpu.a = 0x02;
+        emu.ppu.oam_addr = 0;
+        for idx in 0..256usize {
+            emu.ram[0x0200 + idx] = idx as u8;
+        }
+
+        assert_eq!(emu.cpu_step(), 517);
+        assert_eq!(emu.extra_cycles, 0);
+        assert_eq!(&emu.ppu.oam[..], &emu.ram[0x0200..0x0300]);
     }
 
     #[test]
