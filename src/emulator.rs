@@ -1114,14 +1114,15 @@ impl Ppu {
                 }
                 let tile_row = if flip_v { 7 - row } else { row };
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let pixels = self.chr_row_pixels(pattern_addr);
+                let lo = self.chr_read(pattern_addr);
+                let hi = self.chr_read(pattern_addr + 8);
                 for col in 0..8usize {
                     let screen_x = sprite_x + col as i16;
                     if screen_x < crop_left_i || screen_x >= crop_right {
                         continue;
                     }
-                    let source_col = if flip_h { 7 - col } else { col };
-                    let pixel = ((pixels >> (source_col * 2)) & 3) as u8;
+                    let tile_col = if flip_h { col } else { 7 - col };
+                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
                     if pixel == 0 {
                         continue;
                     }
