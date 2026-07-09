@@ -37,6 +37,9 @@ const SMB_SPRITE0_POLL_EXIT_PPU_CYCLES: usize = SMB_SPRITE0_POLL_EXIT_CPU_CYCLES
 const SMB_OAM_CLEAR_PC: u16 = 0x8223;
 const SMB_OAM_CLEAR_CPU_CYCLES: usize = 1017;
 const SMB_OAM_CLEAR_PPU_CYCLES: usize = SMB_OAM_CLEAR_CPU_CYCLES * 3;
+const SMB_CONTROLLER_READ_PC: u16 = 0x8e6a;
+const SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES: usize = 257;
+const SMB_CONTROLLER_READ_NOT_TAKEN_CPU_CYCLES: usize = 258;
 
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
@@ -1505,6 +1508,19 @@ fn prg_rom_supports_smb_oam_clear(prg_rom: &[u8], mask: usize) -> bool {
         .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
 }
 
+fn prg_rom_supports_smb_controller_read(prg_rom: &[u8], mask: usize) -> bool {
+    let offset = (SMB_CONTROLLER_READ_PC as usize).wrapping_sub(0x8000) & mask;
+    let expected = [
+        0xa0, 0x08, 0x48, 0xbd, 0x16, 0x40, 0x85, 0x00, 0x4a, 0x05, 0x00, 0x4a, 0x68, 0x2a,
+        0x88, 0xd0, 0xf1, 0x9d, 0xfc, 0x06, 0x48, 0x29, 0x30, 0x3d, 0x4a, 0x07, 0xf0, 0x07,
+        0x68, 0x29, 0xcf, 0x9d, 0xfc, 0x06, 0x60, 0x68, 0x9d, 0x4a, 0x07, 0x60,
+    ];
+    expected
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+}
+
 fn required_field<'a>(
     state: &'a [u8],
     name: &'static [u8; 4],
@@ -1579,6 +1595,7 @@ pub struct NesEmulator {
     smb_sprite0_poll_supported: bool,
     smb_sprite0_poll_exit_supported: bool,
     smb_oam_clear_supported: bool,
+    smb_controller_read_supported: bool,
     controller_state: u8,
     controller_shift: u8,
     controller_strobe: bool,
@@ -1606,6 +1623,8 @@ impl NesEmulator {
         let smb_sprite0_poll_exit_supported =
             prg_rom_supports_smb_sprite0_poll_exit(&cart.prg_rom, prg_addr_mask);
         let smb_oam_clear_supported = prg_rom_supports_smb_oam_clear(&cart.prg_rom, prg_addr_mask);
+        let smb_controller_read_supported =
+            prg_rom_supports_smb_controller_read(&cart.prg_rom, prg_addr_mask);
         let ppu = Ppu::new(cart.chr_rom, cart.vertical_mirroring);
         let mut emu = Self {
             cpu: Cpu::new(),
@@ -1617,6 +1636,7 @@ impl NesEmulator {
             smb_sprite0_poll_supported,
             smb_sprite0_poll_exit_supported,
             smb_oam_clear_supported,
+            smb_controller_read_supported,
             controller_state: 0,
             controller_shift: 0,
             controller_strobe: false,
@@ -1952,6 +1972,14 @@ impl NesEmulator {
                         continue;
                     }
                 }
+                SMB_CONTROLLER_READ_PC => {
+                    if self.try_fast_forward_controller_read(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
                 _ => {}
             }
             let cycles = self.cpu_step() as usize;
@@ -2026,6 +2054,14 @@ impl NesEmulator {
                             }
                             pending_ppu_cycles = 0;
                         }
+                        continue;
+                    }
+                }
+                SMB_CONTROLLER_READ_PC => {
+                    if self.try_fast_forward_controller_read(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
                         continue;
                     }
                 }
@@ -2147,6 +2183,87 @@ impl NesEmulator {
         self.cpu.pc = self.pop_u16().wrapping_add(1);
         *cpu_cycle_guard += SMB_OAM_CLEAR_CPU_CYCLES;
         *pending_ppu_cycles += SMB_OAM_CLEAR_PPU_CYCLES;
+        true
+    }
+
+    #[inline]
+    fn try_fast_forward_controller_read(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_CONTROLLER_READ_PC
+            || !self.smb_controller_read_supported
+            || self.cpu.x > 1
+        {
+            return false;
+        }
+
+        let x = self.cpu.x as usize;
+        let mut a = self.cpu.a;
+        let mut last_read = 0u8;
+        let mut controller_shift = self.controller_shift;
+        let mut carry = self.flag(FLAG_C);
+        for _ in 0..8 {
+            let value = if x == 0 {
+                let bit = if self.controller_strobe {
+                    self.controller_state & 1
+                } else {
+                    let bit = controller_shift & 1;
+                    controller_shift = (controller_shift >> 1) | 0x80;
+                    bit
+                };
+                0x40 | bit
+            } else {
+                0
+            };
+            last_read = value;
+            let old_a = a;
+            a = (old_a << 1) | (value & 1);
+            carry = old_a & 0x80 != 0;
+        }
+
+        let prior_buttons = self.ram_read(0x074a + x);
+        let duplicate_start_select = (a & 0x30) & prior_buttons;
+        let branch_taken = duplicate_start_select == 0;
+        let routine_cycles = if branch_taken {
+            SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES
+        } else {
+            SMB_CONTROLLER_READ_NOT_TAKEN_CPU_CYCLES
+        };
+        let extra_cycles = self.extra_cycles as usize;
+        let total_cycles = routine_cycles + extra_cycles;
+        let ppu_cycles = total_cycles * 3;
+        let ppu_cycles_until_event = self.ppu.cycles_until_next_event();
+        let remaining = ppu_cycles_until_event.saturating_sub(*pending_ppu_cycles);
+        if ppu_cycles > remaining {
+            return false;
+        }
+
+        self.controller_shift = controller_shift;
+        self.extra_cycles = 0;
+        self.ram_write(0x0000, last_read);
+        self.ram_write(0x06fc + x, a);
+        self.ram_write(0x0100 | self.cpu.sp as usize, a);
+        if carry {
+            self.cpu.p |= FLAG_C;
+        } else {
+            self.cpu.p &= !FLAG_C;
+        }
+        self.cpu.p |= FLAG_U;
+        if branch_taken {
+            self.cpu.a = a;
+            self.set_zn(a);
+            self.ram_write(0x074a + x, a);
+        } else {
+            self.cpu.a = a & 0xcf;
+            self.set_zn(self.cpu.a);
+            self.ram_write(0x06fc + x, self.cpu.a);
+        }
+        self.cpu.y = 0;
+        self.cpu.pc = self.pop_u16().wrapping_add(1);
+        *cpu_cycle_guard += total_cycles;
+        *pending_ppu_cycles += ppu_cycles;
         true
     }
 
@@ -3538,6 +3655,28 @@ mod tests {
     }
 
     #[test]
+    fn smb_controller_read_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_CONTROLLER_READ_PC - 0x8000) as usize;
+        prg[offset..offset + 40].copy_from_slice(&[
+            0xa0, 0x08, 0x48, 0xbd, 0x16, 0x40, 0x85, 0x00, 0x4a, 0x05, 0x00, 0x4a, 0x68, 0x2a,
+            0x88, 0xd0, 0xf1, 0x9d, 0xfc, 0x06, 0x48, 0x29, 0x30, 0x3d, 0x4a, 0x07, 0xf0,
+            0x07, 0x68, 0x29, 0xcf, 0x9d, 0xfc, 0x06, 0x60, 0x68, 0x9d, 0x4a, 0x07, 0x60,
+        ]);
+
+        assert!(prg_rom_supports_smb_controller_read(
+            &prg,
+            prg.len() - 1
+        ));
+
+        prg[offset + 27] = 0x06;
+        assert!(!prg_rom_supports_smb_controller_read(
+            &prg,
+            prg.len() - 1
+        ));
+    }
+
+    #[test]
     fn sprite0_poll_fast_forward_skips_failed_poll_iterations() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
@@ -3703,6 +3842,122 @@ mod tests {
         let mut pending_ppu_cycles = 0usize;
         assert!(!emu.try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles));
         assert_eq!(emu.cpu.pc, SMB_OAM_CLEAR_PC);
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    fn assert_controller_read_fast_forward_matches_interpreted(
+        x: u8,
+        controller_state: u8,
+        prior_buttons: u8,
+        expected_cycles: usize,
+    ) {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_CONTROLLER_READ_PC - 0x8000) as usize;
+        prg[offset..offset + 40].copy_from_slice(&[
+            0xa0, 0x08, 0x48, 0xbd, 0x16, 0x40, 0x85, 0x00, 0x4a, 0x05, 0x00, 0x4a, 0x68, 0x2a,
+            0x88, 0xd0, 0xf1, 0x9d, 0xfc, 0x06, 0x48, 0x29, 0x30, 0x3d, 0x4a, 0x07, 0xf0,
+            0x07, 0x68, 0x29, 0xcf, 0x9d, 0xfc, 0x06, 0x60, 0x68, 0x9d, 0x4a, 0x07, 0x60,
+        ]);
+        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
+        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        for (index, value) in fast.ram.iter_mut().enumerate() {
+            *value = ((index * 19 + 11) & 0xff) as u8;
+        }
+        fast.ram[0x074a + x as usize] = prior_buttons;
+        interpreted.ram = fast.ram;
+        for emu in [&mut fast, &mut interpreted] {
+            emu.cpu.pc = SMB_CONTROLLER_READ_PC;
+            emu.cpu.a = 0x00;
+            emu.cpu.x = x;
+            emu.cpu.y = 0x55;
+            emu.cpu.p = FLAG_U | FLAG_C | FLAG_N;
+            emu.cpu.sp = 0xfd;
+            emu.push_u16(0x9000);
+            emu.controller_state = controller_state;
+            emu.controller_shift = controller_state;
+            emu.controller_strobe = false;
+            emu.ppu.set_dot(PPU_VBLANK_DOT);
+        }
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+        assert!(fast.try_fast_forward_controller_read(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+
+        let mut interpreted_cycles = 0usize;
+        while interpreted.cpu.pc != 0x9001 {
+            interpreted_cycles += interpreted.cpu_step() as usize;
+        }
+
+        assert_eq!(interpreted_cycles, expected_cycles);
+        assert_eq!(cpu_cycle_guard, expected_cycles);
+        assert_eq!(pending_ppu_cycles, expected_cycles * 3);
+        assert_eq!(fast.cpu.a, interpreted.cpu.a);
+        assert_eq!(fast.cpu.x, interpreted.cpu.x);
+        assert_eq!(fast.cpu.y, interpreted.cpu.y);
+        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
+        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
+        assert_eq!(fast.cpu.p, interpreted.cpu.p);
+        assert_eq!(fast.ram, interpreted.ram);
+        assert_eq!(fast.controller_shift, interpreted.controller_shift);
+        assert_eq!(fast.controller_strobe, interpreted.controller_strobe);
+    }
+
+    #[test]
+    fn controller_read_fast_forward_matches_interpreted_new_buttons() {
+        assert_controller_read_fast_forward_matches_interpreted(
+            0,
+            0b0011_0101,
+            0x00,
+            SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES,
+        );
+    }
+
+    #[test]
+    fn controller_read_fast_forward_matches_interpreted_duplicate_start_select() {
+        assert_controller_read_fast_forward_matches_interpreted(
+            0,
+            0b0000_1100,
+            0x30,
+            SMB_CONTROLLER_READ_NOT_TAKEN_CPU_CYCLES,
+        );
+    }
+
+    #[test]
+    fn controller_read_fast_forward_matches_interpreted_second_controller() {
+        assert_controller_read_fast_forward_matches_interpreted(
+            1,
+            0b1111_1111,
+            0x00,
+            SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES,
+        );
+    }
+
+    #[test]
+    fn controller_read_fast_forward_does_not_cross_ppu_event() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_CONTROLLER_READ_PC - 0x8000) as usize;
+        prg[offset..offset + 40].copy_from_slice(&[
+            0xa0, 0x08, 0x48, 0xbd, 0x16, 0x40, 0x85, 0x00, 0x4a, 0x05, 0x00, 0x4a, 0x68, 0x2a,
+            0x88, 0xd0, 0xf1, 0x9d, 0xfc, 0x06, 0x48, 0x29, 0x30, 0x3d, 0x4a, 0x07, 0xf0,
+            0x07, 0x68, 0x29, 0xcf, 0x9d, 0xfc, 0x06, 0x60, 0x68, 0x9d, 0x4a, 0x07, 0x60,
+        ]);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_CONTROLLER_READ_PC;
+        emu.cpu.x = 0;
+        emu.ppu
+            .set_dot(PPU_PRERENDER_DOT - SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES * 3 + 1);
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+        assert!(!emu.try_fast_forward_controller_read(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+        assert_eq!(emu.cpu.pc, SMB_CONTROLLER_READ_PC);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
     }
