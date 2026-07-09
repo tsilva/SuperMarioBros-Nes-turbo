@@ -26,7 +26,6 @@ const FULL_AREA_Y1: [usize; DEFAULT_AREA_DST_HEIGHT] =
     build_default_area_axis_end(FULL_AREA_SRC_HEIGHT);
 const FULL_AREA_Y_COUNT: [u16; DEFAULT_AREA_DST_HEIGHT] =
     build_default_area_axis_count(FULL_AREA_SRC_HEIGHT);
-const DEFAULT_MASK_TOP_ZERO_DST_ROWS: usize = build_default_mask_top_zero_dst_rows();
 
 #[derive(Clone, Copy, Debug)]
 pub struct VecEnvConfig {
@@ -1843,15 +1842,7 @@ fn resize_full_gray_area_mask_top_32(src: &[u8], dst: &mut [u8], fill: u8) {
     debug_assert!(src.len() >= DEFAULT_AREA_SRC_WIDTH * FULL_AREA_SRC_HEIGHT);
     debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH * DEFAULT_AREA_DST_HEIGHT);
 
-    let start_dy = if fill == 0 {
-        let zero_len = DEFAULT_MASK_TOP_ZERO_DST_ROWS * DEFAULT_AREA_DST_WIDTH;
-        dst[..zero_len].fill(0);
-        DEFAULT_MASK_TOP_ZERO_DST_ROWS
-    } else {
-        0
-    };
-
-    for dy in start_dy..DEFAULT_AREA_DST_HEIGHT {
+    for dy in 0..DEFAULT_AREA_DST_HEIGHT {
         let y0 = FULL_AREA_Y0[dy];
         let y1 = FULL_AREA_Y1[dy];
         let mut sums = [0u16; DEFAULT_AREA_DST_WIDTH];
@@ -2253,25 +2244,6 @@ const fn build_default_area_axis_count(src_len: usize) -> [u16; DEFAULT_AREA_DST
     out
 }
 
-const fn build_default_mask_top_zero_dst_rows() -> usize {
-    let mut rows = 0usize;
-    while rows < DEFAULT_AREA_DST_HEIGHT {
-        let mut end = ((rows + 1) * FULL_AREA_SRC_HEIGHT) / DEFAULT_AREA_DST_HEIGHT;
-        let start = (rows * FULL_AREA_SRC_HEIGHT) / DEFAULT_AREA_DST_HEIGHT;
-        if end < start + 1 {
-            end = start + 1;
-        }
-        if end > FULL_AREA_SRC_HEIGHT {
-            end = FULL_AREA_SRC_HEIGHT;
-        }
-        if end > DEFAULT_MASK_CROP_TOP {
-            break;
-        }
-        rows += 1;
-    }
-    rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2437,54 +2409,6 @@ mod tests {
         let mut actual = vec![0; frame_len(config)];
 
         assert!(config.uses_default_gray_mask_top_area_resize());
-        write_native_frame(config, &env, &mut native);
-        resize_frame(config, &resize_plan, &native, &mut expected);
-        write_default_gray_mask_top_area_frame(
-            config,
-            &resize_plan,
-            &env,
-            &mut scratch,
-            &mut actual,
-        );
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn default_gray_mask_top_zero_fill_frame_matches_legacy_path() {
-        let config = VecEnvConfig {
-            num_envs: 16,
-            frame_skip: 4,
-            grayscale: true,
-            frame_stack: 4,
-            frame_maxpool: false,
-            noop_reset_max: 0,
-            sticky_action_prob: 0.0,
-            terminate_on_flag: true,
-            crop_top: 32,
-            crop_bottom: 0,
-            crop_left: 0,
-            crop_right: 0,
-            crop_mode: CropMode::Mask,
-            crop_fill: 0,
-            resize_width: 84,
-            resize_height: 84,
-            resize_algorithm: ResizeAlgorithm::Area,
-        };
-        let resize_plan = AreaResizePlan::new(
-            config.source_width(),
-            config.source_height(),
-            config.resize_width,
-            config.resize_height,
-        );
-        let env = make_render_test_env();
-        let mut native = vec![0; native_frame_len(config)];
-        let mut scratch = vec![0; native_frame_len(config)];
-        let mut expected = vec![0; frame_len(config)];
-        let mut actual = vec![0; frame_len(config)];
-
-        assert!(config.uses_default_gray_mask_top_area_resize());
-        assert_eq!(DEFAULT_MASK_TOP_ZERO_DST_ROWS, 12);
         write_native_frame(config, &env, &mut native);
         resize_frame(config, &resize_plan, &native, &mut expected);
         write_default_gray_mask_top_area_frame(
