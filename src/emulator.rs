@@ -156,6 +156,7 @@ struct Ppu {
     scroll_x_low: u8,
     scroll_override_x_px: Option<u16>,
     frame_dot: usize,
+    next_event_dot: usize,
     frame: u64,
     nmi_pending: bool,
 }
@@ -186,6 +187,7 @@ impl Ppu {
             scroll_x_low: 0,
             scroll_override_x_px: None,
             frame_dot: 0,
+            next_event_dot: next_ppu_event_dot(0),
             frame: 0,
             nmi_pending: false,
         }
@@ -211,6 +213,7 @@ impl Ppu {
         self.scroll_x_low = 0;
         self.scroll_override_x_px = None;
         self.frame_dot = 0;
+        self.next_event_dot = next_ppu_event_dot(0);
         self.frame = 0;
         self.nmi_pending = false;
     }
@@ -247,6 +250,7 @@ impl Ppu {
         self.first_write = true;
         self.fine_x = xoff.and_then(|value| value.first().copied()).unwrap_or(0);
         self.frame_dot = 0;
+        self.next_event_dot = next_ppu_event_dot(0);
         self.nmi_pending = false;
         self.update_scroll_x_px();
     }
@@ -257,25 +261,31 @@ impl Ppu {
         let mut remaining = ppu_cycles;
         while remaining > 0 {
             let current = self.frame_dot;
-            let next = next_ppu_event_dot(current);
+            let next = self.next_event_dot;
             let advance = remaining.min(next - current);
             let dot = current + advance;
             self.frame_dot = dot;
             remaining -= advance;
 
             match dot {
-                PPU_SPRITE0_DOT => self.status |= 0x40,
+                PPU_SPRITE0_DOT => {
+                    self.status |= 0x40;
+                    self.next_event_dot = PPU_DOTS_PER_FRAME;
+                }
                 PPU_VBLANK_DOT => {
                     self.status |= 0x80;
+                    self.next_event_dot = PPU_PRERENDER_DOT;
                     if self.ctrl & 0x80 != 0 {
                         self.nmi_pending = true;
                     }
                 }
                 PPU_PRERENDER_DOT => {
                     self.status &= !0xc0;
+                    self.next_event_dot = PPU_SPRITE0_DOT;
                 }
                 PPU_DOTS_PER_FRAME => {
                     self.frame_dot = 0;
+                    self.next_event_dot = PPU_VBLANK_DOT;
                     self.frame = self.frame.wrapping_add(1);
                     completed_frame = true;
                 }
@@ -294,8 +304,7 @@ impl Ppu {
 
     #[inline]
     fn cycles_until_next_event(&self) -> usize {
-        let dot = self.frame_dot;
-        next_ppu_event_dot(dot) - dot
+        self.next_event_dot - self.frame_dot
     }
 
     #[inline]
@@ -307,6 +316,7 @@ impl Ppu {
     #[inline]
     fn set_dot(&mut self, dot: usize) {
         self.frame_dot = dot;
+        self.next_event_dot = next_ppu_event_dot(dot);
     }
 
     #[inline]
@@ -4821,6 +4831,42 @@ mod tests {
         assert_eq!(emu.cpu.pc, SMB_BOUNDING_BOX_HELPER_PC);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    #[test]
+    fn cached_next_ppu_event_tracks_frame_transitions() {
+        let mut ppu = Ppu::new(vec![0; 8192], true);
+        ppu.ctrl = 0x80;
+
+        assert_eq!(ppu.cycles_until_next_event(), PPU_VBLANK_DOT);
+        assert!(!ppu.tick(PPU_VBLANK_DOT));
+        assert_eq!(ppu.frame_dot, PPU_VBLANK_DOT);
+        assert_eq!(
+            ppu.cycles_until_next_event(),
+            PPU_PRERENDER_DOT - PPU_VBLANK_DOT
+        );
+        assert_ne!(ppu.status & 0x80, 0);
+        assert!(ppu.take_nmi());
+
+        assert!(!ppu.tick(PPU_PRERENDER_DOT - PPU_VBLANK_DOT));
+        assert_eq!(ppu.frame_dot, PPU_PRERENDER_DOT);
+        assert_eq!(
+            ppu.cycles_until_next_event(),
+            PPU_SPRITE0_DOT - PPU_PRERENDER_DOT
+        );
+        assert_eq!(ppu.status & 0xc0, 0);
+
+        assert!(!ppu.tick(PPU_SPRITE0_DOT - PPU_PRERENDER_DOT));
+        assert_eq!(ppu.frame_dot, PPU_SPRITE0_DOT);
+        assert_eq!(
+            ppu.cycles_until_next_event(),
+            PPU_DOTS_PER_FRAME - PPU_SPRITE0_DOT
+        );
+        assert_ne!(ppu.status & 0x40, 0);
+
+        assert!(ppu.tick(PPU_DOTS_PER_FRAME - PPU_SPRITE0_DOT));
+        assert_eq!(ppu.frame_dot, 0);
+        assert_eq!(ppu.cycles_until_next_event(), PPU_VBLANK_DOT);
     }
 
     #[test]
