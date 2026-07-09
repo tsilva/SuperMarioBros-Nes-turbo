@@ -41,6 +41,10 @@ const SMB_SCROLL_SLOT_LOOP_PC: u16 = 0x81cf;
 const SMB_CONTROLLER_READ_PC: u16 = 0x8e6a;
 const SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES: usize = 257;
 const SMB_CONTROLLER_READ_NOT_TAKEN_CPU_CYCLES: usize = 258;
+const SMB_BOUNDING_BOX_NIBBLE_PC: u16 = 0x9be1;
+const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
+const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
+const SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES: usize = 160;
 
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
@@ -1534,6 +1538,34 @@ fn prg_rom_supports_smb_controller_read(prg_rom: &[u8], mask: usize) -> bool {
         .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
 }
 
+fn prg_rom_supports_smb_bounding_box_nibble(prg_rom: &[u8], mask: usize) -> bool {
+    let offset = (SMB_BOUNDING_BOX_NIBBLE_PC as usize).wrapping_sub(0x8000) & mask;
+    let expected = [
+        0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29, 0x0f,
+        0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+    ];
+    expected
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+}
+
+fn prg_rom_supports_smb_bounding_box_helper(prg_rom: &[u8], mask: usize) -> bool {
+    let offset = (SMB_BOUNDING_BOX_HELPER_PC as usize).wrapping_sub(0x8000) & mask;
+    let expected = [
+        0x48, 0x84, 0x04, 0xb9, 0xb0, 0xe3, 0x18, 0x75, 0x86, 0x85, 0x05, 0xb5, 0x6d, 0x69,
+        0x00, 0x29, 0x01, 0x4a, 0x05, 0x05, 0x6a, 0x4a, 0x4a, 0x4a, 0x20, 0xe1, 0x9b, 0xa4,
+        0x04, 0xb5, 0xce, 0x18, 0x79, 0xcc, 0xe3, 0x29, 0xf0, 0x38, 0xe9, 0x20, 0x85, 0x02,
+        0xa8, 0xb1, 0x06, 0x85, 0x03, 0xa4, 0x04, 0x68, 0xd0, 0x05, 0xb5, 0xce, 0x4c, 0x2b,
+        0xe4, 0xb5, 0x86, 0x29, 0x0f, 0x85, 0x04, 0xa5, 0x03, 0x60,
+    ];
+    expected
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+        && prg_rom_supports_smb_bounding_box_nibble(prg_rom, mask)
+}
+
 fn required_field<'a>(
     state: &'a [u8],
     name: &'static [u8; 4],
@@ -1610,6 +1642,8 @@ pub struct NesEmulator {
     smb_oam_clear_supported: bool,
     smb_scroll_slot_loop_supported: bool,
     smb_controller_read_supported: bool,
+    smb_bounding_box_nibble_supported: bool,
+    smb_bounding_box_helper_supported: bool,
     controller_state: u8,
     controller_shift: u8,
     controller_strobe: bool,
@@ -1641,6 +1675,10 @@ impl NesEmulator {
             prg_rom_supports_smb_scroll_slot_loop(&cart.prg_rom, prg_addr_mask);
         let smb_controller_read_supported =
             prg_rom_supports_smb_controller_read(&cart.prg_rom, prg_addr_mask);
+        let smb_bounding_box_nibble_supported =
+            prg_rom_supports_smb_bounding_box_nibble(&cart.prg_rom, prg_addr_mask);
+        let smb_bounding_box_helper_supported =
+            prg_rom_supports_smb_bounding_box_helper(&cart.prg_rom, prg_addr_mask);
         let ppu = Ppu::new(cart.chr_rom, cart.vertical_mirroring);
         let mut emu = Self {
             cpu: Cpu::new(),
@@ -1654,6 +1692,8 @@ impl NesEmulator {
             smb_oam_clear_supported,
             smb_scroll_slot_loop_supported,
             smb_controller_read_supported,
+            smb_bounding_box_nibble_supported,
+            smb_bounding_box_helper_supported,
             controller_state: 0,
             controller_shift: 0,
             controller_strobe: false,
@@ -2005,6 +2045,22 @@ impl NesEmulator {
                         continue;
                     }
                 }
+                SMB_BOUNDING_BOX_HELPER_PC => {
+                    if self.try_fast_forward_bounding_box_helper(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
+                SMB_BOUNDING_BOX_NIBBLE_PC => {
+                    if self.try_fast_forward_bounding_box_nibble(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
                 _ => {}
             }
             let cycles = self.cpu_step() as usize;
@@ -2092,6 +2148,22 @@ impl NesEmulator {
                 }
                 SMB_CONTROLLER_READ_PC => {
                     if self.try_fast_forward_controller_read(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
+                SMB_BOUNDING_BOX_HELPER_PC => {
+                    if self.try_fast_forward_bounding_box_helper(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
+                SMB_BOUNDING_BOX_NIBBLE_PC => {
+                    if self.try_fast_forward_bounding_box_nibble(
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
@@ -2373,6 +2445,208 @@ impl NesEmulator {
         self.cpu.pc = self.pop_u16().wrapping_add(1);
         *cpu_cycle_guard += total_cycles;
         *pending_ppu_cycles += ppu_cycles;
+        true
+    }
+
+    #[inline]
+    fn try_fast_forward_bounding_box_nibble(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_BOUNDING_BOX_NIBBLE_PC || !self.smb_bounding_box_nibble_supported {
+            return false;
+        }
+
+        let extra_cycles = self.extra_cycles as usize;
+        let total_cycles = SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES + extra_cycles;
+        let ppu_cycles = total_cycles * 3;
+        let remaining = self
+            .ppu
+            .cycles_until_next_event()
+            .saturating_sub(*pending_ppu_cycles);
+        if ppu_cycles > remaining {
+            return false;
+        }
+
+        self.push(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.y = self.cpu.a;
+        self.set_zn(self.cpu.y);
+        let high_addr = 0x9bdfu16.wrapping_add(self.cpu.y as u16);
+        self.cpu.a = self.cpu_read(high_addr);
+        self.set_zn(self.cpu.a);
+        self.ram_write(0x0007, self.cpu.a);
+        self.cpu.a = self.pop();
+        self.set_zn(self.cpu.a);
+        self.cpu.a &= 0x0f;
+        self.set_zn(self.cpu.a);
+        self.set_flag(FLAG_C, false);
+        let low_addr = 0x9bddu16.wrapping_add(self.cpu.y as u16);
+        let addend = self.cpu_read(low_addr);
+        self.adc(addend);
+        self.ram_write(0x0006, self.cpu.a);
+        self.cpu.pc = self.pop_u16().wrapping_add(1);
+        self.extra_cycles = 0;
+        *cpu_cycle_guard += total_cycles;
+        *pending_ppu_cycles += ppu_cycles;
+        true
+    }
+
+    #[inline]
+    fn try_fast_forward_bounding_box_helper(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_BOUNDING_BOX_HELPER_PC || !self.smb_bounding_box_helper_supported {
+            return false;
+        }
+
+        let extra_cycles = self.extra_cycles as usize;
+        let max_ppu_cycles = (SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES + extra_cycles) * 3;
+        let remaining = self
+            .ppu
+            .cycles_until_next_event()
+            .saturating_sub(*pending_ppu_cycles);
+        if max_ppu_cycles > remaining {
+            return false;
+        }
+
+        let mut cycles = extra_cycles;
+        let x = self.cpu.x;
+        self.push(self.cpu.a);
+        cycles += 3;
+        self.ram_write(0x0004, self.cpu.y);
+        cycles += 3;
+
+        let table1_base = 0xe3b0u16;
+        let table1_addr = table1_base.wrapping_add(self.cpu.y as u16);
+        self.cpu.a = self.cpu_read(table1_addr);
+        self.set_zn(self.cpu.a);
+        cycles += 4 + page_crossed(table1_base, table1_addr) as usize;
+        self.set_flag(FLAG_C, false);
+        cycles += 2;
+        let x86 = 0x86u8.wrapping_add(x) as usize;
+        let addend = self.ram_read(x86);
+        self.adc(addend);
+        cycles += 4;
+        self.ram_write(0x0005, self.cpu.a);
+        cycles += 3;
+        let x6d = 0x6du8.wrapping_add(x) as usize;
+        self.cpu.a = self.ram_read(x6d);
+        self.set_zn(self.cpu.a);
+        cycles += 4;
+        self.adc(0);
+        cycles += 2;
+        self.cpu.a &= 0x01;
+        self.set_zn(self.cpu.a);
+        cycles += 2;
+        self.cpu.a = self.lsr(self.cpu.a);
+        cycles += 2;
+        self.ora(self.ram_read(0x0005));
+        cycles += 3;
+        self.cpu.a = self.ror(self.cpu.a);
+        cycles += 2;
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        cycles += 6;
+
+        self.push_u16(0xe40a);
+        cycles += 6;
+        self.push(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.y = self.cpu.a;
+        self.set_zn(self.cpu.y);
+        let high_addr = 0x9bdfu16.wrapping_add(self.cpu.y as u16);
+        self.cpu.a = self.cpu_read(high_addr);
+        self.set_zn(self.cpu.a);
+        self.ram_write(0x0007, self.cpu.a);
+        self.cpu.a = self.pop();
+        self.set_zn(self.cpu.a);
+        self.cpu.a &= 0x0f;
+        self.set_zn(self.cpu.a);
+        self.set_flag(FLAG_C, false);
+        let low_addr = 0x9bddu16.wrapping_add(self.cpu.y as u16);
+        let addend = self.cpu_read(low_addr);
+        self.adc(addend);
+        self.ram_write(0x0006, self.cpu.a);
+        self.cpu.pc = self.pop_u16().wrapping_add(1);
+        debug_assert_eq!(self.cpu.pc, 0xe40b);
+        cycles += SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES;
+
+        self.cpu.y = self.ram_read(0x0004);
+        self.set_zn(self.cpu.y);
+        cycles += 3;
+        let xce = 0xceu8.wrapping_add(x) as usize;
+        self.cpu.a = self.ram_read(xce);
+        self.set_zn(self.cpu.a);
+        cycles += 4;
+        self.set_flag(FLAG_C, false);
+        cycles += 2;
+        let table2_base = 0xe3ccu16;
+        let table2_addr = table2_base.wrapping_add(self.cpu.y as u16);
+        let addend = self.cpu_read(table2_addr);
+        self.adc(addend);
+        cycles += 4 + page_crossed(table2_base, table2_addr) as usize;
+        self.cpu.a &= 0xf0;
+        self.set_zn(self.cpu.a);
+        cycles += 2;
+        self.set_flag(FLAG_C, true);
+        cycles += 2;
+        self.sbc(0x20);
+        cycles += 2;
+        self.ram_write(0x0002, self.cpu.a);
+        cycles += 3;
+        self.cpu.y = self.cpu.a;
+        self.set_zn(self.cpu.y);
+        cycles += 2;
+        let ptr = self.ram_read(0x0006) as u16 | ((self.ram_read(0x0007) as u16) << 8);
+        let indirect_addr = ptr.wrapping_add(self.cpu.y as u16);
+        self.cpu.a = self.cpu_read(indirect_addr);
+        self.set_zn(self.cpu.a);
+        cycles += 5 + page_crossed(ptr, indirect_addr) as usize;
+        self.ram_write(0x0003, self.cpu.a);
+        cycles += 3;
+        self.cpu.y = self.ram_read(0x0004);
+        self.set_zn(self.cpu.y);
+        cycles += 3;
+        self.cpu.a = self.pop();
+        self.set_zn(self.cpu.a);
+        cycles += 4;
+        if self.cpu.a != 0 {
+            cycles += 3;
+            self.cpu.a = self.ram_read(x86);
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+        } else {
+            cycles += 2;
+            self.cpu.a = self.ram_read(xce);
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            self.cpu.pc = 0xe42b;
+            cycles += 3;
+        }
+        self.cpu.a &= 0x0f;
+        self.set_zn(self.cpu.a);
+        cycles += 2;
+        self.ram_write(0x0004, self.cpu.a);
+        cycles += 3;
+        self.cpu.a = self.ram_read(0x0003);
+        self.set_zn(self.cpu.a);
+        cycles += 3;
+        self.cpu.pc = self.pop_u16().wrapping_add(1);
+        cycles += 6;
+        self.extra_cycles = 0;
+        *cpu_cycle_guard += cycles;
+        *pending_ppu_cycles += cycles * 3;
         true
     }
 
@@ -3807,6 +4081,57 @@ mod tests {
     }
 
     #[test]
+    fn smb_bounding_box_nibble_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_BOUNDING_BOX_NIBBLE_PC - 0x8000) as usize;
+        prg[offset..offset + 21].copy_from_slice(&[
+            0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29,
+            0x0f, 0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+        ]);
+
+        assert!(prg_rom_supports_smb_bounding_box_nibble(
+            &prg,
+            prg.len() - 1
+        ));
+
+        prg[offset + 15] = 0x7d;
+        assert!(!prg_rom_supports_smb_bounding_box_nibble(
+            &prg,
+            prg.len() - 1
+        ));
+    }
+
+    #[test]
+    fn smb_bounding_box_helper_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        let helper_offset = (SMB_BOUNDING_BOX_HELPER_PC - 0x8000) as usize;
+        prg[helper_offset..helper_offset + 66].copy_from_slice(&[
+            0x48, 0x84, 0x04, 0xb9, 0xb0, 0xe3, 0x18, 0x75, 0x86, 0x85, 0x05, 0xb5, 0x6d,
+            0x69, 0x00, 0x29, 0x01, 0x4a, 0x05, 0x05, 0x6a, 0x4a, 0x4a, 0x4a, 0x20, 0xe1,
+            0x9b, 0xa4, 0x04, 0xb5, 0xce, 0x18, 0x79, 0xcc, 0xe3, 0x29, 0xf0, 0x38, 0xe9,
+            0x20, 0x85, 0x02, 0xa8, 0xb1, 0x06, 0x85, 0x03, 0xa4, 0x04, 0x68, 0xd0, 0x05,
+            0xb5, 0xce, 0x4c, 0x2b, 0xe4, 0xb5, 0x86, 0x29, 0x0f, 0x85, 0x04, 0xa5, 0x03,
+            0x60,
+        ]);
+        let nibble_offset = (SMB_BOUNDING_BOX_NIBBLE_PC - 0x8000) as usize;
+        prg[nibble_offset..nibble_offset + 21].copy_from_slice(&[
+            0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29,
+            0x0f, 0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+        ]);
+
+        assert!(prg_rom_supports_smb_bounding_box_helper(
+            &prg,
+            prg.len() - 1
+        ));
+
+        prg[helper_offset + 50] = 0xf0;
+        assert!(!prg_rom_supports_smb_bounding_box_helper(
+            &prg,
+            prg.len() - 1
+        ));
+    }
+
+    #[test]
     fn sprite0_poll_fast_forward_skips_failed_poll_iterations() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
@@ -4162,6 +4487,197 @@ mod tests {
             &mut pending_ppu_cycles
         ));
         assert_eq!(emu.cpu.pc, SMB_SCROLL_SLOT_LOOP_PC);
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    fn assert_bounding_box_nibble_fast_forward_matches_interpreted(a: u8, p: u8) {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_BOUNDING_BOX_NIBBLE_PC - 0x8000) as usize;
+        prg[offset..offset + 21].copy_from_slice(&[
+            0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29,
+            0x0f, 0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+        ]);
+        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
+        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        for (index, value) in fast.ram.iter_mut().enumerate() {
+            *value = ((index * 23 + 7) & 0xff) as u8;
+        }
+        interpreted.ram = fast.ram;
+        for emu in [&mut fast, &mut interpreted] {
+            emu.cpu.pc = SMB_BOUNDING_BOX_NIBBLE_PC;
+            emu.cpu.a = a;
+            emu.cpu.x = 0xa5;
+            emu.cpu.y = 0x39;
+            emu.cpu.p = p | FLAG_U;
+            emu.cpu.sp = 0xf7;
+            emu.push_u16(0x9122);
+            emu.extra_cycles = 5;
+            emu.ppu.set_dot(PPU_VBLANK_DOT);
+        }
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+        assert!(fast.try_fast_forward_bounding_box_nibble(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+
+        let mut interpreted_cycles = 0usize;
+        while interpreted.cpu.pc != 0x9123 {
+            interpreted_cycles += interpreted.cpu_step() as usize;
+        }
+
+        assert_eq!(
+            interpreted_cycles,
+            SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES + 5
+        );
+        assert_eq!(cpu_cycle_guard, interpreted_cycles);
+        assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
+        assert_eq!(fast.cpu.a, interpreted.cpu.a);
+        assert_eq!(fast.cpu.x, interpreted.cpu.x);
+        assert_eq!(fast.cpu.y, interpreted.cpu.y);
+        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
+        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
+        assert_eq!(fast.cpu.p, interpreted.cpu.p);
+        assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
+        assert_eq!(fast.ram, interpreted.ram);
+    }
+
+    #[test]
+    fn bounding_box_nibble_fast_forward_matches_interpreted_low_nibble() {
+        assert_bounding_box_nibble_fast_forward_matches_interpreted(
+            0x0f,
+            FLAG_C | FLAG_V | FLAG_N,
+        );
+    }
+
+    #[test]
+    fn bounding_box_nibble_fast_forward_matches_interpreted_high_nibble() {
+        assert_bounding_box_nibble_fast_forward_matches_interpreted(
+            0xf3,
+            FLAG_D | FLAG_I | FLAG_Z,
+        );
+    }
+
+    #[test]
+    fn bounding_box_nibble_fast_forward_does_not_cross_ppu_event() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_BOUNDING_BOX_NIBBLE_PC - 0x8000) as usize;
+        prg[offset..offset + 21].copy_from_slice(&[
+            0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29,
+            0x0f, 0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+        ]);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_BOUNDING_BOX_NIBBLE_PC;
+        emu.ppu
+            .set_dot(PPU_PRERENDER_DOT - SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES * 3 + 1);
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(!emu.try_fast_forward_bounding_box_nibble(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+        assert_eq!(emu.cpu.pc, SMB_BOUNDING_BOX_NIBBLE_PC);
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    fn add_bounding_box_routines(prg: &mut [u8]) {
+        let helper_offset = (SMB_BOUNDING_BOX_HELPER_PC - 0x8000) as usize;
+        prg[helper_offset..helper_offset + 66].copy_from_slice(&[
+            0x48, 0x84, 0x04, 0xb9, 0xb0, 0xe3, 0x18, 0x75, 0x86, 0x85, 0x05, 0xb5, 0x6d,
+            0x69, 0x00, 0x29, 0x01, 0x4a, 0x05, 0x05, 0x6a, 0x4a, 0x4a, 0x4a, 0x20, 0xe1,
+            0x9b, 0xa4, 0x04, 0xb5, 0xce, 0x18, 0x79, 0xcc, 0xe3, 0x29, 0xf0, 0x38, 0xe9,
+            0x20, 0x85, 0x02, 0xa8, 0xb1, 0x06, 0x85, 0x03, 0xa4, 0x04, 0x68, 0xd0, 0x05,
+            0xb5, 0xce, 0x4c, 0x2b, 0xe4, 0xb5, 0x86, 0x29, 0x0f, 0x85, 0x04, 0xa5, 0x03,
+            0x60,
+        ]);
+        let table_offset = (0x9bddu16 - 0x8000) as usize;
+        prg[table_offset..table_offset + 4].copy_from_slice(&[0x00, 0xd0, 0x05, 0x05]);
+        let nibble_offset = (SMB_BOUNDING_BOX_NIBBLE_PC - 0x8000) as usize;
+        prg[nibble_offset..nibble_offset + 21].copy_from_slice(&[
+            0x48, 0x4a, 0x4a, 0x4a, 0x4a, 0xa8, 0xb9, 0xdf, 0x9b, 0x85, 0x07, 0x68, 0x29,
+            0x0f, 0x18, 0x79, 0xdd, 0x9b, 0x85, 0x06, 0x60,
+        ]);
+    }
+
+    fn assert_bounding_box_helper_fast_forward_matches_interpreted(a: u8, x: u8, y: u8) {
+        let mut prg = vec![0xea; 32768];
+        add_bounding_box_routines(&mut prg);
+        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
+        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        for (index, value) in fast.ram.iter_mut().enumerate() {
+            *value = ((index * 29 + index / 5 + 13) & 0xff) as u8;
+        }
+        fast.ram[0x0006] = 0x40;
+        fast.ram[0x0007] = 0x05;
+        interpreted.ram = fast.ram;
+        for emu in [&mut fast, &mut interpreted] {
+            emu.cpu.pc = SMB_BOUNDING_BOX_HELPER_PC;
+            emu.cpu.a = a;
+            emu.cpu.x = x;
+            emu.cpu.y = y;
+            emu.cpu.p = FLAG_U | FLAG_C | FLAG_V | FLAG_N;
+            emu.cpu.sp = 0xf3;
+            emu.push_u16(0x9122);
+            emu.extra_cycles = 7;
+            emu.ppu.set_dot(PPU_VBLANK_DOT);
+        }
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+        assert!(fast.try_fast_forward_bounding_box_helper(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+
+        let mut interpreted_cycles = 0usize;
+        while interpreted.cpu.pc != 0x9123 {
+            interpreted_cycles += interpreted.cpu_step() as usize;
+            assert!(interpreted_cycles < 300);
+        }
+
+        assert!(interpreted_cycles <= SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES + 7);
+        assert_eq!(cpu_cycle_guard, interpreted_cycles);
+        assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
+        assert_eq!(fast.cpu.a, interpreted.cpu.a);
+        assert_eq!(fast.cpu.x, interpreted.cpu.x);
+        assert_eq!(fast.cpu.y, interpreted.cpu.y);
+        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
+        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
+        assert_eq!(fast.cpu.p, interpreted.cpu.p);
+        assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
+        assert_eq!(fast.ram, interpreted.ram);
+    }
+
+    #[test]
+    fn bounding_box_helper_fast_forward_matches_interpreted_zero_a() {
+        assert_bounding_box_helper_fast_forward_matches_interpreted(0x00, 0x03, 0x12);
+    }
+
+    #[test]
+    fn bounding_box_helper_fast_forward_matches_interpreted_nonzero_a() {
+        assert_bounding_box_helper_fast_forward_matches_interpreted(0x83, 0x07, 0x51);
+    }
+
+    #[test]
+    fn bounding_box_helper_fast_forward_does_not_cross_ppu_event() {
+        let mut prg = vec![0xea; 32768];
+        add_bounding_box_routines(&mut prg);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_BOUNDING_BOX_HELPER_PC;
+        emu.ppu
+            .set_dot(PPU_PRERENDER_DOT - SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES * 3 + 1);
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(!emu.try_fast_forward_bounding_box_helper(
+            &mut cpu_cycle_guard,
+            &mut pending_ppu_cycles
+        ));
+        assert_eq!(emu.cpu.pc, SMB_BOUNDING_BOX_HELPER_PC);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
     }
