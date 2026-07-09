@@ -15,7 +15,6 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-supermariobrosnes-turbo = "2026-07-08T23:59:59Z"
 stable-retro-turbo = "2026-07-07T16:00:00Z"
 
 [manifest]
