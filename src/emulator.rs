@@ -2001,6 +2001,7 @@ impl NesEmulator {
         self.controller_state = buttons;
         let mut cpu_cycle_guard = 0usize;
         let mut pending_ppu_cycles = 0usize;
+        let mut ppu_cycles_until_event = self.ppu.cycles_until_next_event();
         loop {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
@@ -2016,6 +2017,7 @@ impl NesEmulator {
                             break;
                         }
                         pending_ppu_cycles = 0;
+                        ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         continue;
                     }
                 }
@@ -2031,6 +2033,7 @@ impl NesEmulator {
                             break;
                         }
                         pending_ppu_cycles = 0;
+                        ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         continue;
                     }
                 }
@@ -2046,7 +2049,7 @@ impl NesEmulator {
                     if self
                         .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
                     {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                        if pending_ppu_cycles >= ppu_cycles_until_event
                             || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
                         {
                             if self.ppu.tick(pending_ppu_cycles)
@@ -2056,6 +2059,7 @@ impl NesEmulator {
                                 break;
                             }
                             pending_ppu_cycles = 0;
+                            ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         }
                         continue;
                     }
@@ -2097,7 +2101,7 @@ impl NesEmulator {
             let cycles = self.cpu_step() as usize;
             cpu_cycle_guard += cycles;
             pending_ppu_cycles += cycles * 3;
-            let must_flush_ppu = pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+            let must_flush_ppu = pending_ppu_cycles >= ppu_cycles_until_event
                 || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD;
             if must_flush_ppu {
                 if self.ppu.tick(pending_ppu_cycles)
@@ -2107,6 +2111,7 @@ impl NesEmulator {
                     break;
                 }
                 pending_ppu_cycles = 0;
+                ppu_cycles_until_event = self.ppu.cycles_until_next_event();
             }
         }
         if pending_ppu_cycles > 0 {
@@ -2118,6 +2123,7 @@ impl NesEmulator {
         self.controller_state = buttons;
         let mut cpu_cycle_guard = 0usize;
         let mut pending_ppu_cycles = 0usize;
+        let mut ppu_cycles_until_event = self.ppu.cycles_until_next_event();
         loop {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
@@ -2133,6 +2139,7 @@ impl NesEmulator {
                             break;
                         }
                         pending_ppu_cycles = 0;
+                        ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         continue;
                     }
                 }
@@ -2148,6 +2155,7 @@ impl NesEmulator {
                             break;
                         }
                         pending_ppu_cycles = 0;
+                        ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         continue;
                     }
                 }
@@ -2163,7 +2171,7 @@ impl NesEmulator {
                     if self
                         .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
                     {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                        if pending_ppu_cycles >= ppu_cycles_until_event
                             || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
                         {
                             if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
@@ -2173,6 +2181,7 @@ impl NesEmulator {
                                 break;
                             }
                             pending_ppu_cycles = 0;
+                            ppu_cycles_until_event = self.ppu.cycles_until_next_event();
                         }
                         continue;
                     }
@@ -2214,7 +2223,7 @@ impl NesEmulator {
             let cycles = self.cpu_step_profiled(profiler) as usize;
             cpu_cycle_guard += cycles;
             pending_ppu_cycles += cycles * 3;
-            let must_flush_ppu = pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+            let must_flush_ppu = pending_ppu_cycles >= ppu_cycles_until_event
                 || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD;
             if must_flush_ppu {
                 if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
@@ -2224,6 +2233,7 @@ impl NesEmulator {
                     break;
                 }
                 pending_ppu_cycles = 0;
+                ppu_cycles_until_event = self.ppu.cycles_until_next_event();
             }
         }
         if pending_ppu_cycles > 0 {
