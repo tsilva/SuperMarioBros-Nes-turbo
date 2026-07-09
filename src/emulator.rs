@@ -2477,7 +2477,7 @@ impl NesEmulator {
         self.cpu.y = self.cpu.a;
         self.set_zn(self.cpu.y);
         let high_addr = 0x9bdfu16.wrapping_add(self.cpu.y as u16);
-        self.cpu.a = self.cpu_read(high_addr);
+        self.cpu.a = self.prg_read(high_addr);
         self.set_zn(self.cpu.a);
         self.ram_write(0x0007, self.cpu.a);
         self.cpu.a = self.pop();
@@ -2486,7 +2486,7 @@ impl NesEmulator {
         self.set_zn(self.cpu.a);
         self.set_flag(FLAG_C, false);
         let low_addr = 0x9bddu16.wrapping_add(self.cpu.y as u16);
-        let addend = self.cpu_read(low_addr);
+        let addend = self.prg_read(low_addr);
         self.adc(addend);
         self.ram_write(0x0006, self.cpu.a);
         self.cpu.pc = self.pop_u16().wrapping_add(1);
@@ -2525,7 +2525,7 @@ impl NesEmulator {
 
         let table1_base = 0xe3b0u16;
         let table1_addr = table1_base.wrapping_add(self.cpu.y as u16);
-        self.cpu.a = self.cpu_read(table1_addr);
+        self.cpu.a = self.prg_read(table1_addr);
         self.set_zn(self.cpu.a);
         cycles += 4 + page_crossed(table1_base, table1_addr) as usize;
         self.set_flag(FLAG_C, false);
@@ -2566,7 +2566,7 @@ impl NesEmulator {
         self.cpu.y = self.cpu.a;
         self.set_zn(self.cpu.y);
         let high_addr = 0x9bdfu16.wrapping_add(self.cpu.y as u16);
-        self.cpu.a = self.cpu_read(high_addr);
+        self.cpu.a = self.prg_read(high_addr);
         self.set_zn(self.cpu.a);
         self.ram_write(0x0007, self.cpu.a);
         self.cpu.a = self.pop();
@@ -2575,7 +2575,7 @@ impl NesEmulator {
         self.set_zn(self.cpu.a);
         self.set_flag(FLAG_C, false);
         let low_addr = 0x9bddu16.wrapping_add(self.cpu.y as u16);
-        let addend = self.cpu_read(low_addr);
+        let addend = self.prg_read(low_addr);
         self.adc(addend);
         self.ram_write(0x0006, self.cpu.a);
         self.cpu.pc = self.pop_u16().wrapping_add(1);
@@ -2593,7 +2593,7 @@ impl NesEmulator {
         cycles += 2;
         let table2_base = 0xe3ccu16;
         let table2_addr = table2_base.wrapping_add(self.cpu.y as u16);
-        let addend = self.cpu_read(table2_addr);
+        let addend = self.prg_read(table2_addr);
         self.adc(addend);
         cycles += 4 + page_crossed(table2_base, table2_addr) as usize;
         self.cpu.a &= 0xf0;
