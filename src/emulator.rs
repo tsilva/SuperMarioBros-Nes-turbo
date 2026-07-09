@@ -413,7 +413,6 @@ impl Ppu {
         }
     }
 
-    #[cfg(test)]
     #[inline(always)]
     fn nametable_read(&self, table: usize, offset: usize) -> u8 {
         let physical_table = if self.vertical_mirroring {
@@ -588,10 +587,9 @@ impl Ppu {
                 let local_x = world_x & 0xff;
                 let tile_x = local_x / 8;
                 let fine_x = local_x & 7;
-                let nt_base = 0x2000 + (table as u16) * 0x400;
-                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
+                let tile_id = self.nametable_read(table, tile_y * 32 + tile_x) as usize;
                 let attr =
-                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                    self.nametable_read(table, 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)));
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
@@ -659,10 +657,9 @@ impl Ppu {
                 let local_x = world_x & 0xff;
                 let tile_x = local_x / 8;
                 let fine_x = local_x & 7;
-                let nt_base = 0x2000 + (table as u16) * 0x400;
-                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
+                let tile_id = self.nametable_read(table, tile_y * 32 + tile_x) as usize;
                 let attr =
-                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                    self.nametable_read(table, 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)));
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
@@ -737,10 +734,9 @@ impl Ppu {
                 let local_x = world_x & 0xff;
                 let tile_x = local_x / 8;
                 let fine_x = local_x & 7;
-                let nt_base = 0x2000 + (table as u16) * 0x400;
-                let tile_id = self.ppu_read(nt_base + (tile_y * 32 + tile_x) as u16) as usize;
+                let tile_id = self.nametable_read(table, tile_y * 32 + tile_x) as usize;
                 let attr =
-                    self.ppu_read(nt_base + 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)) as u16);
+                    self.nametable_read(table, 0x3c0 + ((tile_y / 4) * 8 + (tile_x / 4)));
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
