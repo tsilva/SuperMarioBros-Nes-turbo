@@ -734,6 +734,9 @@ def require_raw_payload_matches_plan(
         "action_seed": ACTION_SEED,
         "state": None,
         "states": list(STATE_NAMES),
+        "lane_states": [
+            STATE_NAMES[index % len(STATE_NAMES)] for index in range(CANONICAL_NUM_ENVS)
+        ],
         "state_dir": plan.state_dir,
         "include_info": True,
         "terminate_on_flag": CANONICAL_TERMINATE_ON_FLAG,
@@ -747,6 +750,10 @@ def require_raw_payload_matches_plan(
         for key, value in expected.items()
         if config.get(key) != value
     ]
+    extra_keys = sorted(set(config) - set(expected))
+    if extra_keys:
+        names = ", ".join(str(key) for key in extra_keys)
+        raise SystemExit(f"raw/{name}.json workload mismatch: unexpected config key(s): {names}")
     if mismatches:
         raise SystemExit(f"raw/{name}.json workload mismatch: " + "; ".join(mismatches))
 

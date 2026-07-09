@@ -411,18 +411,32 @@ def require_raw_payload_matches_workload(
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "state": None,
         "states": workload_payload["states"],
+        "lane_states": [
+            workload_payload["states"][index % len(workload_payload["states"])]
+            for index in range(int(workload_payload["num_envs"]))
+        ],
         "action_set": workload_payload["action_set"],
         "action": workload_payload["action"],
         "actions": workload_payload["actions"],
         "action_seed": workload_payload["action_seed"],
         "include_info": workload_payload["include_info"],
+        "terminate_on_flag": False,
+        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
+        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
+        "done_on": workload_payload["done_on"],
+        "start_game": False,
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"
         for key, value in expected.items()
         if config.get(key) != value
     ]
+    extra_keys = sorted(set(config) - set(expected))
+    if extra_keys:
+        names = ", ".join(str(key) for key in extra_keys)
+        raise SystemExit(f"{path} workload mismatch: unexpected config key(s): {names}")
     if mismatches:
         raise SystemExit(f"{path} workload mismatch: " + "; ".join(mismatches))
     env_steps_per_sec_samples(payload, path)

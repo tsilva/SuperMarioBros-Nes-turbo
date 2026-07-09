@@ -739,8 +739,14 @@ def test_wrapper_option_validation_runs_before_rom_load() -> None:
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_layout="nhwc")
     with pytest.raises(ValueError, match="obs_resize_algorithm"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_resize_algorithm="lanczos")
+    with pytest.raises(ValueError, match="obs_crop_mode"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_crop_mode="hide")
+    with pytest.raises(ValueError, match="obs_crop_fill"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, obs_crop_fill=256)
     with pytest.raises(ValueError, match="unknown configured event"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on=["bad_event"])
+    with pytest.raises(TypeError, match="unexpected_param"):
+        SuperMarioBrosNesTurboVecEnv(**base_kwargs, unexpected_param=True)
     with pytest.raises(TypeError, match="done_on_info"):
         SuperMarioBrosNesTurboVecEnv(**base_kwargs, done_on_info={})
     with pytest.raises(TypeError, match="states"):
