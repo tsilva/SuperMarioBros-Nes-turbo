@@ -2029,17 +2029,6 @@ impl NesEmulator {
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            if self.ppu.tick(pending_ppu_cycles)
-                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                            {
-                                pending_ppu_cycles = 0;
-                                break;
-                            }
-                            pending_ppu_cycles = 0;
-                        }
                         continue;
                     }
                 }
@@ -2157,17 +2146,6 @@ impl NesEmulator {
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                            {
-                                pending_ppu_cycles = 0;
-                                break;
-                            }
-                            pending_ppu_cycles = 0;
-                        }
                         continue;
                     }
                 }
@@ -2333,7 +2311,7 @@ impl NesEmulator {
             .ppu
             .cycles_until_next_event()
             .saturating_sub(*pending_ppu_cycles);
-        if ppu_cycles > remaining {
+        if ppu_cycles >= remaining {
             return false;
         }
 
@@ -4387,7 +4365,7 @@ mod tests {
             emu.ram[0x0780 + index] = 1;
         }
         let (cycles, _) = emu.timer_control_loop_cycles_and_last_a(emu.cpu.x);
-        emu.ppu.set_dot(PPU_SPRITE0_DOT - cycles * 3 + 1);
+        emu.ppu.set_dot(PPU_SPRITE0_DOT - cycles * 3);
 
         let mut cpu_cycle_guard = 0usize;
         let mut pending_ppu_cycles = 0usize;
