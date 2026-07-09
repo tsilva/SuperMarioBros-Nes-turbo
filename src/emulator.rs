@@ -731,13 +731,11 @@ impl Ppu {
         };
         let scroll_x = self.render_scroll_x_px() as usize;
         let scroll_y = self.scroll_y_px as usize;
+        let first_world_y = crop_top + scroll_y;
+        let mut table_y = (first_world_y / 240) & 1;
+        let mut local_y = first_world_y % 240;
 
         for out_y in 0..height {
-            let y = crop_top + out_y;
-            debug_assert!(y >= 32);
-            let world_y = y + scroll_y;
-            let table_y = (world_y / 240) & 1;
-            let local_y = world_y % 240;
             let tile_y = local_y / 8;
             let fine_y = local_y & 7;
             let row_start = out_y * VISIBLE_FRAME_WIDTH;
@@ -784,6 +782,12 @@ impl Ppu {
                 }
 
                 out_x += run;
+            }
+
+            local_y += 1;
+            if local_y == 240 {
+                local_y = 0;
+                table_y ^= 1;
             }
         }
     }
