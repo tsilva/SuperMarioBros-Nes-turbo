@@ -135,6 +135,7 @@ impl Cpu {
 #[derive(Clone)]
 struct Ppu {
     chr_rom: Vec<u8>,
+    chr_row_pixels: Vec<u16>,
     chr_addr_mask: usize,
     vertical_mirroring: bool,
     ctrl: u8,
@@ -164,8 +165,10 @@ struct Ppu {
 impl Ppu {
     fn new(chr_rom: Vec<u8>, vertical_mirroring: bool) -> Self {
         let chr_addr_mask = chr_rom.len() - 1;
+        let chr_row_pixels = decode_chr_row_pixels(&chr_rom);
         Self {
             chr_rom,
+            chr_row_pixels,
             chr_addr_mask,
             vertical_mirroring,
             ctrl: 0,
@@ -416,6 +419,14 @@ impl Ppu {
         let idx = addr & self.chr_addr_mask;
         // SAFETY: SMB/NROM CHR ROM sizes are power-of-two and chr_addr_mask is len - 1.
         unsafe { *self.chr_rom.get_unchecked(idx) }
+    }
+
+    #[inline]
+    fn chr_row_pixels(&self, addr: usize) -> u16 {
+        let idx = addr & self.chr_addr_mask;
+        // SAFETY: SMB/NROM CHR ROM sizes are power-of-two, the decoded row
+        // table has the same length, and chr_addr_mask is len - 1.
+        unsafe { *self.chr_row_pixels.get_unchecked(idx) }
     }
 
     #[inline]
@@ -756,8 +767,7 @@ impl Ppu {
                 let shift = ((tile_y & 0x02) << 1) | (tile_x & 0x02);
                 let palette_id = (attr >> shift) & 0x03;
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
-                let lo = self.chr_read(pattern_addr);
-                let hi = self.chr_read(pattern_addr + 8);
+                let pixels = self.chr_row_pixels(pattern_addr);
                 let run = (8 - fine_x).min(VISIBLE_FRAME_WIDTH - out_x);
                 let bg_gray = palette_gray[0];
                 let palette_base = (palette_id as usize) * 4;
@@ -769,17 +779,15 @@ impl Ppu {
                 ];
 
                 if fine_x == 0 && run >= 8 {
-                    write_full_bg_tile_gray(
+                    write_full_bg_tile_gray_pixels(
                         &mut dst[row_start + out_x..row_start + out_x + 8],
-                        lo,
-                        hi,
+                        pixels,
                         colors,
                     );
                 } else {
                     for col in 0..run {
-                        let bit = 7 - (fine_x + col);
-                        let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
-                        dst[row_start + out_x + col] = colors[pixel as usize];
+                        let pixel = ((pixels >> ((fine_x + col) * 2)) & 3) as usize;
+                        dst[row_start + out_x + col] = colors[pixel];
                     }
                 }
 
@@ -1634,6 +1642,40 @@ fn write_full_bg_tile_gray(dst: &mut [u8], lo: u8, hi: u8, colors: [u8; 4]) {
         *dst.get_unchecked_mut(6) = colors[(((lo >> 1) & 1) | (((hi >> 1) & 1) << 1)) as usize];
         *dst.get_unchecked_mut(7) = colors[((lo & 1) | ((hi & 1) << 1)) as usize];
     }
+}
+
+#[inline(always)]
+fn write_full_bg_tile_gray_pixels(dst: &mut [u8], pixels: u16, colors: [u8; 4]) {
+    debug_assert!(dst.len() >= 8);
+    // SAFETY: The caller passes at least eight destination pixels for a full tile.
+    unsafe {
+        *dst.get_unchecked_mut(0) = colors[(pixels & 3) as usize];
+        *dst.get_unchecked_mut(1) = colors[((pixels >> 2) & 3) as usize];
+        *dst.get_unchecked_mut(2) = colors[((pixels >> 4) & 3) as usize];
+        *dst.get_unchecked_mut(3) = colors[((pixels >> 6) & 3) as usize];
+        *dst.get_unchecked_mut(4) = colors[((pixels >> 8) & 3) as usize];
+        *dst.get_unchecked_mut(5) = colors[((pixels >> 10) & 3) as usize];
+        *dst.get_unchecked_mut(6) = colors[((pixels >> 12) & 3) as usize];
+        *dst.get_unchecked_mut(7) = colors[((pixels >> 14) & 3) as usize];
+    }
+}
+
+fn decode_chr_row_pixels(chr_rom: &[u8]) -> Vec<u16> {
+    let mut decoded = vec![0; chr_rom.len()];
+    for tile_base in (0..chr_rom.len()).step_by(16) {
+        for row in 0..8usize {
+            let lo = chr_rom[tile_base + row];
+            let hi = chr_rom[tile_base + row + 8];
+            let mut pixels = 0u16;
+            for col in 0..8usize {
+                let bit = 7 - col;
+                let pixel = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
+                pixels |= u16::from(pixel) << (col * 2);
+            }
+            decoded[tile_base + row] = pixels;
+        }
+    }
+    decoded
 }
 
 #[inline]
