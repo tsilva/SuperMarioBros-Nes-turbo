@@ -30,12 +30,6 @@ const DEFAULT_GRAY_CROP_HEIGHT: usize = VISIBLE_FRAME_HEIGHT - DEFAULT_GRAY_CROP
 const DEFAULT_GRAY_RESIZE_WIDTH: usize = 84;
 const DEFAULT_GRAY_RESIZE_HEIGHT: usize = 84;
 const DEFAULT_GRAY_RESIZE_PIXELS: usize = DEFAULT_GRAY_RESIZE_WIDTH * DEFAULT_GRAY_RESIZE_HEIGHT;
-const DEFAULT_GRAY_FULL_HEIGHT: usize = VISIBLE_FRAME_HEIGHT;
-const DEFAULT_GRAY_AREA_SUM_BYTES: usize = DEFAULT_GRAY_RESIZE_PIXELS * 2;
-const DEFAULT_GRAY_NATIVE_PIXELS: usize = VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_HEIGHT;
-const DEFAULT_GRAY_TOUCHED_BYTES: usize = DEFAULT_GRAY_NATIVE_PIXELS.div_ceil(8);
-pub const DEFAULT_GRAY_MASK_AREA_SCRATCH: usize =
-    DEFAULT_GRAY_AREA_SUM_BYTES + DEFAULT_GRAY_NATIVE_PIXELS + DEFAULT_GRAY_TOUCHED_BYTES;
 const SMB_IDLE_JMP_PC: u16 = 0x8057;
 const SMB_IDLE_JMP_PPU_CYCLES: usize = 9;
 const SMB_SPRITE0_POLL_PC: u16 = 0x8150;
@@ -164,7 +158,6 @@ struct GrayBgFrameCacheKey {
 struct GrayBgFrameCacheEntry {
     key: GrayBgFrameCacheKey,
     pixels: Vec<u8>,
-    area_sums_le: Vec<u8>,
 }
 
 impl GrayBgQuadCache {
@@ -636,6 +629,18 @@ impl Ppu {
         }
     }
 
+    fn write_gray_visible_mask_lower_frame(&self, dst: &mut [u8], crop_top: usize, height: usize) {
+        debug_assert_eq!(dst.len(), VISIBLE_FRAME_WIDTH * height);
+        self.write_bg_gray_visible_mask_lower_tiled(dst, crop_top, height);
+        self.draw_sprites_gray_region(
+            dst,
+            crop_top,
+            VISIBLE_FRAME_LEFT,
+            VISIBLE_FRAME_WIDTH,
+            height,
+        );
+    }
+
     #[allow(dead_code)]
     fn write_bg_gray_cropped_tiled(&self, dst: &mut [u8], crop_top: usize, height: usize) {
         let palette_gray = self.palette_gray();
@@ -774,7 +779,12 @@ impl Ppu {
         }
     }
 
-    fn ensure_gray_bg_visible_mask_lower(&self, crop_top: usize, height: usize) {
+    fn write_bg_gray_visible_mask_lower_tiled(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
         let mut bg_palette = [0; 16];
         bg_palette.copy_from_slice(&self.palette_gray[..16]);
         let key = GrayBgFrameCacheKey {
@@ -789,149 +799,17 @@ impl Ppu {
         };
         {
             let cached = self.gray_bg_quad_cache.frame.read().unwrap();
-            if cached.as_ref().is_some_and(|entry| entry.key == key) {
+            if let Some(entry) = cached.as_ref().filter(|entry| entry.key == key) {
+                dst.copy_from_slice(&entry.pixels);
                 return;
             }
         }
 
-        let mut pixels = vec![0; VISIBLE_FRAME_WIDTH * height];
-        self.write_bg_gray_visible_mask_lower_tiled_uncached(&mut pixels, crop_top, height);
-        let area_sums_le = if crop_top == VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP
-            && height == DEFAULT_GRAY_CROP_HEIGHT
-        {
-            build_default_gray_mask_area_sums(&pixels)
-        } else {
-            Vec::new()
-        };
+        self.write_bg_gray_visible_mask_lower_tiled_uncached(dst, crop_top, height);
         *self.gray_bg_quad_cache.frame.write().unwrap() = Some(GrayBgFrameCacheEntry {
             key,
-            pixels,
-            area_sums_le,
+            pixels: dst.to_vec(),
         });
-    }
-
-    #[cfg(test)]
-    fn write_bg_gray_visible_mask_lower_tiled(
-        &self,
-        dst: &mut [u8],
-        crop_top: usize,
-        height: usize,
-    ) {
-        self.ensure_gray_bg_visible_mask_lower(crop_top, height);
-        let cached = self.gray_bg_quad_cache.frame.read().unwrap();
-        dst.copy_from_slice(&cached.as_ref().unwrap().pixels);
-    }
-
-    fn write_gray_visible_mask_area_84x84(&self, dst: &mut [u8], scratch: &mut [u8], fill: u8) {
-        debug_assert_eq!(dst.len(), DEFAULT_GRAY_RESIZE_PIXELS);
-        debug_assert!(scratch.len() >= DEFAULT_GRAY_MASK_AREA_SCRATCH);
-        let crop_top = VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP;
-        self.ensure_gray_bg_visible_mask_lower(crop_top, DEFAULT_GRAY_CROP_HEIGHT);
-
-        let (sums, rest) = scratch.split_at_mut(DEFAULT_GRAY_AREA_SUM_BYTES);
-        let (overlay, rest) = rest.split_at_mut(DEFAULT_GRAY_NATIVE_PIXELS);
-        let touched = &mut rest[..DEFAULT_GRAY_TOUCHED_BYTES];
-        touched.fill(0);
-
-        let cached = self.gray_bg_quad_cache.frame.read().unwrap();
-        let entry = cached.as_ref().unwrap();
-        debug_assert_eq!(entry.area_sums_le.len(), DEFAULT_GRAY_AREA_SUM_BYTES);
-        sums.copy_from_slice(&entry.area_sums_le);
-        if fill != 0 {
-            add_default_gray_mask_fill_sums(sums, fill);
-        }
-        self.draw_sprites_gray_mask_area_sums(sums, overlay, touched, &entry.pixels);
-        write_default_gray_area_sums(sums, dst);
-    }
-
-    fn draw_sprites_gray_mask_area_sums(
-        &self,
-        sums: &mut [u8],
-        overlay: &mut [u8],
-        touched: &mut [u8],
-        background: &[u8],
-    ) {
-        if self.mask & 0x10 == 0 {
-            return;
-        }
-
-        let palette_gray = self.palette_gray();
-        let crop_top = (VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP) as i16;
-        let crop_bottom = crop_top + DEFAULT_GRAY_CROP_HEIGHT as i16;
-        let crop_left = VISIBLE_FRAME_LEFT as i16;
-        let crop_right = crop_left + VISIBLE_FRAME_WIDTH as i16;
-        let pattern_base = if self.ctrl & 0x08 != 0 { 0x1000 } else { 0 };
-        let sprite_scanline_mask = self.sprite_scanline_mask();
-
-        for sprite in (0..64).rev() {
-            let base = sprite * 4;
-            let sprite_y = self.oam[base] as i16 + 1;
-            let tile = self.oam[base + 1] as usize;
-            let attr = self.oam[base + 2];
-            let sprite_x = self.oam[base + 3] as i16;
-            let palette_base = 0x10 + ((attr & 0x03) as usize) * 4;
-            let flip_h = attr & 0x40 != 0;
-            let flip_v = attr & 0x80 != 0;
-            let behind_background = attr & 0x20 != 0;
-            let row_start = (crop_top - sprite_y).clamp(0, 8) as usize;
-            let row_end = (crop_bottom - sprite_y).clamp(0, 8) as usize;
-            let col_start = (crop_left - sprite_x).clamp(0, 8) as usize;
-            let col_end = (crop_right - sprite_x).clamp(0, 8) as usize;
-            if row_start >= row_end || col_start >= col_end {
-                continue;
-            }
-
-            for row in row_start..row_end {
-                let screen_y = sprite_y + row as i16;
-                if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
-                    continue;
-                }
-                let tile_row = if flip_v { 7 - row } else { row };
-                let pattern_addr = pattern_base + tile * 16 + tile_row;
-                let lo = self.chr_read(pattern_addr);
-                let hi = self.chr_read(pattern_addr + 8);
-                for col in col_start..col_end {
-                    let screen_x = sprite_x + col as i16;
-                    let tile_col = if flip_h { col } else { 7 - col };
-                    let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
-                    if pixel == 0 {
-                        continue;
-                    }
-
-                    let out_y = (screen_y - crop_top) as usize;
-                    let out_x = (screen_x - crop_left) as usize;
-                    let native_idx = out_y * VISIBLE_FRAME_WIDTH + out_x;
-                    let touched_mask = 1 << (native_idx & 7);
-                    let touched_byte = &mut touched[native_idx >> 3];
-                    let old = if *touched_byte & touched_mask == 0 {
-                        background[native_idx]
-                    } else {
-                        overlay[native_idx]
-                    };
-                    let new = if behind_background
-                        && self.bg_pixel_opaque(screen_x as usize, screen_y as usize)
-                    {
-                        background[native_idx]
-                    } else {
-                        palette_gray[palette_base + pixel as usize]
-                    };
-                    if new == old {
-                        continue;
-                    }
-
-                    let source_y = DEFAULT_GRAY_CROP_TOP + out_y;
-                    let dx = default_gray_area_destination(out_x, VISIBLE_FRAME_WIDTH);
-                    let dy = default_gray_area_destination(source_y, DEFAULT_GRAY_FULL_HEIGHT);
-                    let sum_offset = (dy * DEFAULT_GRAY_RESIZE_WIDTH + dx) * 2;
-                    let old_sum = read_sum_u16_le(sums, sum_offset);
-                    let new_sum = old_sum as i32 + i32::from(new) - i32::from(old);
-                    debug_assert!((0..=u16::MAX as i32).contains(&new_sum));
-                    write_sum_u16_le(sums, sum_offset, new_sum as u16);
-                    overlay[native_idx] = new;
-                    *touched_byte |= touched_mask;
-                }
-            }
-        }
     }
 
     fn write_bg_gray_visible_mask_lower_tiled_uncached(
@@ -1929,76 +1807,6 @@ fn build_gray_bg_quad_tables(palette_gray: &[u8; 32]) -> [[u32; 256]; 4] {
     tables
 }
 
-fn build_default_gray_mask_area_sums(pixels: &[u8]) -> Vec<u8> {
-    debug_assert_eq!(pixels.len(), DEFAULT_GRAY_NATIVE_PIXELS);
-    let mut sums = vec![0; DEFAULT_GRAY_AREA_SUM_BYTES];
-    for out_y in 0..DEFAULT_GRAY_CROP_HEIGHT {
-        let source_y = DEFAULT_GRAY_CROP_TOP + out_y;
-        let dy = default_gray_area_destination(source_y, DEFAULT_GRAY_FULL_HEIGHT);
-        for x in 0..VISIBLE_FRAME_WIDTH {
-            let dx = default_gray_area_destination(x, VISIBLE_FRAME_WIDTH);
-            let offset = (dy * DEFAULT_GRAY_RESIZE_WIDTH + dx) * 2;
-            let sum =
-                read_sum_u16_le(&sums, offset) + u16::from(pixels[out_y * VISIBLE_FRAME_WIDTH + x]);
-            write_sum_u16_le(&mut sums, offset, sum);
-        }
-    }
-    sums
-}
-
-fn add_default_gray_mask_fill_sums(sums: &mut [u8], fill: u8) {
-    for y in 0..DEFAULT_GRAY_CROP_TOP {
-        let dy = default_gray_area_destination(y, DEFAULT_GRAY_FULL_HEIGHT);
-        for x in 0..VISIBLE_FRAME_WIDTH {
-            let dx = default_gray_area_destination(x, VISIBLE_FRAME_WIDTH);
-            let offset = (dy * DEFAULT_GRAY_RESIZE_WIDTH + dx) * 2;
-            let sum = read_sum_u16_le(sums, offset) + u16::from(fill);
-            write_sum_u16_le(sums, offset, sum);
-        }
-    }
-}
-
-fn write_default_gray_area_sums(sums: &[u8], dst: &mut [u8]) {
-    for dy in 0..DEFAULT_GRAY_RESIZE_HEIGHT {
-        let y_count = default_gray_area_axis_count(dy, DEFAULT_GRAY_FULL_HEIGHT);
-        for group in 0..12usize {
-            let dst_base = dy * DEFAULT_GRAY_RESIZE_WIDTH + group * 7;
-            for within in 0..7usize {
-                let dx = group * 7 + within;
-                let x_count = if within == 0 { 2 } else { 3 };
-                let sum = read_sum_u16_le(sums, (dy * DEFAULT_GRAY_RESIZE_WIDTH + dx) * 2);
-                dst[dst_base + within] = (sum / (x_count * y_count) as u16) as u8;
-            }
-        }
-    }
-}
-
-#[inline(always)]
-fn default_gray_area_destination(source: usize, source_len: usize) -> usize {
-    (((source + 1) * DEFAULT_GRAY_RESIZE_WIDTH) - 1) / source_len
-}
-
-#[inline(always)]
-fn default_gray_area_axis_count(destination: usize, source_len: usize) -> usize {
-    let start = (destination * source_len) / DEFAULT_GRAY_RESIZE_WIDTH;
-    let end = (((destination + 1) * source_len) / DEFAULT_GRAY_RESIZE_WIDTH)
-        .max(start + 1)
-        .min(source_len);
-    end - start
-}
-
-#[inline(always)]
-fn read_sum_u16_le(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-}
-
-#[inline(always)]
-fn write_sum_u16_le(bytes: &mut [u8], offset: usize, value: u16) {
-    let encoded = value.to_le_bytes();
-    bytes[offset] = encoded[0];
-    bytes[offset + 1] = encoded[1];
-}
-
 fn rebuild_gray_bg_quad_table(palette_gray: &[u8; 32], palette_id: usize, table: &mut [u32; 256]) {
     let base = palette_id * 4;
     let colors = [
@@ -2313,9 +2121,14 @@ impl NesEmulator {
     }
 
     #[inline]
-    pub fn write_gray_visible_mask_area_84x84(&self, dst: &mut [u8], scratch: &mut [u8], fill: u8) {
+    pub fn write_gray_visible_mask_lower_frame(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
         self.ppu
-            .write_gray_visible_mask_area_84x84(dst, scratch, fill);
+            .write_gray_visible_mask_lower_frame(dst, VISIBLE_FRAME_TOP + crop_top, height);
     }
 
     #[inline]
@@ -4686,30 +4499,6 @@ mod tests {
         }
     }
 
-    fn resize_full_area_reference(src: &[u8], dst: &mut [u8]) {
-        for dst_y in 0..DEFAULT_GRAY_RESIZE_HEIGHT {
-            let y0 = (dst_y * DEFAULT_GRAY_FULL_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT;
-            let y1 = (((dst_y + 1) * DEFAULT_GRAY_FULL_HEIGHT) / DEFAULT_GRAY_RESIZE_HEIGHT)
-                .max(y0 + 1)
-                .min(DEFAULT_GRAY_FULL_HEIGHT);
-            for dst_x in 0..DEFAULT_GRAY_RESIZE_WIDTH {
-                let x0 = (dst_x * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH;
-                let x1 = (((dst_x + 1) * VISIBLE_FRAME_WIDTH) / DEFAULT_GRAY_RESIZE_WIDTH)
-                    .max(x0 + 1)
-                    .min(VISIBLE_FRAME_WIDTH);
-                let mut sum = 0u32;
-                for sy in y0..y1 {
-                    let row = sy * VISIBLE_FRAME_WIDTH;
-                    for sx in x0..x1 {
-                        sum += src[row + sx] as u32;
-                    }
-                }
-                dst[dst_y * DEFAULT_GRAY_RESIZE_WIDTH + dst_x] =
-                    (sum / ((x1 - x0) * (y1 - y0)) as u32) as u8;
-            }
-        }
-    }
-
     fn set_sprite(ppu: &mut Ppu, sprite: usize, y: u8, tile: u8, attr: u8, x: u8) {
         let base = sprite * 4;
         ppu.oam[base] = y.wrapping_sub(1);
@@ -5952,31 +5741,5 @@ mod tests {
 
         ppu.mask = 0x00;
         assert_default_area_writer_matches_scratch(&ppu);
-    }
-
-    #[test]
-    fn fused_masked_gray_area_writer_matches_native_composition() {
-        let mut ppu = make_test_ppu();
-        let mut native = vec![0; VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_FULL_HEIGHT];
-        let mut expected = vec![0; DEFAULT_GRAY_RESIZE_PIXELS];
-        let mut actual = vec![0; DEFAULT_GRAY_RESIZE_PIXELS];
-        let mut scratch = vec![0; DEFAULT_GRAY_MASK_AREA_SCRATCH];
-
-        for fill in [0, 7, 255] {
-            native[..VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_TOP].fill(fill);
-            ppu.write_gray_frame_region(
-                &mut native[VISIBLE_FRAME_WIDTH * DEFAULT_GRAY_CROP_TOP..],
-                VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP,
-                VISIBLE_FRAME_LEFT,
-                VISIBLE_FRAME_WIDTH,
-                DEFAULT_GRAY_CROP_HEIGHT,
-            );
-            resize_full_area_reference(&native, &mut expected);
-
-            ppu.write_gray_visible_mask_area_84x84(&mut actual, &mut scratch, fill);
-            assert_eq!(actual, expected);
-            // Exercise the unchanged-background cache-hit path as sprite OAM changes.
-            ppu.oam[3] = ppu.oam[3].wrapping_add(1);
-        }
     }
 }
