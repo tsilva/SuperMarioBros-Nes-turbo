@@ -765,6 +765,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         reward_clip: bool | Sequence[float] = False,
         info_filter: Any = "all",
         done_on: Any = None,
+        autoreset_mode: AutoresetMode | str = AutoresetMode.SAME_STEP,
     ) -> None:
         if str(game) != DEFAULT_STABLE_RETRO_GAME:
             raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
@@ -795,6 +796,10 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         source_height = VISIBLE_HEIGHT if mask_crop else VISIBLE_HEIGHT - crop_top - crop_bottom
         resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
         action_mode = _normalize_action_mode(use_restricted_actions)
+        autoreset_mode = self._normalize_autoreset_mode(autoreset_mode)
+        self.autoreset_mode = autoreset_mode
+        self.metadata = dict(type(self).metadata)
+        self.metadata["autoreset_mode"] = autoreset_mode
         self.game = str(game)
         self.action_meanings = ACTION_SETS["full"]
         self.action_set = "full"
@@ -862,6 +867,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             normalized_crop_mode,
             normalized_crop_fill,
             self.obs_resize_algorithm,
+            autoreset_mode is AutoresetMode.SAME_STEP,
         )
         self._state_policy_names = tuple(self._core.initial_state_policy_names())
         self.initial_state_names = self._state_policy_names
@@ -918,7 +924,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self.render_mode = render_mode
         self.viewer = None
         self.closed = False
-        self._pending_seed: int | None = None
+        self._pending_seed: int | Sequence[int | None] | None = None
         self._pending_options: dict[str, Any] | list[dict[str, Any]] | None = None
 
         self._actions = np.zeros((self.num_envs,), dtype=np.uint8)
@@ -964,6 +970,25 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         )
         self._write_active_state_indices()
 
+    @staticmethod
+    def _normalize_autoreset_mode(value: AutoresetMode | str) -> AutoresetMode:
+        if isinstance(value, AutoresetMode):
+            mode = value
+        else:
+            try:
+                mode = AutoresetMode(value)
+            except (TypeError, ValueError):
+                name = str(value).split(".")[-1].upper()
+                try:
+                    mode = AutoresetMode[name]
+                except KeyError as exc:
+                    raise ValueError(f"unsupported autoreset_mode: {value!r}") from exc
+        if mode not in (AutoresetMode.SAME_STEP, AutoresetMode.DISABLED):
+            raise ValueError(
+                "autoreset_mode must be AutoresetMode.SAME_STEP or AutoresetMode.DISABLED"
+            )
+        return mode
+
     def set_state_policy(self, state: Any) -> None:
         """Update the state reset policy used by future resets and autoresets."""
         state = _normalize_retro_state(state)
@@ -1000,37 +1025,98 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
     def reset(
         self,
         *,
-        seed: int | None = None,
+        seed: int | Sequence[int | None] | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        if seed is not None:
-            self.seed(seed)
-        if options is not None:
-            self.set_options(options)
-        if self._pending_seed is not None:
-            super().reset(seed=int(self._pending_seed))
-            self._core.seed(int(self._pending_seed))
-        self._core.reset_into(self._obs)
-        self._rewards.fill(0)
-        self._terminated.fill(False)
-        self._truncated.fill(False)
-        self._done_on_info = [{} for _ in range(self.num_envs)]
-        self._terminal_observations = [None for _ in range(self.num_envs)]
-        self._terminal_infos = [None for _ in range(self.num_envs)]
+        if options is None and isinstance(self._pending_options, dict):
+            reset_options = dict(self._pending_options)
+        else:
+            reset_options = {} if options is None else dict(options)
+        reset_mask = reset_options.pop("reset_mask", None)
+        if reset_mask is None:
+            reset_mask = np.ones(self.num_envs, dtype=np.bool_)
+        elif not isinstance(reset_mask, np.ndarray):
+            raise TypeError("options['reset_mask'] must be a NumPy array")
+        elif reset_mask.shape != (self.num_envs,):
+            raise ValueError(f"options['reset_mask'] must have shape {(self.num_envs,)}")
+        elif reset_mask.dtype != np.bool_:
+            raise TypeError("options['reset_mask'] must have dtype np.bool_")
+        elif not np.any(reset_mask):
+            raise ValueError("options['reset_mask'] must select at least one lane")
+
+        start_indices = reset_options.pop("start_indices", None)
+        if reset_options:
+            names = ", ".join(sorted(reset_options))
+            raise ValueError(f"unsupported reset option(s): {names}")
+        if start_indices is None:
+            start_indices = np.full(self.num_envs, -1, dtype=np.int32)
+        elif not isinstance(start_indices, np.ndarray):
+            raise TypeError("options['start_indices'] must be a NumPy array")
+        elif start_indices.shape != (self.num_envs,):
+            raise ValueError(f"options['start_indices'] must have shape {(self.num_envs,)}")
+        elif start_indices.dtype != np.int32:
+            raise TypeError("options['start_indices'] must have dtype np.int32")
+
+        seeds = self._normalize_reset_seed(seed)
+        if seed is not None and not isinstance(seed, Sequence):
+            super().reset(seed=int(seed))
+        self._core.reset_masked_into(self._obs, reset_mask, start_indices, seeds)
+        self._rewards[reset_mask] = 0
+        self._terminated[reset_mask] = False
+        self._truncated[reset_mask] = False
+        for index in np.flatnonzero(reset_mask):
+            self._done_on_info[int(index)] = {}
+            self._terminal_observations[int(index)] = None
+            self._terminal_infos[int(index)] = None
         self._write_active_state_indices()
         self._write_info_arrays()
-        infos = self._vector_infos(
-            [self._reset_info_dict(index) for index in range(self.num_envs)]
-        )
+        lane_infos: list[dict[str, Any]] = []
+        for index in range(self.num_envs):
+            if not bool(reset_mask[index]):
+                lane_infos.append({})
+                continue
+            info = self._reset_info_dict(index)
+            if self.autoreset_mode is AutoresetMode.DISABLED and self._info_mode != "none":
+                raw_info = self._base_info_dict(index)
+                if self._info_keys is not None:
+                    raw_info = {
+                        key: raw_info[key]
+                        for key in self._info_keys
+                        if key in raw_info
+                    }
+                raw_info.update(info)
+                info = raw_info
+            lane_infos.append(info)
+        infos = self._vector_infos(lane_infos)
         self._pending_seed = None
         self._pending_options = None
         return self._return_obs(), infos
 
-    def seed(self, seed: int | None = None) -> list[int | None]:
+    def _normalize_reset_seed(
+        self,
+        seed: int | Sequence[int | None] | None,
+    ) -> list[int | None]:
+        if seed is None:
+            seed = self._pending_seed
+        if seed is None:
+            return [None for _ in range(self.num_envs)]
+        if isinstance(seed, Sequence) and not isinstance(seed, (str, bytes, bytearray)):
+            seeds = [None if value is None else int(value) for value in seed]
+            if len(seeds) != self.num_envs:
+                raise ValueError("seed sequence length must match num_envs")
+            return seeds
+        base = int(seed)
+        return [base + index for index in range(self.num_envs)]
+
+    def seed(
+        self,
+        seed: int | Sequence[int | None] | None = None,
+    ) -> list[int | None]:
         if seed is None:
             seed = int(np.random.randint(0, np.iinfo(np.uint32).max, dtype=np.uint32))
-        self._pending_seed = int(seed)
-        return [int(seed) + index for index in range(self.num_envs)]
+        seeds = self._normalize_reset_seed(seed)
+        self._pending_seed = list(seeds)
+        return seeds
 
     def set_options(self, options: dict[str, Any] | list[dict[str, Any]] | None = None) -> None:
         if options is None:
@@ -1157,7 +1243,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
 
     def _finish_native_step(self) -> bool:
         has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
-        if has_terminal:
+        if has_terminal and self.autoreset_mode is AutoresetMode.SAME_STEP:
             self._write_active_state_indices()
             self._write_terminal_observations()
             self._write_terminal_infos()
@@ -1320,6 +1406,14 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         if done_on_info and include_done_on_info and not terminal:
             info["done_on_info"] = self._done_on_info[index]
         if terminal:
+            if self.autoreset_mode is AutoresetMode.DISABLED:
+                if done_on_info and include_done_on_info:
+                    info["done_on_info"] = done_on_info
+                if bool(self._terminated[index]):
+                    info["terminated"] = True
+                if bool(self._truncated[index]):
+                    info["truncated"] = True
+                return info
             reset_info = self._reset_info_dict(index)
             info.update(reset_info)
             final_info: dict[str, Any] = dict(self._terminal_infos[index] or {})
@@ -1370,10 +1464,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         state = self._active_state_labels[index]
         if state is None:
             return {}
-        return {
-            "state": state,
-            "start_state": state,
-        }
+        return {"state": state, "start_state": state}
 
     @property
     def x_pos(self) -> np.ndarray:

@@ -122,7 +122,45 @@ env = SuperMarioBrosNesTurboVecEnv(
 
 Mask crop is useful for hiding HUD or other static regions during initial training while preserving spatial compatibility for later finetuning on full observations.
 
-`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. The native env uses same-step per-lane autoreset and sets `metadata["autoreset_mode"] = AutoresetMode.SAME_STEP`; for a completed lane, the returned observation is the reset observation and the completed episode data is exposed through `infos["final_obs"]` and `infos["final_info"]`. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call. Stable Baselines3 adaptation is intentionally not provided here; rlab or another downstream adapter should translate Gymnasium vector output to SB3 when needed.
+`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. Same-step autoreset remains the default: a completed lane returns its reset observation while `infos["final_obs"]` and `infos["final_info"]` preserve the completed transition. Consumers that own episode boundaries can pass `autoreset_mode=AutoresetMode.DISABLED`; terminal observations are then returned directly and another step is rejected until all done lanes are reset with `reset(options={"reset_mask": mask})`. A masked reset changes only selected lanes and returns reset info only for those lanes. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call. Stable Baselines3 adaptation is intentionally not provided here; rlab or another downstream adapter should translate Gymnasium vector output to SB3 when needed.
+
+```python
+import numpy as np
+from gymnasium.vector import AutoresetMode
+
+env = SuperMarioBrosNesTurboVecEnv(
+    "SuperMarioBros-Nes-v0",
+    rom_path="/path/to/SuperMarioBros.nes",
+    num_envs=16,
+    autoreset_mode=AutoresetMode.DISABLED,
+)
+obs, infos = env.reset(seed=123)
+obs, rewards, terminated, truncated, infos = env.step(actions)
+done = terminated | truncated
+if done.any():
+    obs, reset_infos = env.reset(options={"reset_mask": done.copy()})
+```
+
+`reset_mask` must be a NumPy `bool` array with shape `(num_envs,)` and at least
+one `True`. A scalar reset seed expands deterministically to `seed + lane_index`;
+a sequence must contain exactly one integer or `None` per lane. Unselected seed
+entries do not advance those lanes' RNG streams. To choose starts explicitly,
+pass an `int32` `start_indices` array of the same shape:
+
+```python
+mask = np.array([False, True, False, True], dtype=np.bool_)
+starts = np.array([-1, 1, -1, 0], dtype=np.int32)
+obs, reset_infos = env.reset(
+    seed=[None, 101, None, 303],
+    options={"reset_mask": mask, "start_indices": starts},
+)
+```
+
+Nonnegative values select entries from the configured start catalog; `-1`
+retains its fixed or weighted sampling policy. Unselected lanes preserve emulator
+and RNG state, frame stacks, observations, sticky actions, counters, and active
+start identity. `active_state_indices()` and `active_states()` update only for
+selected lanes.
 
 Initial states can be a single stable-retro state, one state per env slot, or a weighted mapping sampled independently for each lane on reset:
 
