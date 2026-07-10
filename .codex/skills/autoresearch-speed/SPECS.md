@@ -21,6 +21,9 @@ without weakening correctness, comparability, or experiment validity.
 - Use the user-approved default acceptance cap of three measured comparison
   pairs for `scripts/autoresearch.py accept`; reserve `accept --full` for the
   longer sequential stability ladder.
+- Start every newly created autoresearch goal as a fresh round from the live
+  `HEAD`, even when controller state contains a completed prior round. Resume a
+  fixed baseline only when continuing that same active goal.
 - Do not represent invalid, incomparable, or contract-weakening measurements as
   accepted throughput improvements.
 - Keep mutable autoresearch state and artifacts out of the repo under

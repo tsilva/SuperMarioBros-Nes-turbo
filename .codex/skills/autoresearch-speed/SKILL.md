@@ -16,7 +16,17 @@ description: Lightweight Super Mario Bros NES throughput optimization loop for t
 
 Open-ended throughput launches run one improvement round. Target `>= 1.10` cumulative `env_steps_per_sec` versus the fixed round baseline unless the user requests more.
 
-At orientation: run `status`; read `results.tsv`, `current.json`, `scratchpad.md`, and `ideas.md`; pick the latest accepted `keep`, `keep_stack`, or `keep_small_gain` result. If none exists, calibrate live `HEAD` and use it as baseline.
+Every newly created autoresearch goal starts a fresh improvement round from the
+live `HEAD`. Completed rounds and accepted results in controller state are
+history only: do not resume their baseline or treat their gains as progress in
+the new goal. Only a continuation of the same active goal resumes that goal's
+already-fixed round baseline.
+
+At orientation: run `status`; read `results.tsv`, `current.json`, `scratchpad.md`,
+and `ideas.md`. For a new goal, resolve and calibrate live `HEAD`, then fix that
+exact commit as the round baseline. For a continuation of the same goal, recover
+its fixed baseline and latest accepted `keep`, `keep_stack`, or
+`keep_small_gain` result from the goal's recorded state.
 
 Keep the baseline fixed for the invocation. Stack small accepted gains, but complete the round only with accepted controller evidence against that baseline at ratio `>= 1.10`. Unaccepted live `HEAD` speedups do not count. Do not finish by rediscovering an old accepted fast commit.
 
