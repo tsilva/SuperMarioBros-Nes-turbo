@@ -49,8 +49,8 @@ const SMB_BOUNDING_BOX_NIBBLE_PC: u16 = 0x9be1;
 const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
 const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
 const SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES: usize = 160;
-const SMB_OFFSCREEN_BITS_SUBS_PC: u16 = 0xf1d7;
-const SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES: usize = 600;
+const SMB_OFFSCREEN_BITS_SUBS_PC: u16 = 0xf1c0;
+const SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES: usize = 660;
 const SMB_RELATIVE_POSITION_HELPER_PC: u16 = 0xf26d;
 const SMB_DRAW_SPRITE_OBJECT_PC: u16 = 0xf282;
 
@@ -1737,6 +1737,13 @@ fn prg_rom_supports_smb_relative_position_helper(prg_rom: &[u8], mask: usize) ->
 }
 
 const SMB_OFFSCREEN_BITS_SEGMENTS: &[(u16, &[u8])] = &[
+    (
+        0xf1c0,
+        &[
+            0x98, 0x48, 0x20, 0xd7, 0xf1, 0x0a, 0x0a, 0x0a, 0x0a, 0x05, 0x00, 0x85, 0x00, 0x68,
+            0xa8, 0xa5, 0x00, 0x99, 0xd0, 0x03, 0xa6, 0x08, 0x60,
+        ],
+    ),
     (
         0xf1d7,
         &[
@@ -3479,6 +3486,13 @@ impl NesEmulator {
 
         let mut total_cycles = self.extra_cycles as usize;
         self.extra_cycles = 0;
+        self.cpu.a = self.cpu.y;
+        self.set_zn(self.cpu.a);
+        total_cycles += 2;
+        self.push(self.cpu.a);
+        total_cycles += 3;
+        self.push_u16(0xf1c4);
+        total_cycles += 6;
         self.push_u16(0xf1d9);
         total_cycles += 6;
         total_cycles += self.fast_forward_x_offscreen_bits_body();
@@ -3492,6 +3506,31 @@ impl NesEmulator {
         total_cycles += 3;
         let (y_cycles, return_address) = self.fast_forward_y_offscreen_bits_body();
         total_cycles += y_cycles;
+        debug_assert_eq!(return_address, 0xf1c4);
+        self.cpu.a = self.asl(self.cpu.a);
+        self.cpu.a = self.asl(self.cpu.a);
+        self.cpu.a = self.asl(self.cpu.a);
+        self.cpu.a = self.asl(self.cpu.a);
+        total_cycles += 8;
+        self.ora(self.ram_read(0x0000));
+        total_cycles += 3;
+        self.ram_write(0x0000, self.cpu.a);
+        total_cycles += 3;
+        self.cpu.a = self.pop();
+        total_cycles += 4;
+        self.cpu.y = self.cpu.a;
+        self.set_zn(self.cpu.y);
+        total_cycles += 2;
+        self.cpu.a = self.ram_read(0x0000);
+        self.set_zn(self.cpu.a);
+        total_cycles += 3;
+        self.ram_write(0x03d0 + self.cpu.y as usize, self.cpu.a);
+        total_cycles += 5;
+        self.cpu.x = self.ram_read(0x0008);
+        self.set_zn(self.cpu.x);
+        total_cycles += 3;
+        let return_address = self.pop_u16();
+        total_cycles += 6;
         debug_assert!(total_cycles <= max_cycles);
         self.cpu.pc = return_address.wrapping_add(1);
         *cpu_cycle_guard += total_cycles;
