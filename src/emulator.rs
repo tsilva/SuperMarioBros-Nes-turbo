@@ -771,14 +771,6 @@ impl Ppu {
                 let pattern_addr = pattern_base + tile_id * 16 + fine_y;
                 let pixels = self.chr_row_pixels(pattern_addr);
                 let run = (8 - fine_x).min(VISIBLE_FRAME_WIDTH - out_x);
-                let bg_gray = palette_gray[0];
-                let palette_base = (palette_id as usize) * 4;
-                let colors = [
-                    bg_gray,
-                    palette_gray[palette_base + 1],
-                    palette_gray[palette_base + 2],
-                    palette_gray[palette_base + 3],
-                ];
 
                 if fine_x == 0 && run >= 8 {
                     write_full_bg_tile_gray_pixels(
@@ -787,6 +779,13 @@ impl Ppu {
                         &gray_quads[palette_id as usize],
                     );
                 } else {
+                    let palette_base = (palette_id as usize) * 4;
+                    let colors = [
+                        palette_gray[0],
+                        palette_gray[palette_base + 1],
+                        palette_gray[palette_base + 2],
+                        palette_gray[palette_base + 3],
+                    ];
                     for col in 0..run {
                         let pixel = ((pixels >> ((fine_x + col) * 2)) & 3) as usize;
                         dst[row_start + out_x + col] = colors[pixel];
