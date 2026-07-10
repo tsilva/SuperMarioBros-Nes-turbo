@@ -49,8 +49,6 @@ const SMB_BOUNDING_BOX_NIBBLE_PC: u16 = 0x9be1;
 const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
 const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
 const SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES: usize = 160;
-const SMB_EMPTY_MISC_OBJECTS_PC: u16 = 0xbb96;
-const SMB_EMPTY_MISC_OBJECTS_CPU_CYCLES: usize = 142;
 const SMB_OFFSCREEN_BITS_SUBS_PC: u16 = 0xf1c0;
 const SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES: usize = 660;
 const SMB_RELATIVE_POSITION_HELPER_PC: u16 = 0xf26d;
@@ -1726,20 +1724,6 @@ fn prg_rom_supports_smb_bounding_box_helper(prg_rom: &[u8], mask: usize) -> bool
         && prg_rom_supports_smb_bounding_box_nibble(prg_rom, mask)
 }
 
-fn prg_rom_supports_smb_empty_misc_objects(prg_rom: &[u8], mask: usize) -> bool {
-    const SEGMENTS: &[(u16, &[u8])] = &[
-        (0xbb96, &[0xa2, 0x08, 0x86, 0x08, 0xb5, 0x2a, 0xf0, 0x56]),
-        (0xbbf4, &[0xca, 0x10, 0xa1, 0x60]),
-    ];
-    SEGMENTS.iter().all(|(address, expected)| {
-        let offset = (*address as usize).wrapping_sub(0x8000) & mask;
-        expected
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
-    })
-}
-
 fn prg_rom_supports_smb_relative_position_helper(prg_rom: &[u8], mask: usize) -> bool {
     let offset = (SMB_RELATIVE_POSITION_HELPER_PC as usize).wrapping_sub(0x8000) & mask;
     let expected = [
@@ -1967,7 +1951,6 @@ pub struct NesEmulator {
     smb_digit_math_loop_supported: bool,
     smb_bounding_box_nibble_supported: bool,
     smb_bounding_box_helper_supported: bool,
-    smb_empty_misc_objects_supported: bool,
     smb_offscreen_bits_subs_supported: bool,
     smb_relative_position_helper_supported: bool,
     smb_draw_sprite_object_supported: bool,
@@ -2010,8 +1993,6 @@ impl NesEmulator {
             prg_rom_supports_smb_bounding_box_nibble(&cart.prg_rom, prg_addr_mask);
         let smb_bounding_box_helper_supported =
             prg_rom_supports_smb_bounding_box_helper(&cart.prg_rom, prg_addr_mask);
-        let smb_empty_misc_objects_supported =
-            prg_rom_supports_smb_empty_misc_objects(&cart.prg_rom, prg_addr_mask);
         let smb_offscreen_bits_subs_supported =
             prg_rom_supports_smb_offscreen_bits_subs(&cart.prg_rom, prg_addr_mask);
         let smb_relative_position_helper_supported =
@@ -2035,7 +2016,6 @@ impl NesEmulator {
             smb_digit_math_loop_supported,
             smb_bounding_box_nibble_supported,
             smb_bounding_box_helper_supported,
-            smb_empty_misc_objects_supported,
             smb_offscreen_bits_subs_supported,
             smb_relative_position_helper_supported,
             smb_draw_sprite_object_supported,
@@ -2422,14 +2402,6 @@ impl NesEmulator {
                         continue;
                     }
                 }
-                SMB_EMPTY_MISC_OBJECTS_PC => {
-                    if self.try_fast_forward_empty_misc_objects(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
                 SMB_OFFSCREEN_BITS_SUBS_PC => {
                     if self.try_fast_forward_offscreen_bits_subs(
                         &mut cpu_cycle_guard,
@@ -2573,14 +2545,6 @@ impl NesEmulator {
                 }
                 SMB_BOUNDING_BOX_NIBBLE_PC => {
                     if self.try_fast_forward_bounding_box_nibble(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
-                SMB_EMPTY_MISC_OBJECTS_PC => {
-                    if self.try_fast_forward_empty_misc_objects(
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
@@ -3291,40 +3255,6 @@ impl NesEmulator {
         self.extra_cycles = 0;
         *cpu_cycle_guard += cycles;
         *pending_ppu_cycles += cycles * 3;
-        true
-    }
-
-    #[inline(never)]
-    fn try_fast_forward_empty_misc_objects(
-        &mut self,
-        cpu_cycle_guard: &mut usize,
-        pending_ppu_cycles: &mut usize,
-    ) -> bool {
-        if self.cpu.pc != SMB_EMPTY_MISC_OBJECTS_PC
-            || !self.smb_empty_misc_objects_supported
-            || (0..=8).any(|index| self.ram_read(0x002a + index) != 0)
-        {
-            return false;
-        }
-        let total_cycles = SMB_EMPTY_MISC_OBJECTS_CPU_CYCLES + self.extra_cycles as usize;
-        let ppu_cycles = total_cycles * 3;
-        let remaining = self
-            .ppu
-            .cycles_until_next_event()
-            .saturating_sub(*pending_ppu_cycles);
-        if ppu_cycles >= remaining || *cpu_cycle_guard + total_cycles >= CPU_CYCLES_PER_FRAME_GUARD
-        {
-            return false;
-        }
-
-        self.cpu.x = 0xff;
-        self.set_zn(self.cpu.x);
-        self.cpu.a = 0;
-        self.ram_write(0x0008, 0);
-        self.cpu.pc = self.pop_u16().wrapping_add(1);
-        self.extra_cycles = 0;
-        *cpu_cycle_guard += total_cycles;
-        *pending_ppu_cycles += ppu_cycles;
         true
     }
 
@@ -5247,98 +5177,6 @@ mod tests {
             &prg,
             prg.len() - 1
         ));
-    }
-
-    fn add_empty_misc_objects_routine(prg: &mut [u8]) {
-        let entry = (SMB_EMPTY_MISC_OBJECTS_PC - 0x8000) as usize;
-        prg[entry..entry + 8].copy_from_slice(&[0xa2, 0x08, 0x86, 0x08, 0xb5, 0x2a, 0xf0, 0x56]);
-        let loop_back = (0xbbf4 - 0x8000) as usize;
-        prg[loop_back..loop_back + 4].copy_from_slice(&[0xca, 0x10, 0xa1, 0x60]);
-    }
-
-    #[test]
-    fn smb_empty_misc_objects_signature_is_exact() {
-        let mut prg = vec![0xea; 32768];
-        add_empty_misc_objects_routine(&mut prg);
-        assert!(prg_rom_supports_smb_empty_misc_objects(&prg, prg.len() - 1));
-        let entry = (SMB_EMPTY_MISC_OBJECTS_PC - 0x8000) as usize;
-        prg[entry + 7] = 0x55;
-        assert!(!prg_rom_supports_smb_empty_misc_objects(
-            &prg,
-            prg.len() - 1
-        ));
-    }
-
-    #[test]
-    fn empty_misc_objects_fast_forward_matches_interpreter() {
-        let mut prg = vec![0xea; 32768];
-        add_empty_misc_objects_routine(&mut prg);
-        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
-        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
-        for (index, value) in fast.ram.iter_mut().enumerate() {
-            *value = ((index * 17 + index / 9 + 3) & 0xff) as u8;
-        }
-        fast.ram[0x002a..=0x0032].fill(0);
-        interpreted.ram = fast.ram;
-        for emu in [&mut fast, &mut interpreted] {
-            emu.cpu.pc = SMB_EMPTY_MISC_OBJECTS_PC;
-            emu.cpu.a = 0x55;
-            emu.cpu.x = 0x42;
-            emu.cpu.y = 0xa7;
-            emu.cpu.p = FLAG_U | FLAG_C | FLAG_D | FLAG_I | FLAG_V | FLAG_Z;
-            emu.cpu.sp = 0xf9;
-            emu.push_u16(0x9122);
-            emu.extra_cycles = 7;
-            emu.ppu.set_dot(PPU_VBLANK_DOT);
-        }
-
-        let mut cpu_cycle_guard = 0usize;
-        let mut pending_ppu_cycles = 0usize;
-        assert!(
-            fast.try_fast_forward_empty_misc_objects(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-        );
-        let mut interpreted_cycles = 0usize;
-        while interpreted.cpu.pc != 0x9123 {
-            interpreted_cycles += interpreted.cpu_step() as usize;
-            assert!(interpreted_cycles < 200);
-        }
-        assert_eq!(cpu_cycle_guard, interpreted_cycles);
-        assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
-        assert_eq!(fast.cpu.a, interpreted.cpu.a);
-        assert_eq!(fast.cpu.x, interpreted.cpu.x);
-        assert_eq!(fast.cpu.y, interpreted.cpu.y);
-        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
-        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
-        assert_eq!(fast.cpu.p, interpreted.cpu.p);
-        assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
-        assert_eq!(fast.ram, interpreted.ram);
-    }
-
-    #[test]
-    fn empty_misc_objects_fast_forward_refuses_active_slot_or_ppu_event() {
-        let mut prg = vec![0xea; 32768];
-        add_empty_misc_objects_routine(&mut prg);
-        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
-        emu.cpu.pc = SMB_EMPTY_MISC_OBJECTS_PC;
-        emu.ram[0x002e] = 1;
-        let original_cpu = emu.cpu;
-        let original_ram = emu.ram;
-        let mut cpu_cycle_guard = 0usize;
-        let mut pending_ppu_cycles = 0usize;
-        assert!(
-            !emu.try_fast_forward_empty_misc_objects(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-        );
-        assert_eq!(emu.cpu.pc, original_cpu.pc);
-        assert_eq!(emu.ram, original_ram);
-
-        emu.ram[0x002e] = 0;
-        emu.ppu.set_dot(PPU_PRERENDER_DOT - 1);
-        assert!(
-            !emu.try_fast_forward_empty_misc_objects(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-        );
-        assert_eq!(emu.cpu.pc, original_cpu.pc);
-        assert_eq!(cpu_cycle_guard, 0);
-        assert_eq!(pending_ppu_cycles, 0);
     }
 
     #[test]
