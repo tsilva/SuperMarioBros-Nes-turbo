@@ -1,7 +1,7 @@
 use crate::cartridge::Cartridge;
 use crate::emulator::{
-    MarioAction, NesEmulator, StateLoadError, RGB_CHANNELS, VISIBLE_FRAME_HEIGHT,
-    VISIBLE_FRAME_WIDTH,
+    MarioAction, NesEmulator, StateLoadError, DEFAULT_GRAY_MASK_AREA_SCRATCH, RGB_CHANNELS,
+    VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH,
 };
 use crate::profiler::Profiler;
 use rayon::prelude::*;
@@ -1661,15 +1661,7 @@ fn write_default_gray_mask_top_area_frame(
     debug_assert_eq!(resize_plan.src_height, FULL_AREA_SRC_HEIGHT);
     debug_assert_eq!(resize_plan.dst_width, DEFAULT_AREA_DST_WIDTH);
     debug_assert_eq!(resize_plan.dst_height, DEFAULT_AREA_DST_HEIGHT);
-    let native_len = VISIBLE_FRAME_WIDTH * VISIBLE_FRAME_HEIGHT;
-    let top_len = config.crop_top * VISIBLE_FRAME_WIDTH;
-    let native = &mut scratch[..native_len];
-    env.write_gray_visible_mask_lower_frame(
-        &mut native[top_len..],
-        config.crop_top,
-        VISIBLE_FRAME_HEIGHT - config.crop_top,
-    );
-    resize_full_gray_area_mask_top_32(native, dst, config.crop_fill);
+    env.write_gray_visible_mask_area_84x84(dst, scratch, config.crop_fill);
 }
 
 fn write_native_frame(config: VecEnvConfig, env: &NesEmulator, dst: &mut [u8]) {
@@ -1814,6 +1806,8 @@ fn native_scratch_len(config: VecEnvConfig) -> usize {
 fn scratch_len(config: VecEnvConfig) -> usize {
     if config.frame_maxpool {
         2 * rgb_source_frame_len(config)
+    } else if config.uses_default_gray_mask_top_area_resize() {
+        DEFAULT_GRAY_MASK_AREA_SCRATCH
     } else {
         native_scratch_len(config)
     }
@@ -1911,31 +1905,6 @@ fn resize_full_gray_area(src: &[u8], dst: &mut [u8]) {
     }
 }
 
-fn resize_full_gray_area_mask_top_32(src: &[u8], dst: &mut [u8], fill: u8) {
-    debug_assert!(src.len() >= DEFAULT_AREA_SRC_WIDTH * FULL_AREA_SRC_HEIGHT);
-    debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH * DEFAULT_AREA_DST_HEIGHT);
-
-    for dy in 0..DEFAULT_AREA_DST_HEIGHT {
-        let y0 = FULL_AREA_Y0[dy];
-        let y1 = FULL_AREA_Y1[dy];
-        let mut sums = [0u16; DEFAULT_AREA_DST_WIDTH];
-        if y0 < DEFAULT_MASK_CROP_TOP && fill != 0 {
-            let masked_rows = y1.min(DEFAULT_MASK_CROP_TOP) - y0;
-            add_default_area_fill_rows(fill, masked_rows as u16, &mut sums);
-        }
-        for sy in y0.max(DEFAULT_MASK_CROP_TOP)..y1 {
-            let row_start = sy * DEFAULT_AREA_SRC_WIDTH;
-            accumulate_default_area_row(
-                &src[row_start..row_start + DEFAULT_AREA_SRC_WIDTH],
-                &mut sums,
-            );
-        }
-
-        let dst_row = dy * DEFAULT_AREA_DST_WIDTH;
-        write_default_area_sum_row(&sums, FULL_AREA_Y_COUNT[dy], &mut dst[dst_row..]);
-    }
-}
-
 fn write_default_area_sum_row(sums: &[u16; DEFAULT_AREA_DST_WIDTH], y_count: u16, dst: &mut [u8]) {
     debug_assert!(dst.len() >= DEFAULT_AREA_DST_WIDTH);
     if y_count == 2 {
@@ -1962,20 +1931,6 @@ fn write_default_area_sum_row(sums: &[u16; DEFAULT_AREA_DST_WIDTH], y_count: u16
             dst[out + 5] = (sums[sum + 5] / 9) as u8;
             dst[out + 6] = (sums[sum + 6] / 9) as u8;
         }
-    }
-}
-
-fn add_default_area_fill_rows(fill: u8, row_count: u16, sums: &mut [u16; DEFAULT_AREA_DST_WIDTH]) {
-    let fill = u16::from(fill);
-    for group in 0..12usize {
-        let dst = group * 7;
-        sums[dst] += fill * row_count * 2;
-        sums[dst + 1] += fill * row_count * 3;
-        sums[dst + 2] += fill * row_count * 3;
-        sums[dst + 3] += fill * row_count * 3;
-        sums[dst + 4] += fill * row_count * 3;
-        sums[dst + 5] += fill * row_count * 3;
-        sums[dst + 6] += fill * row_count * 3;
     }
 }
 
@@ -2477,7 +2432,7 @@ mod tests {
         );
         let env = make_render_test_env();
         let mut native = vec![0; native_frame_len(config)];
-        let mut scratch = vec![0; native_frame_len(config)];
+        let mut scratch = vec![0; scratch_len(config)];
         let mut expected = vec![0; frame_len(config)];
         let mut actual = vec![0; frame_len(config)];
 
