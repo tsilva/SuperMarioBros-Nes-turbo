@@ -1,5 +1,7 @@
 use crate::cartridge::Cartridge;
 use crate::profiler::Profiler;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::RwLock;
 use std::time::Instant;
 use thiserror::Error;
 
@@ -134,6 +136,29 @@ impl Cpu {
     }
 }
 
+struct GrayBgQuadCache {
+    tables: RwLock<[[u32; 256]; 4]>,
+    dirty: AtomicU8,
+}
+
+impl GrayBgQuadCache {
+    fn new(tables: [[u32; 256]; 4]) -> Self {
+        Self {
+            tables: RwLock::new(tables),
+            dirty: AtomicU8::new(0),
+        }
+    }
+}
+
+impl Clone for GrayBgQuadCache {
+    fn clone(&self) -> Self {
+        Self {
+            tables: RwLock::new(*self.tables.read().unwrap()),
+            dirty: AtomicU8::new(self.dirty.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Ppu {
     chr_rom: Vec<u8>,
@@ -147,6 +172,8 @@ struct Ppu {
     oam: [u8; 256],
     vram: [u8; 2048],
     palette: [u8; 32],
+    palette_gray: [u8; 32],
+    gray_bg_quad_cache: GrayBgQuadCache,
     data_buffer: u8,
     addr: u16,
     temp_addr: u16,
@@ -168,6 +195,8 @@ impl Ppu {
     fn new(chr_rom: Vec<u8>, vertical_mirroring: bool) -> Self {
         let chr_addr_mask = chr_rom.len() - 1;
         let chr_row_pixels = decode_chr_row_pixels(&chr_rom);
+        let palette_gray = [NES_GRAY_PALETTE[0]; 32];
+        let gray_bg_quad_tables = build_gray_bg_quad_tables(&palette_gray);
         Self {
             chr_rom,
             chr_row_pixels,
@@ -180,6 +209,8 @@ impl Ppu {
             oam: [0; 256],
             vram: [0; 2048],
             palette: [0; 32],
+            palette_gray,
+            gray_bg_quad_cache: GrayBgQuadCache::new(gray_bg_quad_tables),
             data_buffer: 0,
             addr: 0,
             temp_addr: 0,
@@ -206,6 +237,7 @@ impl Ppu {
         self.oam = [0; 256];
         self.vram = [0; 2048];
         self.palette = [0; 32];
+        self.refresh_gray_palette_cache();
         self.data_buffer = 0;
         self.addr = 0;
         self.temp_addr = 0;
@@ -243,6 +275,7 @@ impl Ppu {
     ) {
         self.vram.copy_from_slice(ntar);
         self.palette.copy_from_slice(pram);
+        self.refresh_gray_palette_cache();
         self.oam.copy_from_slice(spra);
         self.ctrl = ppur[0];
         self.mask = ppur[1];
@@ -473,6 +506,7 @@ impl Ppu {
             0x3f00..=0x3fff => {
                 let idx = self.mirror_palette_addr(addr);
                 self.palette[idx] = value;
+                self.refresh_gray_palette_entry(idx);
             }
             _ => {}
         }
@@ -735,7 +769,8 @@ impl Ppu {
             dst.fill(palette_gray[0]);
             return;
         }
-        let gray_quads = build_gray_bg_quad_tables(&palette_gray);
+        self.refresh_gray_bg_quad_tables();
+        let gray_quads = self.gray_bg_quad_cache.tables.read().unwrap();
 
         let pattern_base = if self.ctrl & 0x10 != 0 {
             0x1000
@@ -1370,11 +1405,40 @@ impl Ppu {
 
     #[inline]
     fn palette_gray(&self) -> [u8; 32] {
-        let mut out = [0; 32];
-        for (dst, &color) in out.iter_mut().zip(self.palette.iter()) {
+        self.palette_gray
+    }
+
+    fn refresh_gray_palette_cache(&mut self) {
+        for (dst, &color) in self.palette_gray.iter_mut().zip(self.palette.iter()) {
             *dst = NES_GRAY_PALETTE[color as usize];
         }
-        out
+        *self.gray_bg_quad_cache.tables.get_mut().unwrap() =
+            build_gray_bg_quad_tables(&self.palette_gray);
+        self.gray_bg_quad_cache.dirty.store(0, Ordering::Relaxed);
+    }
+
+    fn refresh_gray_palette_entry(&mut self, idx: usize) {
+        self.palette_gray[idx] = NES_GRAY_PALETTE[self.palette[idx] as usize];
+        if idx == 0 {
+            self.gray_bg_quad_cache.dirty.store(0x0f, Ordering::Relaxed);
+        } else if idx < 16 && idx & 3 != 0 {
+            self.gray_bg_quad_cache
+                .dirty
+                .fetch_or(1 << (idx / 4), Ordering::Relaxed);
+        }
+    }
+
+    fn refresh_gray_bg_quad_tables(&self) {
+        if self.gray_bg_quad_cache.dirty.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let mut tables = self.gray_bg_quad_cache.tables.write().unwrap();
+        let dirty = self.gray_bg_quad_cache.dirty.swap(0, Ordering::Relaxed);
+        for (palette_id, table) in tables.iter_mut().enumerate() {
+            if dirty & (1 << palette_id) != 0 {
+                rebuild_gray_bg_quad_table(&self.palette_gray, palette_id, table);
+            }
+        }
     }
 
     #[inline]
@@ -1684,23 +1748,27 @@ fn write_full_bg_tile_gray_pixels(dst: &mut [u8], pixels: u16, quads: &[u32; 256
 fn build_gray_bg_quad_tables(palette_gray: &[u8; 32]) -> [[u32; 256]; 4] {
     let mut tables = [[0u32; 256]; 4];
     for (palette_id, table) in tables.iter_mut().enumerate() {
-        let base = palette_id * 4;
-        let colors = [
-            palette_gray[0],
-            palette_gray[base + 1],
-            palette_gray[base + 2],
-            palette_gray[base + 3],
-        ];
-        for (pixels, packed) in table.iter_mut().enumerate() {
-            *packed = u32::from_le_bytes([
-                colors[pixels & 3],
-                colors[(pixels >> 2) & 3],
-                colors[(pixels >> 4) & 3],
-                colors[(pixels >> 6) & 3],
-            ]);
-        }
+        rebuild_gray_bg_quad_table(palette_gray, palette_id, table);
     }
     tables
+}
+
+fn rebuild_gray_bg_quad_table(palette_gray: &[u8; 32], palette_id: usize, table: &mut [u32; 256]) {
+    let base = palette_id * 4;
+    let colors = [
+        palette_gray[0],
+        palette_gray[base + 1],
+        palette_gray[base + 2],
+        palette_gray[base + 3],
+    ];
+    for (pixels, packed) in table.iter_mut().enumerate() {
+        *packed = u32::from_le_bytes([
+            colors[pixels & 3],
+            colors[(pixels >> 2) & 3],
+            colors[(pixels >> 4) & 3],
+            colors[(pixels >> 6) & 3],
+        ]);
+    }
 }
 
 fn decode_chr_row_pixels(chr_rom: &[u8]) -> Vec<u16> {
@@ -4401,6 +4469,7 @@ mod tests {
         for (idx, value) in ppu.palette.iter_mut().enumerate() {
             *value = ((idx * 3 + 7) & 0x3f) as u8;
         }
+        ppu.refresh_gray_palette_cache();
         ppu.oam.fill(0xff);
         set_sprite(&mut ppu, 63, 70, 3, 0x00, 40);
         set_sprite(&mut ppu, 0, 72, 5, 0x01, 42);
@@ -4414,6 +4483,31 @@ mod tests {
             prg_rom,
             chr_rom: vec![0; 8192],
             vertical_mirroring: true,
+        }
+    }
+
+    #[test]
+    fn gray_palette_cache_tracks_palette_writes() {
+        let mut ppu = Ppu::new(vec![0; 8192], true);
+        for (addr, value) in [
+            (0x3f00, 0x01),
+            (0x3f01, 0x11),
+            (0x3f05, 0x21),
+            (0x3f0f, 0x31),
+            (0x3f11, 0x0f),
+            (0x3f10, 0x30),
+        ] {
+            ppu.ppu_write(addr, value);
+            let mut expected_gray = [0; 32];
+            for (dst, &color) in expected_gray.iter_mut().zip(ppu.palette.iter()) {
+                *dst = NES_GRAY_PALETTE[color as usize];
+            }
+            assert_eq!(ppu.palette_gray, expected_gray);
+            ppu.refresh_gray_bg_quad_tables();
+            assert_eq!(
+                *ppu.gray_bg_quad_cache.tables.read().unwrap(),
+                build_gray_bg_quad_tables(&expected_gray)
+            );
         }
     }
 
@@ -5497,6 +5591,7 @@ mod tests {
         ppu.vram[(40 / 8) * 32 + (40 / 8)] = 2;
         ppu.palette[1] = 0x0f;
         ppu.palette[0x11] = 0x30;
+        ppu.refresh_gray_palette_cache();
         ppu.oam.fill(0xff);
         set_sprite(&mut ppu, 1, 40, 1, 0x00, 40);
         set_sprite(&mut ppu, 0, 40, 1, 0x20, 40);
