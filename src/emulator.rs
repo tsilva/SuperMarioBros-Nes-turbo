@@ -380,11 +380,9 @@ impl Ppu {
 
     #[inline]
     fn take_nmi(&mut self) -> bool {
-        if !self.nmi_pending {
-            return false;
-        }
+        let pending = self.nmi_pending;
         self.nmi_pending = false;
-        true
+        pending
     }
 
     #[inline]
