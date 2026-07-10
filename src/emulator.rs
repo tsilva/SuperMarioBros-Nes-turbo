@@ -2478,7 +2478,7 @@ impl NesEmulator {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_idle_jmp(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2497,7 +2497,7 @@ impl NesEmulator {
             || *cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_sprite0_poll(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2522,7 +2522,7 @@ impl NesEmulator {
             || *cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_sprite0_poll_exit(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2549,7 +2549,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_timer_control_loop(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2607,7 +2607,7 @@ impl NesEmulator {
         (cycles, last_a)
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_oam_clear(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2635,7 +2635,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_scroll_slot_loop(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2711,7 +2711,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_controller_read(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2846,7 +2846,7 @@ impl NesEmulator {
         cycles + 6
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_digit_math_loop(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2937,7 +2937,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_bounding_box_nibble(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -2985,7 +2985,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_bounding_box_helper(
         &mut self,
         cpu_cycle_guard: &mut usize,
@@ -3139,7 +3139,7 @@ impl NesEmulator {
         true
     }
 
-    #[inline]
+    #[inline(never)]
     fn try_fast_forward_relative_position_helper(
         &mut self,
         cpu_cycle_guard: &mut usize,
