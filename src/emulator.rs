@@ -2220,50 +2220,13 @@ impl NesEmulator {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
             }
-            match self.cpu.pc {
-                SMB_IDLE_JMP_PC => {
-                    if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-                    {
-                        if self.ppu.tick(pending_ppu_cycles)
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            pending_ppu_cycles = 0;
-                            break;
-                        }
-                        pending_ppu_cycles = 0;
-                        continue;
-                    }
-                }
-                SMB_SPRITE0_POLL_PC => {
-                    if self.try_fast_forward_sprite0_poll(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        if self.ppu.tick(pending_ppu_cycles)
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            pending_ppu_cycles = 0;
-                            break;
-                        }
-                        pending_ppu_cycles = 0;
-                        continue;
-                    }
-                }
-                SMB_TIMER_CONTROL_LOOP_PC => {
-                    if self.try_fast_forward_timer_control_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
-                SMB_OAM_CLEAR_PC => {
-                    if self
-                        .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-                    {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
+            if is_smb_fast_forward_page(self.cpu.pc) {
+                match self.cpu.pc {
+                    SMB_IDLE_JMP_PC => {
+                        if self.try_fast_forward_idle_jmp(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
                             if self.ppu.tick(pending_ppu_cycles)
                                 || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
                             {
@@ -2271,59 +2234,101 @@ impl NesEmulator {
                                 break;
                             }
                             pending_ppu_cycles = 0;
+                            continue;
                         }
-                        continue;
                     }
-                }
-                SMB_SCROLL_SLOT_LOOP_PC => {
-                    if self.try_fast_forward_scroll_slot_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_SPRITE0_POLL_PC => {
+                        if self.try_fast_forward_sprite0_poll(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            if self.ppu.tick(pending_ppu_cycles)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                            continue;
+                        }
                     }
-                }
-                SMB_CONTROLLER_READ_PC => {
-                    if self.try_fast_forward_controller_read(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_TIMER_CONTROL_LOOP_PC => {
+                        if self.try_fast_forward_timer_control_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_DIGIT_MATH_LOOP_PC => {
-                    if self.try_fast_forward_digit_math_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_OAM_CLEAR_PC => {
+                        if self.try_fast_forward_oam_clear(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                if self.ppu.tick(pending_ppu_cycles)
+                                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                                {
+                                    pending_ppu_cycles = 0;
+                                    break;
+                                }
+                                pending_ppu_cycles = 0;
+                            }
+                            continue;
+                        }
                     }
-                }
-                SMB_BOUNDING_BOX_HELPER_PC => {
-                    if self.try_fast_forward_bounding_box_helper(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_SCROLL_SLOT_LOOP_PC => {
+                        if self.try_fast_forward_scroll_slot_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_BOUNDING_BOX_NIBBLE_PC => {
-                    if self.try_fast_forward_bounding_box_nibble(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_CONTROLLER_READ_PC => {
+                        if self.try_fast_forward_controller_read(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_RELATIVE_POSITION_HELPER_PC => {
-                    if self.try_fast_forward_relative_position_helper(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_DIGIT_MATH_LOOP_PC => {
+                        if self.try_fast_forward_digit_math_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
+                    SMB_BOUNDING_BOX_HELPER_PC => {
+                        if self.try_fast_forward_bounding_box_helper(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    SMB_BOUNDING_BOX_NIBBLE_PC => {
+                        if self.try_fast_forward_bounding_box_nibble(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    SMB_RELATIVE_POSITION_HELPER_PC => {
+                        if self.try_fast_forward_relative_position_helper(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
             let cycles = self.cpu_step() as usize;
             cpu_cycle_guard += cycles;
@@ -2353,50 +2358,13 @@ impl NesEmulator {
             if self.ppu.take_nmi() {
                 self.interrupt(0xfffa, false);
             }
-            match self.cpu.pc {
-                SMB_IDLE_JMP_PC => {
-                    if self.try_fast_forward_idle_jmp(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-                    {
-                        if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            pending_ppu_cycles = 0;
-                            break;
-                        }
-                        pending_ppu_cycles = 0;
-                        continue;
-                    }
-                }
-                SMB_SPRITE0_POLL_PC => {
-                    if self.try_fast_forward_sprite0_poll(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
-                            pending_ppu_cycles = 0;
-                            break;
-                        }
-                        pending_ppu_cycles = 0;
-                        continue;
-                    }
-                }
-                SMB_TIMER_CONTROL_LOOP_PC => {
-                    if self.try_fast_forward_timer_control_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
-                SMB_OAM_CLEAR_PC => {
-                    if self
-                        .try_fast_forward_oam_clear(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-                    {
-                        if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
-                            || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
-                        {
+            if is_smb_fast_forward_page(self.cpu.pc) {
+                match self.cpu.pc {
+                    SMB_IDLE_JMP_PC => {
+                        if self.try_fast_forward_idle_jmp(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
                             if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
                                 || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
                             {
@@ -2404,59 +2372,101 @@ impl NesEmulator {
                                 break;
                             }
                             pending_ppu_cycles = 0;
+                            continue;
                         }
-                        continue;
                     }
-                }
-                SMB_SCROLL_SLOT_LOOP_PC => {
-                    if self.try_fast_forward_scroll_slot_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_SPRITE0_POLL_PC => {
+                        if self.try_fast_forward_sprite0_poll(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                pending_ppu_cycles = 0;
+                                break;
+                            }
+                            pending_ppu_cycles = 0;
+                            continue;
+                        }
                     }
-                }
-                SMB_CONTROLLER_READ_PC => {
-                    if self.try_fast_forward_controller_read(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_TIMER_CONTROL_LOOP_PC => {
+                        if self.try_fast_forward_timer_control_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_DIGIT_MATH_LOOP_PC => {
-                    if self.try_fast_forward_digit_math_loop(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_OAM_CLEAR_PC => {
+                        if self.try_fast_forward_oam_clear(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            if pending_ppu_cycles >= self.ppu.cycles_until_next_event()
+                                || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                            {
+                                if self.ppu.tick_profiled(pending_ppu_cycles, profiler)
+                                    || cpu_cycle_guard >= CPU_CYCLES_PER_FRAME_GUARD
+                                {
+                                    pending_ppu_cycles = 0;
+                                    break;
+                                }
+                                pending_ppu_cycles = 0;
+                            }
+                            continue;
+                        }
                     }
-                }
-                SMB_BOUNDING_BOX_HELPER_PC => {
-                    if self.try_fast_forward_bounding_box_helper(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_SCROLL_SLOT_LOOP_PC => {
+                        if self.try_fast_forward_scroll_slot_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_BOUNDING_BOX_NIBBLE_PC => {
-                    if self.try_fast_forward_bounding_box_nibble(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_CONTROLLER_READ_PC => {
+                        if self.try_fast_forward_controller_read(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
-                }
-                SMB_RELATIVE_POSITION_HELPER_PC => {
-                    if self.try_fast_forward_relative_position_helper(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
+                    SMB_DIGIT_MATH_LOOP_PC => {
+                        if self.try_fast_forward_digit_math_loop(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
                     }
+                    SMB_BOUNDING_BOX_HELPER_PC => {
+                        if self.try_fast_forward_bounding_box_helper(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    SMB_BOUNDING_BOX_NIBBLE_PC => {
+                        if self.try_fast_forward_bounding_box_nibble(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    SMB_RELATIVE_POSITION_HELPER_PC => {
+                        if self.try_fast_forward_relative_position_helper(
+                            &mut cpu_cycle_guard,
+                            &mut pending_ppu_cycles,
+                        ) {
+                            continue;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
             let cycles = self.cpu_step_profiled(profiler) as usize;
             cpu_cycle_guard += cycles;
@@ -4471,6 +4481,14 @@ fn page_crossed(a: u16, b: u16) -> bool {
     (a & 0xff00) != (b & 0xff00)
 }
 
+#[inline(always)]
+fn is_smb_fast_forward_page(pc: u16) -> bool {
+    matches!(
+        pc >> 8,
+        0x80 | 0x81 | 0x82 | 0x8e | 0x8f | 0x9b | 0xe3 | 0xf2
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4537,6 +4555,30 @@ mod tests {
             prg_rom,
             chr_rom: vec![0; 8192],
             vertical_mirroring: true,
+        }
+    }
+
+    #[test]
+    fn fast_forward_page_filter_covers_every_specialized_pc() {
+        for pc in [
+            SMB_IDLE_JMP_PC,
+            SMB_SPRITE0_POLL_PC,
+            SMB_TIMER_CONTROL_LOOP_PC,
+            SMB_OAM_CLEAR_PC,
+            SMB_SCROLL_SLOT_LOOP_PC,
+            SMB_CONTROLLER_READ_PC,
+            SMB_DIGIT_MATH_LOOP_PC,
+            SMB_BOUNDING_BOX_NIBBLE_PC,
+            SMB_BOUNDING_BOX_HELPER_PC,
+            SMB_RELATIVE_POSITION_HELPER_PC,
+        ] {
+            assert!(
+                is_smb_fast_forward_page(pc),
+                "missing page for PC {pc:#06x}"
+            );
+        }
+        for pc in [0x0000, 0x7fff, 0xaf03, 0xc047, 0xffff] {
+            assert!(!is_smb_fast_forward_page(pc));
         }
     }
 
