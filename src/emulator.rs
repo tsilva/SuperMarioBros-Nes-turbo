@@ -49,6 +49,8 @@ const SMB_BOUNDING_BOX_NIBBLE_PC: u16 = 0x9be1;
 const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
 const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
 const SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES: usize = 160;
+const SMB_OFFSCREEN_BITS_SUBS_PC: u16 = 0xf1d7;
+const SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES: usize = 600;
 const SMB_RELATIVE_POSITION_HELPER_PC: u16 = 0xf26d;
 const SMB_DRAW_SPRITE_OBJECT_PC: u16 = 0xf282;
 
@@ -1734,6 +1736,60 @@ fn prg_rom_supports_smb_relative_position_helper(prg_rom: &[u8], mask: usize) ->
         .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
 }
 
+const SMB_OFFSCREEN_BITS_SEGMENTS: &[(u16, &[u8])] = &[
+    (
+        0xf1d7,
+        &[
+            0x20, 0xf6, 0xf1, 0x4a, 0x4a, 0x4a, 0x4a, 0x85, 0x00, 0x4c, 0x39, 0xf2,
+        ],
+    ),
+    (
+        0xf1e3,
+        &[
+            0x7f, 0x3f, 0x1f, 0x0f, 0x07, 0x03, 0x01, 0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc,
+            0xfe, 0xff,
+        ],
+    ),
+    (0xf1f3, &[0x07, 0x0f, 0x07]),
+    (
+        0xf1f6,
+        &[
+            0x86, 0x04, 0xa0, 0x01, 0xb9, 0x1c, 0x07, 0x38, 0xf5, 0x86, 0x85, 0x07, 0xb9, 0x1a,
+            0x07, 0xf5, 0x6d, 0xbe, 0xf3, 0xf1, 0xc9, 0x00, 0x30, 0x10, 0xbe, 0xf4, 0xf1, 0xc9,
+            0x01, 0x10, 0x09, 0xa9, 0x38, 0x85, 0x06, 0xa9, 0x08, 0x20, 0x6d, 0xf2, 0xbd, 0xe3,
+            0xf1, 0xa6, 0x04, 0xc9, 0x00, 0xd0, 0x03, 0x88, 0x10, 0xd0, 0x60,
+        ],
+    ),
+    (
+        0xf22b,
+        &[0x00, 0x08, 0x0c, 0x0e, 0x0f, 0x07, 0x03, 0x01, 0x00],
+    ),
+    (0xf234, &[0x04, 0x00, 0x04]),
+    (0xf237, &[0xff, 0x00]),
+    (
+        0xf239,
+        &[
+            0x86, 0x04, 0xa0, 0x01, 0xb9, 0x37, 0xf2, 0x38, 0xf5, 0xce, 0x85, 0x07, 0xa9, 0x01,
+            0xf5, 0xb5, 0xbe, 0x34, 0xf2, 0xc9, 0x00, 0x30, 0x10, 0xbe, 0x35, 0xf2, 0xc9, 0x01,
+            0x10, 0x09, 0xa9, 0x20, 0x85, 0x06, 0xa9, 0x04, 0x20, 0x6d, 0xf2, 0xbd, 0x2b, 0xf2,
+            0xa6, 0x04, 0xc9, 0x00, 0xd0, 0x03, 0x88, 0x10, 0xd1, 0x60,
+        ],
+    ),
+];
+
+fn prg_rom_supports_smb_offscreen_bits_subs(prg_rom: &[u8], mask: usize) -> bool {
+    SMB_OFFSCREEN_BITS_SEGMENTS
+        .iter()
+        .all(|(address, expected)| {
+            let offset = (*address as usize).wrapping_sub(0x8000) & mask;
+            expected
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+        })
+        && prg_rom_supports_smb_relative_position_helper(prg_rom, mask)
+}
+
 fn prg_rom_supports_smb_draw_sprite_object(prg_rom: &[u8], mask: usize) -> bool {
     let offset = (SMB_DRAW_SPRITE_OBJECT_PC as usize).wrapping_sub(0x8000) & mask;
     let expected = [
@@ -1888,6 +1944,7 @@ pub struct NesEmulator {
     smb_digit_math_loop_supported: bool,
     smb_bounding_box_nibble_supported: bool,
     smb_bounding_box_helper_supported: bool,
+    smb_offscreen_bits_subs_supported: bool,
     smb_relative_position_helper_supported: bool,
     smb_draw_sprite_object_supported: bool,
     controller_state: u8,
@@ -1929,6 +1986,8 @@ impl NesEmulator {
             prg_rom_supports_smb_bounding_box_nibble(&cart.prg_rom, prg_addr_mask);
         let smb_bounding_box_helper_supported =
             prg_rom_supports_smb_bounding_box_helper(&cart.prg_rom, prg_addr_mask);
+        let smb_offscreen_bits_subs_supported =
+            prg_rom_supports_smb_offscreen_bits_subs(&cart.prg_rom, prg_addr_mask);
         let smb_relative_position_helper_supported =
             prg_rom_supports_smb_relative_position_helper(&cart.prg_rom, prg_addr_mask);
         let smb_draw_sprite_object_supported =
@@ -1950,6 +2009,7 @@ impl NesEmulator {
             smb_digit_math_loop_supported,
             smb_bounding_box_nibble_supported,
             smb_bounding_box_helper_supported,
+            smb_offscreen_bits_subs_supported,
             smb_relative_position_helper_supported,
             smb_draw_sprite_object_supported,
             controller_state: 0,
@@ -2335,6 +2395,14 @@ impl NesEmulator {
                         continue;
                     }
                 }
+                SMB_OFFSCREEN_BITS_SUBS_PC => {
+                    if self.try_fast_forward_offscreen_bits_subs(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
                 SMB_RELATIVE_POSITION_HELPER_PC => {
                     if self.try_fast_forward_relative_position_helper(
                         &mut cpu_cycle_guard,
@@ -2470,6 +2538,14 @@ impl NesEmulator {
                 }
                 SMB_BOUNDING_BOX_NIBBLE_PC => {
                     if self.try_fast_forward_bounding_box_nibble(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
+                SMB_OFFSCREEN_BITS_SUBS_PC => {
+                    if self.try_fast_forward_offscreen_bits_subs(
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
@@ -3172,6 +3248,254 @@ impl NesEmulator {
         self.extra_cycles = 0;
         *cpu_cycle_guard += cycles;
         *pending_ppu_cycles += cycles * 3;
+        true
+    }
+
+    #[inline]
+    fn fast_forward_divide_pdiff_body(&mut self) -> usize {
+        let mut cycles = 0;
+        self.ram_write(0x0005, self.cpu.a);
+        cycles += 3;
+        self.cpu.a = self.ram_read(0x0007);
+        self.set_zn(self.cpu.a);
+        cycles += 3;
+        self.cmp(self.cpu.a, self.ram_read(0x0006));
+        cycles += 3;
+        if self.flag(FLAG_C) {
+            cycles += 3;
+            self.pop_u16();
+            return cycles + 6;
+        }
+        cycles += 2;
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        cycles += 6;
+        self.cpu.a &= 0x07;
+        self.set_zn(self.cpu.a);
+        cycles += 2;
+        self.cmp(self.cpu.y, 1);
+        cycles += 2;
+        if self.flag(FLAG_C) {
+            cycles += 3;
+        } else {
+            cycles += 2;
+            self.adc(self.ram_read(0x0005));
+            cycles += 3;
+        }
+        self.cpu.x = self.cpu.a;
+        self.set_zn(self.cpu.x);
+        cycles += 2;
+        self.pop_u16();
+        cycles + 6
+    }
+
+    #[inline]
+    fn fast_forward_x_offscreen_bits_body(&mut self) -> usize {
+        let mut cycles = 0;
+        self.ram_write(0x0004, self.cpu.x);
+        cycles += 3;
+        self.cpu.y = 1;
+        self.set_zn(self.cpu.y);
+        cycles += 2;
+        loop {
+            let y = self.cpu.y as usize;
+            self.cpu.a = self.ram_read(0x071c + y);
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            self.set_flag(FLAG_C, true);
+            cycles += 2;
+            let object_x = self.ram_read(0x86u8.wrapping_add(self.cpu.x) as usize);
+            self.sbc(object_x);
+            cycles += 4;
+            self.ram_write(0x0007, self.cpu.a);
+            cycles += 3;
+            self.cpu.a = self.ram_read(0x071a + y);
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            let object_page = self.ram_read(0x6du8.wrapping_add(self.cpu.x) as usize);
+            self.sbc(object_page);
+            cycles += 4;
+            self.cpu.x = self.prg_read(0xf1f3u16.wrapping_add(self.cpu.y as u16));
+            self.set_zn(self.cpu.x);
+            cycles += 4;
+            self.cmp(self.cpu.a, 0);
+            cycles += 2;
+            if self.flag(FLAG_N) {
+                cycles += 3;
+            } else {
+                cycles += 2;
+                self.cpu.x = self.prg_read(0xf1f4u16.wrapping_add(self.cpu.y as u16));
+                self.set_zn(self.cpu.x);
+                cycles += 4;
+                self.cmp(self.cpu.a, 1);
+                cycles += 2;
+                if !self.flag(FLAG_N) {
+                    cycles += 3;
+                } else {
+                    cycles += 2;
+                    self.cpu.a = 0x38;
+                    self.set_zn(self.cpu.a);
+                    cycles += 2;
+                    self.ram_write(0x0006, self.cpu.a);
+                    cycles += 3;
+                    self.cpu.a = 0x08;
+                    self.set_zn(self.cpu.a);
+                    cycles += 2;
+                    self.push_u16(0xf21d);
+                    cycles += 6;
+                    cycles += self.fast_forward_divide_pdiff_body();
+                }
+            }
+            self.cpu.a = self.prg_read(0xf1e3u16.wrapping_add(self.cpu.x as u16));
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            self.cpu.x = self.ram_read(0x0004);
+            self.set_zn(self.cpu.x);
+            cycles += 3;
+            self.cmp(self.cpu.a, 0);
+            cycles += 2;
+            if !self.flag(FLAG_Z) {
+                cycles += 3;
+                self.pop_u16();
+                return cycles + 6;
+            }
+            cycles += 2;
+            self.cpu.y = self.cpu.y.wrapping_sub(1);
+            self.set_zn(self.cpu.y);
+            cycles += 2;
+            if !self.flag(FLAG_N) {
+                cycles += 4;
+            } else {
+                cycles += 2;
+                self.pop_u16();
+                return cycles + 6;
+            }
+        }
+    }
+
+    #[inline]
+    fn fast_forward_y_offscreen_bits_body(&mut self) -> (usize, u16) {
+        let mut cycles = 0;
+        self.ram_write(0x0004, self.cpu.x);
+        cycles += 3;
+        self.cpu.y = 1;
+        self.set_zn(self.cpu.y);
+        cycles += 2;
+        loop {
+            self.cpu.a = self.prg_read(0xf237u16.wrapping_add(self.cpu.y as u16));
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            self.set_flag(FLAG_C, true);
+            cycles += 2;
+            let object_y = self.ram_read(0xceu8.wrapping_add(self.cpu.x) as usize);
+            self.sbc(object_y);
+            cycles += 4;
+            self.ram_write(0x0007, self.cpu.a);
+            cycles += 3;
+            self.cpu.a = 1;
+            self.set_zn(self.cpu.a);
+            cycles += 2;
+            let object_high = self.ram_read(0xb5u8.wrapping_add(self.cpu.x) as usize);
+            self.sbc(object_high);
+            cycles += 4;
+            self.cpu.x = self.prg_read(0xf234u16.wrapping_add(self.cpu.y as u16));
+            self.set_zn(self.cpu.x);
+            cycles += 4;
+            self.cmp(self.cpu.a, 0);
+            cycles += 2;
+            if self.flag(FLAG_N) {
+                cycles += 3;
+            } else {
+                cycles += 2;
+                self.cpu.x = self.prg_read(0xf235u16.wrapping_add(self.cpu.y as u16));
+                self.set_zn(self.cpu.x);
+                cycles += 4;
+                self.cmp(self.cpu.a, 1);
+                cycles += 2;
+                if !self.flag(FLAG_N) {
+                    cycles += 3;
+                } else {
+                    cycles += 2;
+                    self.cpu.a = 0x20;
+                    self.set_zn(self.cpu.a);
+                    cycles += 2;
+                    self.ram_write(0x0006, self.cpu.a);
+                    cycles += 3;
+                    self.cpu.a = 0x04;
+                    self.set_zn(self.cpu.a);
+                    cycles += 2;
+                    self.push_u16(0xf25f);
+                    cycles += 6;
+                    cycles += self.fast_forward_divide_pdiff_body();
+                }
+            }
+            self.cpu.a = self.prg_read(0xf22bu16.wrapping_add(self.cpu.x as u16));
+            self.set_zn(self.cpu.a);
+            cycles += 4;
+            self.cpu.x = self.ram_read(0x0004);
+            self.set_zn(self.cpu.x);
+            cycles += 3;
+            self.cmp(self.cpu.a, 0);
+            cycles += 2;
+            if !self.flag(FLAG_Z) {
+                cycles += 3;
+                let return_address = self.pop_u16();
+                return (cycles + 6, return_address);
+            }
+            cycles += 2;
+            self.cpu.y = self.cpu.y.wrapping_sub(1);
+            self.set_zn(self.cpu.y);
+            cycles += 2;
+            if !self.flag(FLAG_N) {
+                cycles += 3;
+            } else {
+                cycles += 2;
+                let return_address = self.pop_u16();
+                return (cycles + 6, return_address);
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn try_fast_forward_offscreen_bits_subs(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_OFFSCREEN_BITS_SUBS_PC || !self.smb_offscreen_bits_subs_supported {
+            return false;
+        }
+        let max_cycles = SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES + self.extra_cycles as usize;
+        let remaining = self
+            .ppu
+            .cycles_until_next_event()
+            .saturating_sub(*pending_ppu_cycles);
+        if max_cycles * 3 >= remaining
+            || *cpu_cycle_guard + max_cycles >= CPU_CYCLES_PER_FRAME_GUARD
+        {
+            return false;
+        }
+
+        let mut total_cycles = self.extra_cycles as usize;
+        self.extra_cycles = 0;
+        self.push_u16(0xf1d9);
+        total_cycles += 6;
+        total_cycles += self.fast_forward_x_offscreen_bits_body();
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        self.cpu.a = self.lsr(self.cpu.a);
+        total_cycles += 8;
+        self.ram_write(0x0000, self.cpu.a);
+        total_cycles += 3;
+        total_cycles += 3;
+        let (y_cycles, return_address) = self.fast_forward_y_offscreen_bits_body();
+        total_cycles += y_cycles;
+        debug_assert!(total_cycles <= max_cycles);
+        self.cpu.pc = return_address.wrapping_add(1);
+        *cpu_cycle_guard += total_cycles;
+        *pending_ppu_cycles += total_cycles * 3;
         true
     }
 
@@ -4799,6 +5123,24 @@ mod tests {
     }
 
     #[test]
+    fn smb_offscreen_bits_subs_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        add_offscreen_bits_subs(&mut prg);
+
+        assert!(prg_rom_supports_smb_offscreen_bits_subs(
+            &prg,
+            prg.len() - 1
+        ));
+
+        let offset = (SMB_OFFSCREEN_BITS_SUBS_PC - 0x8000) as usize;
+        prg[offset + 5] = 0x49;
+        assert!(!prg_rom_supports_smb_offscreen_bits_subs(
+            &prg,
+            prg.len() - 1
+        ));
+    }
+
+    #[test]
     fn smb_scroll_slot_loop_signature_is_exact() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_SCROLL_SLOT_LOOP_PC - 0x8000) as usize;
@@ -5444,6 +5786,97 @@ mod tests {
             0x02, 0xa5, 0x02, 0x18, 0x69, 0x08, 0x85, 0x02, 0x98, 0x18, 0x69, 0x08, 0xa8, 0xe8,
             0xe8, 0x60,
         ]);
+    }
+
+    fn add_offscreen_bits_subs(prg: &mut [u8]) {
+        for (address, bytes) in SMB_OFFSCREEN_BITS_SEGMENTS {
+            let offset = (*address - 0x8000) as usize;
+            prg[offset..offset + bytes.len()].copy_from_slice(bytes);
+        }
+        add_relative_position_helper(prg);
+    }
+
+    #[test]
+    fn offscreen_bits_subs_fast_forward_matches_interpreter_states() {
+        let mut prg = vec![0xea; 32768];
+        add_offscreen_bits_subs(&mut prg);
+        let fast_template =
+            NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
+        let interpreted_template =
+            NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        for case in 0..128u8 {
+            let mut fast = fast_template.clone();
+            let mut interpreted = interpreted_template.clone();
+            for value in &mut fast.ram {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                *value = seed as u8;
+            }
+            interpreted.ram = fast.ram;
+            for emu in [&mut fast, &mut interpreted] {
+                emu.cpu.pc = SMB_OFFSCREEN_BITS_SUBS_PC;
+                emu.cpu.a = case.wrapping_mul(37);
+                emu.cpu.x = case.wrapping_mul(11);
+                emu.cpu.y = case.wrapping_mul(19);
+                emu.cpu.p = FLAG_U | (case & (FLAG_C | FLAG_D | FLAG_I | FLAG_V | FLAG_N));
+                emu.cpu.sp = 0xf7;
+                emu.push_u16(0x9122);
+                emu.extra_cycles = 7;
+                emu.ppu.set_dot(PPU_VBLANK_DOT);
+            }
+
+            let mut cpu_cycle_guard = 0usize;
+            let mut pending_ppu_cycles = 0usize;
+            assert!(fast.try_fast_forward_offscreen_bits_subs(
+                &mut cpu_cycle_guard,
+                &mut pending_ppu_cycles
+            ));
+
+            let mut interpreted_cycles = 0usize;
+            while interpreted.cpu.pc != 0x9123 {
+                interpreted_cycles += interpreted.cpu_step() as usize;
+                assert!(interpreted_cycles < SMB_OFFSCREEN_BITS_SUBS_MAX_CPU_CYCLES + 20);
+            }
+
+            assert_eq!(cpu_cycle_guard, interpreted_cycles, "cycle case {case}");
+            assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
+            assert_eq!(fast.cpu.a, interpreted.cpu.a, "a case {case}");
+            assert_eq!(fast.cpu.x, interpreted.cpu.x, "x case {case}");
+            assert_eq!(fast.cpu.y, interpreted.cpu.y, "y case {case}");
+            assert_eq!(fast.cpu.sp, interpreted.cpu.sp, "sp case {case}");
+            assert_eq!(fast.cpu.pc, interpreted.cpu.pc, "pc case {case}");
+            assert_eq!(fast.cpu.p, interpreted.cpu.p, "p case {case}");
+            assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
+            assert_eq!(fast.ram, interpreted.ram, "ram case {case}");
+        }
+    }
+
+    #[test]
+    fn offscreen_bits_subs_fast_forward_does_not_cross_ppu_event() {
+        let mut prg = vec![0xea; 32768];
+        add_offscreen_bits_subs(&mut prg);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_OFFSCREEN_BITS_SUBS_PC;
+        emu.ppu.set_dot(PPU_PRERENDER_DOT - 1);
+        let original_cpu = emu.cpu;
+        let original_ram = emu.ram;
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(!emu
+            .try_fast_forward_offscreen_bits_subs(&mut cpu_cycle_guard, &mut pending_ppu_cycles));
+        assert_eq!(emu.cpu.a, original_cpu.a);
+        assert_eq!(emu.cpu.x, original_cpu.x);
+        assert_eq!(emu.cpu.y, original_cpu.y);
+        assert_eq!(emu.cpu.sp, original_cpu.sp);
+        assert_eq!(emu.cpu.pc, original_cpu.pc);
+        assert_eq!(emu.cpu.p, original_cpu.p);
+        assert_eq!(emu.ram, original_ram);
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
     }
 
     fn assert_draw_sprite_object_fast_forward_matches_interpreted(
