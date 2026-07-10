@@ -933,13 +933,9 @@ impl Ppu {
         let mut counts = [0u8; NES_HEIGHT];
         for sprite in 0..64usize {
             let base = sprite * 4;
-            let sprite_y = self.oam[base] as i16 + 1;
-            for row in 0..8usize {
-                let screen_y = sprite_y + row as i16;
-                if !(0..NES_HEIGHT as i16).contains(&screen_y) {
-                    continue;
-                }
-                let screen_y = screen_y as usize;
+            let sprite_y = self.oam[base] as usize + 1;
+            let sprite_bottom = (sprite_y + 8).min(NES_HEIGHT);
+            for screen_y in sprite_y..sprite_bottom {
                 if counts[screen_y] >= 8 {
                     continue;
                 }
@@ -1105,12 +1101,16 @@ impl Ppu {
             let flip_h = attr & 0x40 != 0;
             let flip_v = attr & 0x80 != 0;
             let behind_background = attr & 0x20 != 0;
+            let row_start = (crop_top_i - sprite_y).clamp(0, 8) as usize;
+            let row_end = (crop_bottom - sprite_y).clamp(0, 8) as usize;
+            let col_start = (crop_left_i - sprite_x).clamp(0, 8) as usize;
+            let col_end = (crop_right - sprite_x).clamp(0, 8) as usize;
+            if row_start >= row_end || col_start >= col_end {
+                continue;
+            }
 
-            for row in 0..8usize {
+            for row in row_start..row_end {
                 let screen_y = sprite_y + row as i16;
-                if screen_y < crop_top_i || screen_y >= crop_bottom {
-                    continue;
-                }
                 if sprite_scanline_mask[screen_y as usize] & (1u64 << sprite) == 0 {
                     continue;
                 }
@@ -1118,11 +1118,8 @@ impl Ppu {
                 let pattern_addr = pattern_base + tile * 16 + tile_row;
                 let lo = self.chr_read(pattern_addr);
                 let hi = self.chr_read(pattern_addr + 8);
-                for col in 0..8usize {
+                for col in col_start..col_end {
                     let screen_x = sprite_x + col as i16;
-                    if screen_x < crop_left_i || screen_x >= crop_right {
-                        continue;
-                    }
                     let tile_col = if flip_h { col } else { 7 - col };
                     let pixel = ((lo >> tile_col) & 1) | (((hi >> tile_col) & 1) << 1);
                     if pixel == 0 {
@@ -5462,6 +5459,30 @@ mod tests {
             assert_ne!(mask[50] & (1u64 << sprite), 0);
         }
         assert_eq!(mask[50] & (1u64 << 8), 0);
+    }
+
+    #[test]
+    fn gray_region_matches_full_frame_crop_at_sprite_edges() {
+        let mut ppu = make_test_ppu();
+        set_sprite(&mut ppu, 3, 32, 11, 0x40, 0);
+        set_sprite(&mut ppu, 4, 220, 13, 0x80, 252);
+        let mut full = vec![0; NES_WIDTH * NES_HEIGHT];
+        ppu.write_gray_frame_region(&mut full, 0, 0, NES_WIDTH, NES_HEIGHT);
+
+        for (top, left, width, height) in [
+            (31usize, 5usize, 240usize, 192usize),
+            (32, VISIBLE_FRAME_LEFT, VISIBLE_FRAME_WIDTH, 192),
+            (188, 245, 11, 36),
+        ] {
+            let mut region = vec![0; width * height];
+            ppu.write_gray_frame_region(&mut region, top, left, width, height);
+            for row in 0..height {
+                assert_eq!(
+                    &region[row * width..(row + 1) * width],
+                    &full[(top + row) * NES_WIDTH + left..(top + row) * NES_WIDTH + left + width],
+                );
+            }
+        }
     }
 
     #[test]
