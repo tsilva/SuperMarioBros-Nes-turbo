@@ -7,8 +7,8 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
 - Support only the Super Mario Bros NES mapper 0/NROM fast path unless broader emulator scope is explicitly designed and benchmarked.
 - Keep ROM files out of the repo; require ROM paths through flags, environment, `.env`, or constructors; validate canonical benchmark/smoke input against SHA-256 `f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de`.
 - Preserve public package/API shape: `supermariobrosnes_turbo`, `SuperMarioBrosNesTurboVecEnv`, `Actions`, action meanings/sets, state helpers, constructors, and manual/policy playback scripts.
-- Expose environment truth through Gymnasium `VectorEnv` APIs only: `reset()` returns `(obs, infos)`, `step()` returns `(obs, rewards, terminations, truncations, infos)`, `metadata["autoreset_mode"]` is set, and SB3 `VecEnv` adaptation is intentionally downstream responsibility.
-- Preserve a fast native Rust/Python `step()` path for batch stepping, rewards, termination checks, preprocessing, frame stacking, typed info extraction, Gymnasium vector `infos`, and same-step autoreset data without per-step Python wrapper chains. Throughput benchmarks and autoresearch optimization target `step()`, not an info-bypassing alternate step API.
+- Expose environment truth through Gymnasium `VectorEnv` APIs only: `reset()` returns `(obs, infos)`, `step()` returns `(obs, rewards, terminations, truncations, infos)`, `metadata["autoreset_mode"]` is set, and SB3 `VecEnv` adaptation is intentionally downstream responsibility. Keep same-step autoreset as the default and support opt-in disabled/manual autoreset with Gymnasium-compatible `options["reset_mask"]` selective resets.
+- Preserve a fast native Rust/Python `step()` path for batch stepping, rewards, termination checks, preprocessing, frame stacking, typed info extraction, Gymnasium vector `infos`, same-step autoreset data, and manual terminal transitions without per-step Python wrapper chains. Throughput benchmarks and autoresearch optimization target `step()`, not an info-bypassing alternate step API.
 - Preserve action modes `Actions.ALL`, `Actions.FILTERED`, and Stable Retro-compatible 36-way `Actions.DISCRETE`.
 - Preserve preprocessing options: grayscale/RGB, frame skip, optional max-pooling, crop remove or mask mode, resize, frame stack, and CHW/HWC layouts.
 - Preserve stable-retro-style state handling: packaged/named states, paths/bytes, per-lane states, weighted mappings, `set_state(...)`, active-state reporting, state sampling weights, and documented SMB states including `Level1-1` through `Level1-4`.
@@ -16,7 +16,8 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
 - Maintain deterministic seeding and lane behavior; every lane must execute its
   own emulator state during vector steps, without repeated-state or
   uniform-action leader/peer copy shortcuts that do not apply to stochastic PPO
-  rollout collection.
+  rollout collection. Selective reset must preserve every unselected lane's
+  emulator state, RNG stream, observation/frame stack, sticky action, and counters.
 - Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, deterministic sampled action workload, and comparable JSON.
 - Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
 - Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; default autoresearch acceptance uses three measured comparison pairs, while `--full` remains available for the longer sequential stability ladder. Ad hoc timings are not acceptance evidence.

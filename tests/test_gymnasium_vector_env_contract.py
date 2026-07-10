@@ -244,6 +244,185 @@ def test_gymnasium_reset_step_contract_and_spaces() -> None:
         env.close()
 
 
+def test_disabled_autoreset_returns_terminal_transition_until_masked_reset() -> None:
+    manual_env = make_env(
+        require_rom(),
+        num_envs=1,
+        done_on={"x_progress": ("x_pos", "increase")},
+        autoreset_mode=AutoresetMode.DISABLED,
+    )
+    same_step_env = make_env(
+        require_rom(),
+        num_envs=1,
+        done_on={"x_progress": ("x_pos", "increase")},
+    )
+    actions = make_action_batch(1, "right")
+    try:
+        manual_env.reset(seed=[123])
+        same_step_env.reset(seed=[123])
+        assert manual_env.autoreset_mode is AutoresetMode.DISABLED
+        assert manual_env.metadata["autoreset_mode"] is AutoresetMode.DISABLED
+        assert same_step_env.metadata["autoreset_mode"] is AutoresetMode.SAME_STEP
+
+        for _ in range(300):
+            manual_result = manual_env.step(actions)
+            same_step_result = same_step_env.step(actions)
+            if bool(manual_result[2][0] or manual_result[3][0]):
+                break
+        else:
+            pytest.fail("x_pos did not increase enough to trigger disabled-mode termination")
+
+        manual_obs, _, terminated, truncated, infos = manual_result
+        same_step_infos = same_step_result[4]
+        assert terminated.tolist() == [True]
+        assert truncated.tolist() == [False]
+        assert not lane_has(infos, "final_obs", 0)
+        assert not lane_has(infos, "final_info", 0)
+        assert bool(lane_value(infos, "terminated", 0)) is True
+        np.testing.assert_array_equal(manual_obs[0], lane_value(same_step_infos, "final_obs", 0))
+
+        with pytest.raises(RuntimeError, match="pending reset"):
+            manual_env.step(actions)
+
+        reset_obs, reset_infos = manual_env.reset(
+            options={"reset_mask": np.array([True], dtype=np.bool_)},
+        )
+        assert lane_has(reset_infos, "x_pos", 0)
+        assert reset_obs.shape == manual_obs.shape
+        manual_env.step(actions)
+    finally:
+        manual_env.close()
+        same_step_env.close()
+
+
+def test_masked_reset_preserves_unselected_lanes_and_allows_active_lane_reset() -> None:
+    kwargs = {
+        "num_envs": 4,
+        "state": ["Level1-1"] * 4,
+        "frame_stack": 4,
+        "autoreset_mode": AutoresetMode.DISABLED,
+        "noop_reset_max": 3,
+        "sticky_action_prob": 0.5,
+    }
+    env = make_env(require_rom(), **kwargs)
+    control = make_env(require_rom(), **kwargs)
+    actions = make_action_batch(4, ["right", "right_b", "noop", "right_a"])
+    try:
+        obs, _ = env.reset(seed=[11, 22, 33, 44])
+        control_obs, _ = control.reset(seed=[11, 22, 33, 44])
+        np.testing.assert_array_equal(obs, control_obs)
+        obs, *_ = env.step(actions)
+        control_obs, *_ = control.step(actions)
+        np.testing.assert_array_equal(obs, control_obs)
+
+        terminal_copies = obs[[1, 3]].copy()
+        unselected_ram = [bytes(env._core._debug_ram(index)) for index in (0, 2)]
+        options = {"reset_mask": np.array([False, True, False, True], dtype=np.bool_)}
+        options_copy = options["reset_mask"].copy()
+        reset_obs, reset_infos = env.reset(options=options)
+        np.testing.assert_array_equal(options["reset_mask"], options_copy)
+        np.testing.assert_array_equal(reset_obs[[0, 2]], obs[[0, 2]])
+        assert [bytes(env._core._debug_ram(index)) for index in (0, 2)] == unselected_ram
+        assert not np.array_equal(reset_obs[[1, 3]], terminal_copies)
+        assert not lane_has(reset_infos, "x_pos", 0)
+        assert lane_has(reset_infos, "x_pos", 1)
+        assert not lane_has(reset_infos, "x_pos", 2)
+        assert lane_has(reset_infos, "x_pos", 3)
+
+        for _ in range(20):
+            result = env.step(actions)
+            control_result = control.step(actions)
+            np.testing.assert_array_equal(result[0][[0, 2]], control_result[0][[0, 2]])
+            np.testing.assert_array_equal(result[1][[0, 2]], control_result[1][[0, 2]])
+    finally:
+        env.close()
+        control.close()
+
+
+def test_masked_reset_explicit_start_indices_and_seed_determinism() -> None:
+    kwargs = {
+        "num_envs": 2,
+        "state": {"Level1-1": 0.5, "Level1-2": 0.5},
+        "noop_reset_max": 5,
+        "sticky_action_prob": 0.5,
+        "autoreset_mode": AutoresetMode.DISABLED,
+    }
+    env = make_env(require_rom(), **kwargs)
+    twin = make_env(require_rom(), **kwargs)
+    mask = np.array([True, False], dtype=np.bool_)
+    starts = np.array([1, 999], dtype=np.int32)
+    try:
+        zero_seed, _ = env.reset(seed=0)
+        twin_zero_seed, _ = twin.reset(seed=[0, 1])
+        np.testing.assert_array_equal(zero_seed, twin_zero_seed)
+
+        first, _ = env.reset(seed=123)
+        twin_first, _ = twin.reset(seed=[123, 124])
+        np.testing.assert_array_equal(first, twin_first)
+
+        before_lane_one = first[1].copy()
+        reset_obs, infos = env.reset(
+            seed=[777, 999],
+            options={"reset_mask": mask, "start_indices": starts},
+        )
+        assert env.active_states()[0] == "Level1-2"
+        np.testing.assert_array_equal(reset_obs[1], before_lane_one)
+        assert lane_value(infos, "start_state", 0) == "Level1-2"
+        assert not lane_has(infos, "start_state", 1)
+
+        sampled_obs, _ = env.reset(
+            seed=[888, None],
+            options={
+                "reset_mask": mask,
+                "start_indices": np.array([-1, -1], dtype=np.int32),
+            },
+        )
+        assert env.active_states()[0] in {"Level1-1", "Level1-2"}
+        np.testing.assert_array_equal(sampled_obs[1], before_lane_one)
+    finally:
+        env.close()
+        twin.close()
+
+
+@pytest.mark.parametrize(
+    ("options", "error", "message"),
+    [
+        ({"reset_mask": [True, False]}, TypeError, "NumPy array"),
+        ({"reset_mask": np.array([True], dtype=np.bool_)}, ValueError, "shape"),
+        ({"reset_mask": np.array([1, 0], dtype=np.uint8)}, TypeError, "dtype"),
+        ({"reset_mask": np.array([False, False], dtype=np.bool_)}, ValueError, "at least one"),
+        ({"reset_mask": np.array([True, False], dtype=np.bool_), "unknown": True}, ValueError, "unsupported reset option"),
+        (
+            {
+                "reset_mask": np.array([True, False], dtype=np.bool_),
+                "start_indices": np.array([99, -1], dtype=np.int32),
+            },
+            ValueError,
+            "valid initial-state catalog index",
+        ),
+    ],
+)
+def test_manual_lifecycle_reset_validation(options, error, message) -> None:
+    env = make_env(require_rom(), num_envs=2, state=["Level1-1", "Level1-2"])
+    try:
+        with pytest.raises(error, match=message):
+            env.reset(options=options)
+    finally:
+        env.close()
+
+
+def test_manual_lifecycle_rejects_bad_seed_length_and_next_step() -> None:
+    with pytest.raises(ValueError, match="SAME_STEP or AutoresetMode.DISABLED"):
+        make_env(require_rom(), autoreset_mode=AutoresetMode.NEXT_STEP)
+
+    env = make_env(require_rom(), num_envs=2)
+    try:
+        with pytest.raises(ValueError, match="seed sequence length"):
+            env.reset(seed=[123])
+    finally:
+        env.close()
+
+
 def test_active_state_indices_are_read_only_and_track_state_labels() -> None:
     env = make_env(
         require_rom(),

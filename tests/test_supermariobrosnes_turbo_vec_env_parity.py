@@ -6,6 +6,7 @@ import inspect
 import pytest
 import numpy as np
 from gymnasium import spaces
+from gymnasium.vector import AutoresetMode
 
 from scripts import compare_supermariobrosnes_turbo_vec_env as compare
 from supermariobrosnes_turbo import env as env_module
@@ -172,6 +173,7 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         "reward_clip",
         "info_filter",
         "done_on",
+        "autoreset_mode",
     ]
 
     native_defaults = {
@@ -204,6 +206,7 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
     assert native_defaults["reward_clip"] is False
     assert native_defaults["info_filter"] == "all"
     assert native_defaults["done_on"] is None
+    assert native_defaults["autoreset_mode"] is AutoresetMode.SAME_STEP
 
     assert native_defaults["state"] is State.DEFAULT
     assert native_defaults["state"].name == "DEFAULT"
@@ -364,6 +367,7 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
             crop_mode,
             crop_fill,
             resize_algorithm,
+            autoreset_same_step,
         ):
             core_calls.append(
                 {
@@ -376,6 +380,7 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
                     "resize_width": resize_width,
                     "resize_height": resize_height,
                     "resize_algorithm": resize_algorithm,
+                    "autoreset_same_step": autoreset_same_step,
                 }
             )
             self.num_envs = num_envs
@@ -441,6 +446,7 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
                 "resize_width": 230,
                 "resize_height": 192,
                 "resize_algorithm": "nearest",
+                "autoreset_same_step": True,
             },
             {
                 "crop_top": 32,
@@ -452,6 +458,7 @@ def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypa
                 "resize_width": 240,
                 "resize_height": 224,
                 "resize_algorithm": "nearest",
+                "autoreset_same_step": True,
             },
         ]
         assert remove_env.single_observation_space.shape == (1, 192, 230)

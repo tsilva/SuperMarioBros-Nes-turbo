@@ -20,7 +20,7 @@ pub struct RetroVecEnv {
 #[pymethods]
 impl RetroVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0, crop_left=0, crop_right=0, crop_mode="remove", crop_fill=0, resize_algorithm="area"))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0, crop_left=0, crop_right=0, crop_mode="remove", crop_fill=0, resize_algorithm="area", autoreset_same_step=true))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -47,6 +47,7 @@ impl RetroVecEnv {
         crop_mode: &str,
         crop_fill: u8,
         resize_algorithm: &str,
+        autoreset_same_step: bool,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -125,6 +126,7 @@ impl RetroVecEnv {
                 weighted_initial_states,
                 seed,
                 done_on_info_rules,
+                autoreset_same_step,
             )
             .map_err(|err| PyValueError::new_err(err.to_string()))?,
         })
@@ -346,6 +348,58 @@ impl RetroVecEnv {
         Ok(())
     }
 
+    pub fn reset_masked_into<'py>(
+        &mut self,
+        py: Python<'py>,
+        mut obs: PyReadwriteArray4<'py, u8>,
+        reset_mask: PyReadonlyArray1<'py, bool>,
+        start_indices: PyReadonlyArray1<'py, i32>,
+        seeds: Vec<Option<u64>>,
+    ) -> PyResult<()> {
+        self.validate_obs_shape(&obs)?;
+        self.validate_vec_len(reset_mask.len(), "reset_mask")?;
+        self.validate_vec_len(start_indices.len(), "start_indices")?;
+        self.validate_vec_len(seeds.len(), "seeds")?;
+        let reset_mask_ro = reset_mask.as_array();
+        let reset_mask_slice = reset_mask_ro
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("reset_mask must be C-contiguous"))?;
+        let start_indices_ro = start_indices.as_array();
+        let start_indices_slice = start_indices_ro
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("start_indices must be C-contiguous"))?;
+        if !reset_mask_slice.iter().any(|selected| *selected) {
+            return Err(PyValueError::new_err(
+                "reset_mask must select at least one lane",
+            ));
+        }
+        let state_count = self.inner.initial_state_policy_names().len();
+        for (env_idx, (&selected, &start_index)) in reset_mask_slice
+            .iter()
+            .zip(start_indices_slice.iter())
+            .enumerate()
+        {
+            if !selected {
+                continue;
+            }
+            if start_index < -1 || (start_index >= 0 && start_index as usize >= state_count) {
+                return Err(PyValueError::new_err(format!(
+                    "start_indices[{env_idx}] must be -1 or a valid initial-state catalog index",
+                )));
+            }
+        }
+        let mut obs_rw = obs.as_array_mut();
+        let obs_slice = obs_rw
+            .as_slice_mut()
+            .ok_or_else(|| PyValueError::new_err("obs must be C-contiguous"))?;
+        py.allow_threads(|| {
+            self.inner
+                .reset_masked_into(obs_slice, reset_mask_slice, start_indices_slice, &seeds)
+        })
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        Ok(())
+    }
+
     pub fn info_into<'py>(
         &self,
         py: Python<'py>,
@@ -447,6 +501,11 @@ impl RetroVecEnv {
         mut xscroll_hi: PyReadwriteArray1<'py, u8>,
         mut xscroll_lo: PyReadwriteArray1<'py, u8>,
     ) -> PyResult<()> {
+        if self.inner.has_pending_reset() {
+            return Err(PyRuntimeError::new_err(
+                "cannot step while a terminated lane is pending reset; call reset(options={'reset_mask': ...}) first",
+            ));
+        }
         self.validate_obs_shape(&obs)?;
         self.validate_vec_len(actions.len(), "actions")?;
         self.validate_vec_len(rewards.len(), "rewards")?;

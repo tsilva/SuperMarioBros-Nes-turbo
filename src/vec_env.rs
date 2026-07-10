@@ -310,7 +310,10 @@ pub struct MarioVecEnv {
     last_terminal_observations: Vec<Option<Vec<u8>>>,
     last_terminal_infos: Vec<Option<InfoSnapshot>>,
     last_actions: Vec<u8>,
-    rng: XorShift64,
+    rngs: Vec<XorShift64>,
+    autoreset_same_step: bool,
+    pending_reset: Vec<bool>,
+    any_pending_reset: bool,
     scratch: Vec<Vec<u8>>,
     profiler: Option<Profiler>,
     profile_shards: Vec<Profiler>,
@@ -324,6 +327,7 @@ impl MarioVecEnv {
         weighted_initial_states: bool,
         seed: u64,
         done_on_info_rules: Vec<DoneOnInfoRule>,
+        autoreset_same_step: bool,
     ) -> Result<Self, StateLoadError> {
         let resize_plan = AreaResizePlan::new(
             config.source_width(),
@@ -352,7 +356,12 @@ impl MarioVecEnv {
             last_terminal_observations: vec![None; config.num_envs],
             last_terminal_infos: vec![None; config.num_envs],
             last_actions: vec![MarioAction::Noop as u8; config.num_envs],
-            rng: XorShift64::new(seed),
+            rngs: (0..config.num_envs)
+                .map(|env_idx| XorShift64::new(seed.wrapping_add(env_idx as u64)))
+                .collect(),
+            autoreset_same_step,
+            pending_reset: vec![false; config.num_envs],
+            any_pending_reset: false,
             scratch,
             profiler: None,
             profile_shards: Vec::new(),
@@ -413,7 +422,7 @@ impl MarioVecEnv {
 
     fn initial_state_index_for_env(&mut self, env_idx: usize) -> usize {
         if self.weighted_initial_states {
-            let sample = self.rng.next_unit_f64();
+            let sample = self.rngs[env_idx].next_unit_f64();
             for (idx, state) in self.initial_states.iter().enumerate() {
                 if sample < state.cumulative_weight {
                     return idx;
@@ -431,7 +440,7 @@ impl MarioVecEnv {
         if self.config.noop_reset_max == 0 {
             return;
         }
-        let noop_count = self.rng.next_bounded_usize(self.config.noop_reset_max + 1);
+        let noop_count = self.rngs[env_idx].next_bounded_usize(self.config.noop_reset_max + 1);
         for _ in 0..noop_count {
             self.envs[env_idx].step_frame(MarioAction::Noop);
             if self.envs[env_idx].is_done() {
@@ -448,7 +457,7 @@ impl MarioVecEnv {
 
         let mut effective = Vec::with_capacity(actions.len());
         for (env_idx, &action) in actions.iter().enumerate() {
-            let chosen = if self.rng.next_unit_f64() < self.config.sticky_action_prob {
+            let chosen = if self.rngs[env_idx].next_unit_f64() < self.config.sticky_action_prob {
                 self.last_actions[env_idx]
             } else {
                 action
@@ -464,24 +473,58 @@ impl MarioVecEnv {
     }
 
     pub fn reset_into(&mut self, obs: &mut [u8]) -> Result<(), StateLoadError> {
+        let reset_mask = vec![true; self.config.num_envs];
+        let start_indices = vec![-1; self.config.num_envs];
+        let seeds = vec![None; self.config.num_envs];
+        self.reset_masked_into(obs, &reset_mask, &start_indices, &seeds)
+    }
+
+    pub fn reset_masked_into(
+        &mut self,
+        obs: &mut [u8],
+        reset_mask: &[bool],
+        start_indices: &[i32],
+        seeds: &[Option<u64>],
+    ) -> Result<(), StateLoadError> {
         let config = self.config;
         let obs_stride = config.obs_len_per_env();
-        self.reset_envs()?;
-        for lane in &mut self.last_done_on_info {
-            lane.clear();
+        debug_assert_eq!(reset_mask.len(), config.num_envs);
+        debug_assert_eq!(start_indices.len(), config.num_envs);
+        debug_assert_eq!(seeds.len(), config.num_envs);
+
+        for env_idx in 0..config.num_envs {
+            if !reset_mask[env_idx] {
+                continue;
+            }
+            if let Some(seed) = seeds[env_idx] {
+                self.rngs[env_idx] = XorShift64::from_explicit_seed(seed);
+            }
+            let explicit_index =
+                (start_indices[env_idx] >= 0).then_some(start_indices[env_idx] as usize);
+            self.reset_one_env(env_idx, explicit_index)?;
+            self.pending_reset[env_idx] = false;
+            self.last_done_on_info[env_idx].clear();
+            self.last_terminal_observations[env_idx] = None;
+            self.last_terminal_infos[env_idx] = None;
         }
 
-        if config.num_envs >= PARALLEL_ENV_THRESHOLD {
+        if reset_mask.iter().filter(|&&selected| selected).count() >= PARALLEL_ENV_THRESHOLD {
             let resize_plan = &self.resize_plan;
             self.envs
-                .par_iter_mut()
+                .par_iter()
                 .zip(self.scratch.par_iter_mut())
                 .zip(obs.par_chunks_mut(obs_stride))
-                .for_each(|((env, scratch), obs_chunk)| {
-                    write_reset_stack(config, resize_plan, env, scratch, obs_chunk);
+                .zip(reset_mask.par_iter())
+                .for_each(|(((env, scratch), obs_chunk), &selected)| {
+                    if selected {
+                        write_reset_stack(config, resize_plan, env, scratch, obs_chunk);
+                    }
                 });
         } else {
-            for env_idx in 0..config.num_envs {
+            for (env_idx, &selected) in reset_mask.iter().enumerate() {
+                if !selected {
+                    continue;
+                }
                 let start = env_idx * obs_stride;
                 let end = start + obs_stride;
                 write_reset_stack(
@@ -493,6 +536,7 @@ impl MarioVecEnv {
                 );
             }
         }
+        self.any_pending_reset = self.pending_reset.iter().any(|pending| *pending);
         Ok(())
     }
 
@@ -560,7 +604,13 @@ impl MarioVecEnv {
     }
 
     pub fn seed(&mut self, seed: u64) {
-        self.rng = XorShift64::new(seed);
+        for (env_idx, rng) in self.rngs.iter_mut().enumerate() {
+            *rng = XorShift64::from_explicit_seed(seed.wrapping_add(env_idx as u64));
+        }
+    }
+
+    pub fn has_pending_reset(&self) -> bool {
+        !self.autoreset_same_step && self.any_pending_reset
     }
 
     pub fn enable_profiler(&mut self) {
@@ -765,10 +815,17 @@ impl MarioVecEnv {
         }
 
         if terminated.iter().any(|done| *done) || truncated.iter().any(|done| *done) {
-            self.autoreset_done_lanes(
-                obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
-                scrolling, time, xscroll_hi, xscroll_lo,
-            );
+            if self.autoreset_same_step {
+                self.autoreset_done_lanes(
+                    obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
+                    scrolling, time, xscroll_hi, xscroll_lo,
+                );
+            } else {
+                for env_idx in 0..config.num_envs {
+                    self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
+                }
+                self.any_pending_reset = true;
+            }
         }
     }
 
@@ -919,10 +976,17 @@ impl MarioVecEnv {
         }
 
         if terminated.iter().any(|done| *done) || truncated.iter().any(|done| *done) {
-            self.autoreset_done_lanes(
-                obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
-                scrolling, time, xscroll_hi, xscroll_lo,
-            );
+            if self.autoreset_same_step {
+                self.autoreset_done_lanes(
+                    obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
+                    scrolling, time, xscroll_hi, xscroll_lo,
+                );
+            } else {
+                for env_idx in 0..config.num_envs {
+                    self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
+                }
+                self.any_pending_reset = true;
+            }
         }
     }
 
@@ -930,24 +994,28 @@ impl MarioVecEnv {
         self.done_on_info_baselines[env_idx] = InfoSnapshot::from_env(&self.envs[env_idx]);
     }
 
-    fn reset_one_env(&mut self, env_idx: usize) {
+    fn reset_one_env(
+        &mut self,
+        env_idx: usize,
+        explicit_state_index: Option<usize>,
+    ) -> Result<(), StateLoadError> {
         if self.initial_states.is_empty() {
             self.envs[env_idx].reset();
             self.active_state_indices[env_idx] = -1;
             self.last_actions[env_idx] = MarioAction::Noop as u8;
             self.apply_noop_reset(env_idx);
             self.refresh_done_baseline(env_idx);
-            return;
+            return Ok(());
         }
 
-        let state_index = self.initial_state_index_for_env(env_idx);
+        let state_index =
+            explicit_state_index.unwrap_or_else(|| self.initial_state_index_for_env(env_idx));
         self.active_state_indices[env_idx] = self.initial_states[state_index].name_index;
-        self.envs[env_idx]
-            .load_fceu_state(&self.initial_states[state_index].data)
-            .expect("previously validated initial state failed to reload");
+        self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
         self.last_actions[env_idx] = MarioAction::Noop as u8;
         self.apply_noop_reset(env_idx);
         self.refresh_done_baseline(env_idx);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -989,7 +1057,8 @@ impl MarioVecEnv {
                 xscroll_hi[env_idx],
                 xscroll_lo[env_idx],
             ));
-            self.reset_one_env(env_idx);
+            self.reset_one_env(env_idx, None)
+                .expect("previously validated initial state failed to reload");
             write_reset_stack(
                 config,
                 &self.resize_plan,
@@ -1050,6 +1119,10 @@ struct XorShift64 {
 }
 
 impl XorShift64 {
+    fn from_explicit_seed(seed: u64) -> Self {
+        Self { state: seed.max(1) }
+    }
+
     fn new(seed: u64) -> Self {
         let state = if seed == 0 {
             SystemTime::now()
