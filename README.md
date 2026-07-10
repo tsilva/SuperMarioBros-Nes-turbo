@@ -188,7 +188,8 @@ env.set_state_policy({"Level1-2": 1.0, "Level1-4": 0.0})  # future reset/autores
 uv sync --extra dev                 # install Python dev dependencies
 uv run maturin develop --release    # build and install the Rust extension
 
-make test                           # Rust tests + HF policy completion/parity oracle
+make test                           # Rust tests + default Python regression suite
+make test-retro-oracle              # manual HF policy/parity oracle acceptance tests
 
 uv run python scripts/smoke_smb.py --rom-path /path/to/SuperMarioBros.nes  # quick ROM/emulator smoke check
 uv run python scripts/benchmark_sps.py --rom-path /path/to/SuperMarioBros.nes --num-envs 16 --steps 500 --repeats 3
