@@ -48,7 +48,6 @@ const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
 const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
 const SMB_BOUNDING_BOX_HELPER_MAX_CPU_CYCLES: usize = 160;
 const SMB_RELATIVE_POSITION_HELPER_PC: u16 = 0xf26d;
-const SMB_OBJECT_DISPATCH_PC: u16 = 0xc047;
 
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
@@ -1620,19 +1619,6 @@ fn prg_rom_supports_smb_relative_position_helper(prg_rom: &[u8], mask: usize) ->
         .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
 }
 
-fn prg_rom_supports_smb_object_dispatch(prg_rom: &[u8], mask: usize) -> bool {
-    let offset = (SMB_OBJECT_DISPATCH_PC as usize).wrapping_sub(0x8000) & mask;
-    let expected = [
-        0xb5, 0x0f, 0x48, 0x0a, 0xb0, 0x12, 0x68, 0xf0, 0x03, 0x4c, 0x82, 0xc8, 0xad, 0x1f, 0x07,
-        0x29, 0x07, 0xc9, 0x07, 0xf0, 0x0e, 0x4c, 0xcc, 0xc0, 0x68, 0x29, 0x0f, 0xa8, 0xb9, 0x0f,
-        0x00, 0xd0, 0x02, 0x95, 0x0f, 0x60,
-    ];
-    expected
-        .iter()
-        .enumerate()
-        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
-}
-
 fn required_field<'a>(
     state: &'a [u8],
     name: &'static [u8; 4],
@@ -1769,7 +1755,6 @@ pub struct NesEmulator {
     smb_bounding_box_nibble_supported: bool,
     smb_bounding_box_helper_supported: bool,
     smb_relative_position_helper_supported: bool,
-    smb_object_dispatch_supported: bool,
     controller_state: u8,
     controller_shift: u8,
     controller_strobe: bool,
@@ -1811,8 +1796,6 @@ impl NesEmulator {
             prg_rom_supports_smb_bounding_box_helper(&cart.prg_rom, prg_addr_mask);
         let smb_relative_position_helper_supported =
             prg_rom_supports_smb_relative_position_helper(&cart.prg_rom, prg_addr_mask);
-        let smb_object_dispatch_supported =
-            prg_rom_supports_smb_object_dispatch(&cart.prg_rom, prg_addr_mask);
         let ppu = Ppu::new(cart.chr_rom, cart.vertical_mirroring);
         let mut emu = Self {
             cpu: Cpu::new(),
@@ -1831,7 +1814,6 @@ impl NesEmulator {
             smb_bounding_box_nibble_supported,
             smb_bounding_box_helper_supported,
             smb_relative_position_helper_supported,
-            smb_object_dispatch_supported,
             controller_state: 0,
             controller_shift: 0,
             controller_strobe: false,
@@ -2223,14 +2205,6 @@ impl NesEmulator {
                         continue;
                     }
                 }
-                SMB_OBJECT_DISPATCH_PC => {
-                    if self.try_fast_forward_object_dispatch(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
                 _ => {}
             }
             let cycles = self.cpu_step() as usize;
@@ -2358,14 +2332,6 @@ impl NesEmulator {
                 }
                 SMB_RELATIVE_POSITION_HELPER_PC => {
                     if self.try_fast_forward_relative_position_helper(
-                        &mut cpu_cycle_guard,
-                        &mut pending_ppu_cycles,
-                    ) {
-                        continue;
-                    }
-                }
-                SMB_OBJECT_DISPATCH_PC => {
-                    if self.try_fast_forward_object_dispatch(
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
@@ -3102,81 +3068,6 @@ impl NesEmulator {
             self.set_zn(self.cpu.x);
         }
         self.cpu.pc = self.pop_u16().wrapping_add(1);
-        self.extra_cycles = 0;
-        *cpu_cycle_guard += total_cycles;
-        *pending_ppu_cycles += ppu_cycles;
-        true
-    }
-
-    #[inline]
-    fn try_fast_forward_object_dispatch(
-        &mut self,
-        cpu_cycle_guard: &mut usize,
-        pending_ppu_cycles: &mut usize,
-    ) -> bool {
-        if self.cpu.pc != SMB_OBJECT_DISPATCH_PC || !self.smb_object_dispatch_supported {
-            return false;
-        }
-
-        let object_state = self.ram_read(0x000f + self.cpu.x as usize);
-        let routine_cycles = if object_state & 0x80 != 0 {
-            let target_state = self.ram_read(0x000f + (object_state & 0x0f) as usize);
-            if target_state == 0 {
-                36
-            } else {
-                33
-            }
-        } else if object_state != 0 {
-            20
-        } else if self.ram_read(0x071f) & 0x07 == 0x07 {
-            35
-        } else {
-            31
-        };
-        let total_cycles = routine_cycles + self.extra_cycles as usize;
-        let ppu_cycles = total_cycles * 3;
-        let remaining = self
-            .ppu
-            .cycles_until_next_event()
-            .saturating_sub(*pending_ppu_cycles);
-        if ppu_cycles >= remaining || *cpu_cycle_guard + total_cycles >= CPU_CYCLES_PER_FRAME_GUARD
-        {
-            return false;
-        }
-
-        self.cpu.a = object_state;
-        self.set_zn(self.cpu.a);
-        self.push(self.cpu.a);
-        self.cpu.a = self.asl(self.cpu.a);
-        if self.flag(FLAG_C) {
-            self.cpu.a = self.pop();
-            self.set_zn(self.cpu.a);
-            self.and(0x0f);
-            self.cpu.y = self.cpu.a;
-            self.set_zn(self.cpu.y);
-            self.cpu.a = self.ram_read(0x000f + self.cpu.y as usize);
-            self.set_zn(self.cpu.a);
-            if self.cpu.a == 0 {
-                self.ram_write(0x000f + self.cpu.x as usize, self.cpu.a);
-            }
-            self.cpu.pc = self.pop_u16().wrapping_add(1);
-        } else {
-            self.cpu.a = self.pop();
-            self.set_zn(self.cpu.a);
-            if self.cpu.a != 0 {
-                self.cpu.pc = 0xc882;
-            } else {
-                self.cpu.a = self.ram_read(0x071f);
-                self.set_zn(self.cpu.a);
-                self.and(0x07);
-                self.cmp(self.cpu.a, 0x07);
-                if self.flag(FLAG_Z) {
-                    self.cpu.pc = self.pop_u16().wrapping_add(1);
-                } else {
-                    self.cpu.pc = 0xc0cc;
-                }
-            }
-        }
         self.extra_cycles = 0;
         *cpu_cycle_guard += total_cycles;
         *pending_ppu_cycles += ppu_cycles;
@@ -4705,22 +4596,6 @@ mod tests {
     }
 
     #[test]
-    fn smb_object_dispatch_signature_is_exact() {
-        let mut prg = vec![0xea; 32768];
-        let offset = (SMB_OBJECT_DISPATCH_PC - 0x8000) as usize;
-        prg[offset..offset + 36].copy_from_slice(&[
-            0xb5, 0x0f, 0x48, 0x0a, 0xb0, 0x12, 0x68, 0xf0, 0x03, 0x4c, 0x82, 0xc8, 0xad, 0x1f,
-            0x07, 0x29, 0x07, 0xc9, 0x07, 0xf0, 0x0e, 0x4c, 0xcc, 0xc0, 0x68, 0x29, 0x0f, 0xa8,
-            0xb9, 0x0f, 0x00, 0xd0, 0x02, 0x95, 0x0f, 0x60,
-        ]);
-
-        assert!(prg_rom_supports_smb_object_dispatch(&prg, prg.len() - 1));
-
-        prg[offset + 22] = 0xcd;
-        assert!(!prg_rom_supports_smb_object_dispatch(&prg, prg.len() - 1));
-    }
-
-    #[test]
     fn sprite0_poll_fast_forward_skips_failed_poll_iterations() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_SPRITE0_POLL_PC - 0x8000) as usize;
@@ -5352,117 +5227,6 @@ mod tests {
             &mut cpu_cycle_guard,
             &mut pending_ppu_cycles
         ));
-        assert_eq!(emu.cpu.a, original_cpu.a);
-        assert_eq!(emu.cpu.x, original_cpu.x);
-        assert_eq!(emu.cpu.y, original_cpu.y);
-        assert_eq!(emu.cpu.sp, original_cpu.sp);
-        assert_eq!(emu.cpu.pc, original_cpu.pc);
-        assert_eq!(emu.cpu.p, original_cpu.p);
-        assert_eq!(emu.ram, original_ram);
-        assert_eq!(cpu_cycle_guard, 0);
-        assert_eq!(pending_ppu_cycles, 0);
-    }
-
-    fn add_object_dispatch(prg: &mut [u8]) {
-        let offset = (SMB_OBJECT_DISPATCH_PC - 0x8000) as usize;
-        prg[offset..offset + 36].copy_from_slice(&[
-            0xb5, 0x0f, 0x48, 0x0a, 0xb0, 0x12, 0x68, 0xf0, 0x03, 0x4c, 0x82, 0xc8, 0xad, 0x1f,
-            0x07, 0x29, 0x07, 0xc9, 0x07, 0xf0, 0x0e, 0x4c, 0xcc, 0xc0, 0x68, 0x29, 0x0f, 0xa8,
-            0xb9, 0x0f, 0x00, 0xd0, 0x02, 0x95, 0x0f, 0x60,
-        ]);
-    }
-
-    fn assert_object_dispatch_fast_forward_matches_interpreted(
-        object_state: u8,
-        target_state: u8,
-        global_state: u8,
-        expected_pc: u16,
-        expected_routine_cycles: usize,
-    ) {
-        let mut prg = vec![0xea; 32768];
-        add_object_dispatch(&mut prg);
-        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
-        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
-        for emu in [&mut fast, &mut interpreted] {
-            emu.cpu.pc = SMB_OBJECT_DISPATCH_PC;
-            emu.cpu.a = 0x55;
-            emu.cpu.x = 3;
-            emu.cpu.y = 0x39;
-            emu.cpu.p = FLAG_U | FLAG_C | FLAG_D | FLAG_I | FLAG_V | FLAG_N;
-            emu.cpu.sp = 0xf9;
-            emu.push_u16(0x9122);
-            emu.ram[0x0012] = object_state;
-            emu.ram[0x000f + (object_state & 0x0f) as usize] = target_state;
-            emu.ram[0x071f] = global_state;
-            emu.extra_cycles = 5;
-            emu.ppu.set_dot(PPU_VBLANK_DOT);
-        }
-
-        let mut cpu_cycle_guard = 0usize;
-        let mut pending_ppu_cycles = 0usize;
-        assert!(
-            fast.try_fast_forward_object_dispatch(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-        );
-
-        let mut interpreted_cycles = 0usize;
-        while interpreted.cpu.pc != expected_pc {
-            interpreted_cycles += interpreted.cpu_step() as usize;
-            assert!(interpreted_cycles < 100);
-        }
-
-        assert_eq!(interpreted_cycles, expected_routine_cycles + 5);
-        assert_eq!(cpu_cycle_guard, interpreted_cycles);
-        assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
-        assert_eq!(fast.cpu.a, interpreted.cpu.a);
-        assert_eq!(fast.cpu.x, interpreted.cpu.x);
-        assert_eq!(fast.cpu.y, interpreted.cpu.y);
-        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
-        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
-        assert_eq!(fast.cpu.p, interpreted.cpu.p);
-        assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
-        assert_eq!(fast.ram, interpreted.ram);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_matches_high_nonzero_target() {
-        assert_object_dispatch_fast_forward_matches_interpreted(0x85, 0x02, 0, 0x9123, 33);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_matches_high_zero_target() {
-        assert_object_dispatch_fast_forward_matches_interpreted(0x85, 0, 0, 0x9123, 36);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_matches_nonzero_tail_jump() {
-        assert_object_dispatch_fast_forward_matches_interpreted(0x04, 0, 0, 0xc882, 20);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_matches_global_seven_return() {
-        assert_object_dispatch_fast_forward_matches_interpreted(0, 0, 7, 0x9123, 35);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_matches_global_tail_jump() {
-        assert_object_dispatch_fast_forward_matches_interpreted(0, 0, 3, 0xc0cc, 31);
-    }
-
-    #[test]
-    fn object_dispatch_fast_forward_does_not_cross_ppu_event() {
-        let mut prg = vec![0xea; 32768];
-        add_object_dispatch(&mut prg);
-        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
-        emu.cpu.pc = SMB_OBJECT_DISPATCH_PC;
-        emu.ppu.set_dot(PPU_PRERENDER_DOT - 1);
-        let original_cpu = emu.cpu;
-        let original_ram = emu.ram;
-        let mut cpu_cycle_guard = 0usize;
-        let mut pending_ppu_cycles = 0usize;
-
-        assert!(
-            !emu.try_fast_forward_object_dispatch(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
-        );
         assert_eq!(emu.cpu.a, original_cpu.a);
         assert_eq!(emu.cpu.x, original_cpu.x);
         assert_eq!(emu.cpu.y, original_cpu.y);
