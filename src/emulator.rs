@@ -42,6 +42,7 @@ const SMB_SCROLL_SLOT_LOOP_PC: u16 = 0x81cf;
 const SMB_CONTROLLER_READ_PC: u16 = 0x8e6a;
 const SMB_CONTROLLER_READ_TAKEN_CPU_CYCLES: usize = 257;
 const SMB_CONTROLLER_READ_NOT_TAKEN_CPU_CYCLES: usize = 258;
+const SMB_DIGIT_MATH_LOOP_PC: u16 = 0x8fa1;
 const SMB_BOUNDING_BOX_NIBBLE_PC: u16 = 0x9be1;
 const SMB_BOUNDING_BOX_NIBBLE_CPU_CYCLES: usize = 41;
 const SMB_BOUNDING_BOX_HELPER_PC: u16 = 0xe3f0;
@@ -1565,6 +1566,18 @@ fn prg_rom_supports_smb_controller_read(prg_rom: &[u8], mask: usize) -> bool {
         .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
 }
 
+fn prg_rom_supports_smb_digit_math_loop(prg_rom: &[u8], mask: usize) -> bool {
+    let offset = (SMB_DIGIT_MATH_LOOP_PC as usize).wrapping_sub(0x8000) & mask;
+    let expected = [
+        0xbd, 0xdd, 0x07, 0xf9, 0xd7, 0x07, 0xca, 0x88, 0x10, 0xf6, 0x90, 0x0e, 0xe8, 0xc8, 0xbd,
+        0xdd, 0x07, 0x99, 0xd7, 0x07, 0xe8, 0xc8, 0xc0, 0x06, 0x90, 0xf4, 0x60,
+    ];
+    expected
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| prg_rom.get((offset + index) & mask) == Some(byte))
+}
+
 fn prg_rom_supports_smb_bounding_box_nibble(prg_rom: &[u8], mask: usize) -> bool {
     let offset = (SMB_BOUNDING_BOX_NIBBLE_PC as usize).wrapping_sub(0x8000) & mask;
     let expected = [
@@ -1725,6 +1738,7 @@ pub struct NesEmulator {
     smb_oam_clear_supported: bool,
     smb_scroll_slot_loop_supported: bool,
     smb_controller_read_supported: bool,
+    smb_digit_math_loop_supported: bool,
     smb_bounding_box_nibble_supported: bool,
     smb_bounding_box_helper_supported: bool,
     controller_state: u8,
@@ -1760,6 +1774,8 @@ impl NesEmulator {
             prg_rom_supports_smb_scroll_slot_loop(&cart.prg_rom, prg_addr_mask);
         let smb_controller_read_supported =
             prg_rom_supports_smb_controller_read(&cart.prg_rom, prg_addr_mask);
+        let smb_digit_math_loop_supported =
+            prg_rom_supports_smb_digit_math_loop(&cart.prg_rom, prg_addr_mask);
         let smb_bounding_box_nibble_supported =
             prg_rom_supports_smb_bounding_box_nibble(&cart.prg_rom, prg_addr_mask);
         let smb_bounding_box_helper_supported =
@@ -1778,6 +1794,7 @@ impl NesEmulator {
             smb_oam_clear_supported,
             smb_scroll_slot_loop_supported,
             smb_controller_read_supported,
+            smb_digit_math_loop_supported,
             smb_bounding_box_nibble_supported,
             smb_bounding_box_helper_supported,
             controller_state: 0,
@@ -2139,6 +2156,14 @@ impl NesEmulator {
                         continue;
                     }
                 }
+                SMB_DIGIT_MATH_LOOP_PC => {
+                    if self.try_fast_forward_digit_math_loop(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
                 SMB_BOUNDING_BOX_HELPER_PC => {
                     if self.try_fast_forward_bounding_box_helper(
                         &mut cpu_cycle_guard,
@@ -2250,6 +2275,14 @@ impl NesEmulator {
                 }
                 SMB_CONTROLLER_READ_PC => {
                     if self.try_fast_forward_controller_read(
+                        &mut cpu_cycle_guard,
+                        &mut pending_ppu_cycles,
+                    ) {
+                        continue;
+                    }
+                }
+                SMB_DIGIT_MATH_LOOP_PC => {
+                    if self.try_fast_forward_digit_math_loop(
                         &mut cpu_cycle_guard,
                         &mut pending_ppu_cycles,
                     ) {
@@ -2603,6 +2636,151 @@ impl NesEmulator {
         }
         self.cpu.y = 0;
         self.cpu.pc = self.pop_u16().wrapping_add(1);
+        *cpu_cycle_guard += total_cycles;
+        *pending_ppu_cycles += ppu_cycles;
+        true
+    }
+
+    fn digit_math_loop_cycles(&self) -> usize {
+        let mut cycles = self.extra_cycles as usize;
+        let mut x = self.cpu.x;
+        let mut y = self.cpu.y;
+        let mut carry = self.flag(FLAG_C);
+
+        loop {
+            let source_base = 0x07ddu16;
+            let source_addr = source_base.wrapping_add(x as u16);
+            let a = self.ram_read(source_addr as usize);
+            cycles += 4 + page_crossed(source_base, source_addr) as usize;
+
+            let sub_base = 0x07d7u16;
+            let sub_addr = sub_base.wrapping_add(y as u16);
+            let value = self.ram_read(sub_addr as usize);
+            let sum = a as u16 + (!value) as u16 + carry as u16;
+            carry = sum > 0xff;
+            cycles += 4 + page_crossed(sub_base, sub_addr) as usize;
+
+            x = x.wrapping_sub(1);
+            y = y.wrapping_sub(1);
+            cycles += 4;
+            if y & 0x80 != 0 {
+                cycles += 2;
+                break;
+            }
+            cycles += 3;
+        }
+
+        if !carry {
+            return cycles + 3 + 6;
+        }
+        cycles += 2;
+        x = x.wrapping_add(1);
+        y = y.wrapping_add(1);
+        cycles += 4;
+
+        loop {
+            let source_base = 0x07ddu16;
+            let source_addr = source_base.wrapping_add(x as u16);
+            cycles += 4 + page_crossed(source_base, source_addr) as usize;
+            cycles += 5;
+            x = x.wrapping_add(1);
+            y = y.wrapping_add(1);
+            cycles += 6;
+            if y >= 6 {
+                cycles += 2;
+                break;
+            }
+            cycles += 3;
+        }
+        cycles + 6
+    }
+
+    #[inline]
+    fn try_fast_forward_digit_math_loop(
+        &mut self,
+        cpu_cycle_guard: &mut usize,
+        pending_ppu_cycles: &mut usize,
+    ) -> bool {
+        if self.cpu.pc != SMB_DIGIT_MATH_LOOP_PC || !self.smb_digit_math_loop_supported {
+            return false;
+        }
+
+        let total_cycles = self.digit_math_loop_cycles();
+        let ppu_cycles = total_cycles * 3;
+        let remaining = self
+            .ppu
+            .cycles_until_next_event()
+            .saturating_sub(*pending_ppu_cycles);
+        if ppu_cycles >= remaining || *cpu_cycle_guard + total_cycles >= CPU_CYCLES_PER_FRAME_GUARD
+        {
+            return false;
+        }
+
+        let mut cycles = self.extra_cycles as usize;
+        loop {
+            let source_base = 0x07ddu16;
+            let source_addr = source_base.wrapping_add(self.cpu.x as u16);
+            self.cpu.a = self.ram_read(source_addr as usize);
+            self.set_zn(self.cpu.a);
+            cycles += 4 + page_crossed(source_base, source_addr) as usize;
+
+            let sub_base = 0x07d7u16;
+            let sub_addr = sub_base.wrapping_add(self.cpu.y as u16);
+            let value = self.ram_read(sub_addr as usize);
+            self.sbc(value);
+            cycles += 4 + page_crossed(sub_base, sub_addr) as usize;
+
+            self.cpu.x = self.cpu.x.wrapping_sub(1);
+            self.set_zn(self.cpu.x);
+            self.cpu.y = self.cpu.y.wrapping_sub(1);
+            self.set_zn(self.cpu.y);
+            cycles += 4;
+            if self.flag(FLAG_N) {
+                cycles += 2;
+                break;
+            }
+            cycles += 3;
+        }
+
+        if !self.flag(FLAG_C) {
+            cycles += 3;
+        } else {
+            cycles += 2;
+            self.cpu.x = self.cpu.x.wrapping_add(1);
+            self.set_zn(self.cpu.x);
+            self.cpu.y = self.cpu.y.wrapping_add(1);
+            self.set_zn(self.cpu.y);
+            cycles += 4;
+
+            loop {
+                let source_base = 0x07ddu16;
+                let source_addr = source_base.wrapping_add(self.cpu.x as u16);
+                self.cpu.a = self.ram_read(source_addr as usize);
+                self.set_zn(self.cpu.a);
+                cycles += 4 + page_crossed(source_base, source_addr) as usize;
+
+                let destination = 0x07d7u16.wrapping_add(self.cpu.y as u16);
+                self.ram_write(destination as usize, self.cpu.a);
+                cycles += 5;
+
+                self.cpu.x = self.cpu.x.wrapping_add(1);
+                self.set_zn(self.cpu.x);
+                self.cpu.y = self.cpu.y.wrapping_add(1);
+                self.set_zn(self.cpu.y);
+                self.cmp(self.cpu.y, 6);
+                cycles += 6;
+                if self.flag(FLAG_C) {
+                    cycles += 2;
+                    break;
+                }
+                cycles += 3;
+            }
+        }
+
+        self.cpu.pc = self.pop_u16().wrapping_add(1);
+        cycles += 6;
+        self.extra_cycles = 0;
+        debug_assert_eq!(cycles, total_cycles);
         *cpu_cycle_guard += total_cycles;
         *pending_ppu_cycles += ppu_cycles;
         true
@@ -4231,6 +4409,21 @@ mod tests {
     }
 
     #[test]
+    fn smb_digit_math_loop_signature_is_exact() {
+        let mut prg = vec![0xea; 32768];
+        let offset = (SMB_DIGIT_MATH_LOOP_PC - 0x8000) as usize;
+        prg[offset..offset + 27].copy_from_slice(&[
+            0xbd, 0xdd, 0x07, 0xf9, 0xd7, 0x07, 0xca, 0x88, 0x10, 0xf6, 0x90, 0x0e, 0xe8, 0xc8,
+            0xbd, 0xdd, 0x07, 0x99, 0xd7, 0x07, 0xe8, 0xc8, 0xc0, 0x06, 0x90, 0xf4, 0x60,
+        ]);
+
+        assert!(prg_rom_supports_smb_digit_math_loop(&prg, prg.len() - 1));
+
+        prg[offset + 25] = 0xf2;
+        assert!(!prg_rom_supports_smb_digit_math_loop(&prg, prg.len() - 1));
+    }
+
+    #[test]
     fn smb_scroll_slot_loop_signature_is_exact() {
         let mut prg = vec![0xea; 32768];
         let offset = (SMB_SCROLL_SLOT_LOOP_PC - 0x8000) as usize;
@@ -4719,6 +4912,120 @@ mod tests {
             !emu.try_fast_forward_scroll_slot_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
         );
         assert_eq!(emu.cpu.pc, SMB_SCROLL_SLOT_LOOP_PC);
+        assert_eq!(cpu_cycle_guard, 0);
+        assert_eq!(pending_ppu_cycles, 0);
+    }
+
+    fn add_digit_math_routine(prg: &mut [u8]) {
+        let offset = (SMB_DIGIT_MATH_LOOP_PC - 0x8000) as usize;
+        prg[offset..offset + 27].copy_from_slice(&[
+            0xbd, 0xdd, 0x07, 0xf9, 0xd7, 0x07, 0xca, 0x88, 0x10, 0xf6, 0x90, 0x0e, 0xe8, 0xc8,
+            0xbd, 0xdd, 0x07, 0x99, 0xd7, 0x07, 0xe8, 0xc8, 0xc0, 0x06, 0x90, 0xf4, 0x60,
+        ]);
+    }
+
+    fn assert_digit_math_fast_forward_matches_interpreted(
+        carry_out: bool,
+        start_x: u8,
+        start_y: u8,
+    ) {
+        let mut prg = vec![0xea; 32768];
+        add_digit_math_routine(&mut prg);
+        let mut fast = NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
+        let mut interpreted = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        for (index, value) in fast.ram.iter_mut().enumerate() {
+            *value = ((index * 31 + index / 7 + 19) & 0xff) as u8;
+        }
+        let mut last_x = start_x;
+        let mut last_y = start_y;
+        loop {
+            let next_y = last_y.wrapping_sub(1);
+            if next_y & 0x80 != 0 {
+                break;
+            }
+            last_x = last_x.wrapping_sub(1);
+            last_y = next_y;
+        }
+        let source = (0x07ddusize + last_x as usize) & 0x07ff;
+        let subtrahend = (0x07d7usize + last_y as usize) & 0x07ff;
+        fast.ram[source] = if carry_out { 0xf0 } else { 0x10 };
+        fast.ram[subtrahend] = if carry_out { 0x10 } else { 0xf0 };
+        interpreted.ram = fast.ram;
+        for emu in [&mut fast, &mut interpreted] {
+            emu.cpu.pc = SMB_DIGIT_MATH_LOOP_PC;
+            emu.cpu.a = 0x55;
+            emu.cpu.x = start_x;
+            emu.cpu.y = start_y;
+            emu.cpu.p = FLAG_U | FLAG_C | FLAG_D | FLAG_I | FLAG_V;
+            emu.cpu.sp = 0xf9;
+            emu.push_u16(0x9122);
+            emu.extra_cycles = 7;
+            emu.ppu.set_dot(PPU_VBLANK_DOT);
+        }
+
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+        assert!(
+            fast.try_fast_forward_digit_math_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+        );
+
+        let mut interpreted_cycles = 0usize;
+        while interpreted.cpu.pc != 0x9123 {
+            interpreted_cycles += interpreted.cpu_step() as usize;
+            assert!(interpreted_cycles < 500);
+        }
+
+        assert_eq!(cpu_cycle_guard, interpreted_cycles);
+        assert_eq!(pending_ppu_cycles, interpreted_cycles * 3);
+        assert_eq!(fast.cpu.a, interpreted.cpu.a);
+        assert_eq!(fast.cpu.x, interpreted.cpu.x);
+        assert_eq!(fast.cpu.y, interpreted.cpu.y);
+        assert_eq!(fast.cpu.sp, interpreted.cpu.sp);
+        assert_eq!(fast.cpu.pc, interpreted.cpu.pc);
+        assert_eq!(fast.cpu.p, interpreted.cpu.p);
+        assert_eq!(fast.extra_cycles, interpreted.extra_cycles);
+        assert_eq!(fast.ram, interpreted.ram);
+    }
+
+    #[test]
+    fn digit_math_fast_forward_matches_interpreted_carry_clear() {
+        assert_digit_math_fast_forward_matches_interpreted(false, 2, 1);
+    }
+
+    #[test]
+    fn digit_math_fast_forward_matches_interpreted_carry_set() {
+        assert_digit_math_fast_forward_matches_interpreted(true, 2, 1);
+    }
+
+    #[test]
+    fn digit_math_fast_forward_matches_page_crossing_indices() {
+        assert_digit_math_fast_forward_matches_interpreted(true, 0x40, 0x81);
+    }
+
+    #[test]
+    fn digit_math_fast_forward_does_not_cross_ppu_event() {
+        let mut prg = vec![0xea; 32768];
+        add_digit_math_routine(&mut prg);
+        let mut emu = NesEmulator::new_with_options(make_test_cart_with_prg(prg), true);
+        emu.cpu.pc = SMB_DIGIT_MATH_LOOP_PC;
+        emu.cpu.x = 2;
+        emu.cpu.y = 1;
+        emu.ppu.set_dot(PPU_PRERENDER_DOT - 1);
+        let original_cpu = emu.cpu;
+        let original_ram = emu.ram;
+        let mut cpu_cycle_guard = 0usize;
+        let mut pending_ppu_cycles = 0usize;
+
+        assert!(
+            !emu.try_fast_forward_digit_math_loop(&mut cpu_cycle_guard, &mut pending_ppu_cycles)
+        );
+        assert_eq!(emu.cpu.a, original_cpu.a);
+        assert_eq!(emu.cpu.x, original_cpu.x);
+        assert_eq!(emu.cpu.y, original_cpu.y);
+        assert_eq!(emu.cpu.sp, original_cpu.sp);
+        assert_eq!(emu.cpu.pc, original_cpu.pc);
+        assert_eq!(emu.cpu.p, original_cpu.p);
+        assert_eq!(emu.ram, original_ram);
         assert_eq!(cpu_cycle_guard, 0);
         assert_eq!(pending_ppu_cycles, 0);
     }
