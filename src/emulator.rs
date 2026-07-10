@@ -3298,21 +3298,6 @@ impl NesEmulator {
 
     #[inline]
     fn fetch_u16(&mut self) -> u16 {
-        let pc = self.cpu.pc;
-        if pc >= 0x8000 && pc != u16::MAX {
-            let index = ((pc - 0x8000) as usize) & self.prg_addr_mask;
-            let next_index = (index + 1) & self.prg_addr_mask;
-            // SAFETY: SMB/NROM PRG ROM sizes are powers of two and
-            // prg_addr_mask is len - 1, so both masked indices are in bounds.
-            let (lo, hi) = unsafe {
-                (
-                    *self.prg_rom.get_unchecked(index),
-                    *self.prg_rom.get_unchecked(next_index),
-                )
-            };
-            self.cpu.pc = pc.wrapping_add(2);
-            return lo as u16 | ((hi as u16) << 8);
-        }
         let lo = self.fetch_u8() as u16;
         let hi = self.fetch_u8() as u16;
         lo | (hi << 8)
@@ -4552,42 +4537,6 @@ mod tests {
             prg_rom,
             chr_rom: vec![0; 8192],
             vertical_mirroring: true,
-        }
-    }
-
-    #[test]
-    fn prg_fetch_u16_matches_two_byte_fetch_at_boundaries() {
-        for prg_len in [16_384usize, 32_768usize] {
-            let prg = (0..prg_len)
-                .map(|index| ((index * 29 + index / 17 + 11) & 0xff) as u8)
-                .collect::<Vec<_>>();
-            for pc in [
-                0x1fff_u16, 0x4015, 0x7fff, 0x8000, 0xbffe, 0xbfff, 0xfffe, 0xffff,
-            ] {
-                let mut actual =
-                    NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
-                let mut reference =
-                    NesEmulator::new_with_options(make_test_cart_with_prg(prg.clone()), true);
-                for emu in [&mut actual, &mut reference] {
-                    emu.cpu.pc = pc;
-                    emu.ram[0] = 0xa7;
-                    emu.controller_shift = 0x5a;
-                    emu.ppu.status = 0xe0;
-                }
-
-                let actual_value = actual.fetch_u16();
-                let lo = reference.fetch_u8() as u16;
-                let hi = reference.fetch_u8() as u16;
-                let reference_value = lo | (hi << 8);
-
-                assert_eq!(
-                    actual_value, reference_value,
-                    "PRG length {prg_len}, PC {pc:#06x}"
-                );
-                assert_eq!(actual.cpu.pc, reference.cpu.pc);
-                assert_eq!(actual.controller_shift, reference.controller_shift);
-                assert_eq!(actual.ppu.status, reference.ppu.status);
-            }
         }
     }
 
