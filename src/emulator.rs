@@ -139,6 +139,25 @@ impl Cpu {
 struct GrayBgQuadCache {
     tables: RwLock<[[u32; 256]; 4]>,
     dirty: AtomicU8,
+    frame: RwLock<Option<GrayBgFrameCacheEntry>>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct GrayBgFrameCacheKey {
+    vram: [u8; 2048],
+    palette_gray: [u8; 16],
+    ctrl: u8,
+    mask: u8,
+    scroll_x_px: u16,
+    scroll_y_px: u16,
+    crop_top: usize,
+    height: usize,
+}
+
+#[derive(Clone)]
+struct GrayBgFrameCacheEntry {
+    key: GrayBgFrameCacheKey,
+    pixels: Vec<u8>,
 }
 
 impl GrayBgQuadCache {
@@ -146,6 +165,7 @@ impl GrayBgQuadCache {
         Self {
             tables: RwLock::new(tables),
             dirty: AtomicU8::new(0),
+            frame: RwLock::new(None),
         }
     }
 }
@@ -155,6 +175,7 @@ impl Clone for GrayBgQuadCache {
         Self {
             tables: RwLock::new(*self.tables.read().unwrap()),
             dirty: AtomicU8::new(self.dirty.load(Ordering::Relaxed)),
+            frame: RwLock::new(None),
         }
     }
 }
@@ -759,6 +780,39 @@ impl Ppu {
     }
 
     fn write_bg_gray_visible_mask_lower_tiled(
+        &self,
+        dst: &mut [u8],
+        crop_top: usize,
+        height: usize,
+    ) {
+        let mut bg_palette = [0; 16];
+        bg_palette.copy_from_slice(&self.palette_gray[..16]);
+        let key = GrayBgFrameCacheKey {
+            vram: self.vram,
+            palette_gray: bg_palette,
+            ctrl: self.ctrl,
+            mask: self.mask & 0x08,
+            scroll_x_px: self.render_scroll_x_px(),
+            scroll_y_px: self.scroll_y_px,
+            crop_top,
+            height,
+        };
+        {
+            let cached = self.gray_bg_quad_cache.frame.read().unwrap();
+            if let Some(entry) = cached.as_ref().filter(|entry| entry.key == key) {
+                dst.copy_from_slice(&entry.pixels);
+                return;
+            }
+        }
+
+        self.write_bg_gray_visible_mask_lower_tiled_uncached(dst, crop_top, height);
+        *self.gray_bg_quad_cache.frame.write().unwrap() = Some(GrayBgFrameCacheEntry {
+            key,
+            pixels: dst.to_vec(),
+        });
+    }
+
+    fn write_bg_gray_visible_mask_lower_tiled_uncached(
         &self,
         dst: &mut [u8],
         crop_top: usize,
@@ -4508,6 +4562,40 @@ mod tests {
                 *ppu.gray_bg_quad_cache.tables.read().unwrap(),
                 build_gray_bg_quad_tables(&expected_gray)
             );
+        }
+    }
+
+    #[test]
+    fn gray_background_frame_cache_tracks_all_render_inputs() {
+        let mut ppu = make_test_ppu();
+        let crop_top = VISIBLE_FRAME_TOP + DEFAULT_GRAY_CROP_TOP;
+        let height = DEFAULT_GRAY_CROP_HEIGHT;
+        let mut actual = vec![0; VISIBLE_FRAME_WIDTH * height];
+
+        for change in 0..6 {
+            if change == 1 {
+                ppu.vram[37] ^= 0x5a;
+            } else if change == 2 {
+                ppu.palette[5] ^= 0x0f;
+                ppu.refresh_gray_palette_cache();
+            } else if change == 3 {
+                ppu.scroll_x_px = ppu.scroll_x_px.wrapping_add(3);
+            } else if change == 4 {
+                ppu.ctrl ^= 0x10;
+            } else if change == 5 {
+                ppu.mask ^= 0x08;
+            }
+
+            actual.fill(0xa5);
+            ppu.write_bg_gray_visible_mask_lower_tiled(&mut actual, crop_top, height);
+            let uncached = ppu.clone();
+            let mut expected = vec![0; actual.len()];
+            uncached.write_bg_gray_visible_mask_lower_tiled(&mut expected, crop_top, height);
+            assert_eq!(actual, expected);
+
+            actual.fill(0x5a);
+            ppu.write_bg_gray_visible_mask_lower_tiled(&mut actual, crop_top, height);
+            assert_eq!(actual, expected);
         }
     }
 
