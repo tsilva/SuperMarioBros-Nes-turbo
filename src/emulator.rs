@@ -1927,13 +1927,6 @@ fn sign_extend_u8(value: u8) -> i16 {
     (value as i8) as i16
 }
 
-#[inline]
-fn decode_ln_bcd_be(bytes: &[u8]) -> u32 {
-    bytes
-        .iter()
-        .fold(0u32, |value, byte| value * 10 + u32::from(byte & 0x0f))
-}
-
 #[derive(Clone)]
 pub struct NesEmulator {
     cpu: Cpu,
@@ -3658,9 +3651,16 @@ impl NesEmulator {
         self.level_hi = sign_extend_u8(self.ram[0x075f]);
         self.level_lo = sign_extend_u8(self.ram[0x075c]);
         self.lives = sign_extend_u8(self.ram[0x075a]);
-        self.score = decode_ln_bcd_be(&self.ram[0x07dd..0x07e3]) as u32;
+        self.score = u32::from(self.ram[0x07dd] & 0x0f) * 100_000
+            + u32::from(self.ram[0x07de] & 0x0f) * 10_000
+            + u32::from(self.ram[0x07df] & 0x0f) * 1_000
+            + u32::from(self.ram[0x07e0] & 0x0f) * 100
+            + u32::from(self.ram[0x07e1] & 0x0f) * 10
+            + u32::from(self.ram[0x07e2] & 0x0f);
         self.scrolling = sign_extend_u8(self.ram[0x0778]);
-        self.time = decode_ln_bcd_be(&self.ram[0x07f8..0x07fb]) as u16;
+        self.time = u16::from(self.ram[0x07f8] & 0x0f) * 100
+            + u16::from(self.ram[0x07f9] & 0x0f) * 10
+            + u16::from(self.ram[0x07fa] & 0x0f);
         self.xscroll_hi = self.ram[0x071a];
         self.xscroll_lo = self.ram[0x071c];
         self.ppu.set_scroll_override_x(None);
