@@ -3844,8 +3844,11 @@ impl NesEmulator {
             }
             _ => 2,
         };
-        cycles = cycles.saturating_add(self.extra_cycles);
-        self.extra_cycles = 0;
+        let extra_cycles = self.extra_cycles;
+        if extra_cycles != 0 {
+            cycles = cycles.saturating_add(extra_cycles);
+            self.extra_cycles = 0;
+        }
         cycles
     }
 
