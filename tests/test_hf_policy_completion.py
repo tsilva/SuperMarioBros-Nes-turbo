@@ -26,7 +26,7 @@ EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post8"
 def require_policy_prerequisites() -> None:
     require_rom()
 
-    for package in ("stable_baselines3", "stable-retro-turbo"):
+    for package in ("torch", "stable-retro-turbo"):
         try:
             version = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -89,16 +89,16 @@ def level1_policy_config(*, steps: int = MAX_STEPS_PER_EPISODE) -> compare.Compa
 
 
 def load_level1_policy():
-    from stable_baselines3 import PPO
+    from supermariobrosnes_turbo.ppo import load_policy_checkpoint
 
     model_path = play_policy.resolve_model_path(
         HF_LEVEL1_POLICY,
         filename=None,
         cache_dir=Path("artifacts/hf_cache"),
     )
-    model = PPO.load(model_path, device="cpu")
+    model = load_policy_checkpoint(model_path, device="cpu")
     action_names = play_policy.ACTION_SETS["simple"]
-    assert getattr(model.action_space, "n", None) == len(action_names)
+    assert model.action_count == len(action_names)
     return model
 
 

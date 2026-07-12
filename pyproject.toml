@@ -19,8 +19,8 @@ dev = [
   "huggingface-hub>=1.8.0",
   "maturin>=1.7,<2",
   "pytest>=8",
-  "stable-baselines3>=2.7.1",
   "stable-retro-turbo==1.0.1.post8; python_version == '3.14'",
+  "torch>=2.8.0",
 ]
 
 [tool.maturin]
@@ -48,6 +48,6 @@ markers = [
 dev = [
     "cibuildwheel>=2.23.4,<4",
     "huggingface-hub>=1.8.0",
-    "stable-baselines3>=2.7.1",
+    "torch>=2.8.0",
     "twine>=6.2.0",
 ]

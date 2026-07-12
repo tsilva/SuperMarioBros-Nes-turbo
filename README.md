@@ -82,6 +82,20 @@ ROM files are not included in this repository. Pass `--rom-path` to scripts, set
 f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de
 ```
 
+## Train Level 1-1
+
+`train.py` is a standalone PyTorch PPO implementation; it does not use Stable
+Baselines3. On Apple Silicon it automatically selects MPS with the `64 x 128`
+profile, while other machines use the original `16 x 512` B55 rollout shape.
+
+```bash
+.venv/bin/python train.py
+```
+
+Training terminates on life loss and level change, logs the rolling
+`completion_rate`, stops at `100/100`, and writes `final_model.pt`, periodic
+`.pt` checkpoints, and `level_completion.jsonl` under `runs/level1-1-b55/`.
+
 Import the package as `supermariobrosnes_turbo`:
 
 ```python
@@ -122,7 +136,7 @@ env = SuperMarioBrosNesTurboVecEnv(
 
 Mask crop is useful for hiding HUD or other static regions during initial training while preserving spatial compatibility for later finetuning on full observations.
 
-`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. Same-step autoreset remains the default: a completed lane returns its reset observation while `infos["final_obs"]` and `infos["final_info"]` preserve the completed transition. Consumers that own episode boundaries can pass `autoreset_mode=AutoresetMode.DISABLED`; terminal observations are then returned directly and another step is rejected until all done lanes are reset with `reset(options={"reset_mask": mask})`. A masked reset changes only selected lanes and returns reset info only for those lanes. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call. Stable Baselines3 adaptation is intentionally not provided here; rlab or another downstream adapter should translate Gymnasium vector output to SB3 when needed.
+`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. Same-step autoreset remains the default: a completed lane returns its reset observation while `infos["final_obs"]` and `infos["final_info"]` preserve the completed transition. Consumers that own episode boundaries can pass `autoreset_mode=AutoresetMode.DISABLED`; terminal observations are then returned directly and another step is rejected until all done lanes are reset with `reset(options={"reset_mask": mask})`. A masked reset changes only selected lanes and returns reset info only for those lanes. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call.
 
 ```python
 import numpy as np
@@ -270,7 +284,7 @@ single-action loop.
 - The current emulator scope is SuperMarioBros-Nes mapper 0 NROM.
 - The Python package exposes `SuperMarioBrosNesTurboVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`. `SuperMarioBrosNesTurboVecEnv` subclasses Gymnasium `VectorEnv` and does not subclass or require Stable Baselines3.
 - `use_restricted_actions=Actions.ALL` and `Actions.FILTERED` consume per-button `MultiBinary` masks; `Actions.DISCRETE` consumes Stable Retro's 36-way discrete action encoding.
-- `scripts/play_policy.py` loads Stable Baselines3 PPO checkpoints from a local `.zip`, a Hugging Face repo id, or a `https://huggingface.co/...` URL and displays raw RGB gameplay in the SDL2 GUI while feeding the model its preprocessed observation stack. It defaults to a Stable Retro playback backend so public SB3/Hugging Face checkpoints use the preprocessing they were trained with; pass `--view preprocessed` to inspect the model input or `--backend native` when checking this repo's fast-env parity. The SB3, PyTorch, and Hugging Face Hub dependencies are included in the repo's `uv` dev environment.
+- `scripts/play_policy.py` loads plain PyTorch PPO `.pt` checkpoints and legacy SB3 `.zip` checkpoints without depending on Stable Baselines3. Sources may be local files, Hugging Face repo ids, or `https://huggingface.co/...` URLs. The player defaults to the Stable Retro playback backend for legacy policy preprocessing; pass `--view preprocessed` to inspect model input or `--backend native` for fast-env parity checks.
 - By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin, uses `obs_crop_mode="mask"` for HUD cropping, terminates/autoresets lanes on life loss or level change, then samples benchmark steps from `noop`, `right`, `right_b`, and `right_a` using a deterministic precomputed action sequence. Use `--obs-crop-mode remove`, `--no-terminate-on-life-loss`, or `--no-terminate-on-level-change` only for diagnostic runs that intentionally keep older benchmark boundaries or preprocessing. Use `--state Level1-1` or another packaged stable-retro state to start every lane from one saved level state. This package includes the stable Super Mario Bros NES states from `Level1-1` through `Level8-4`, plus `Level1-1-99lives`, `Level2-1-clouds`, and `Level2-1-clouds-easy`. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. Mapping weights may be zero when the total weight is positive. `set_state_policy(...)` accepts the same forms and updates only future explicit resets or per-lane autoresets. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. `state_sampling_weights()` reports the current future reset policy. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
 - For `SuperMarioBrosNesTurboVecEnv`, `done_on` accepts stable-retro-style compact rules like `{"life_loss": ("lives", "decrease")}`, named events such as `["life_loss"]`, and verbose event objects with `variables`/`keys`, `op`, `compare`, and `triggers`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired terminal rules are reported through Gymnasium vector infos under `infos["final_info"]["done_on_info"]` with `trigger`, `op`, `compare`, `keys`, `variables`, `prev`, `next`, and `triggers` fields.
 - Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post8` for new benchmarks and comparisons, and constructs the upstream vector env with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.

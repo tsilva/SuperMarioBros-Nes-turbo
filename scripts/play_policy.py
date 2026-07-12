@@ -34,6 +34,7 @@ from supermariobrosnes_turbo import (
     SuperMarioBrosNesTurboVecEnv,
     resolve_required_rom_path,
 )
+from supermariobrosnes_turbo.ppo import load_policy_checkpoint
 
 
 DEFAULT_HF_FILENAME = "ppo_supermariobros-nes-v0_4500000_steps.zip"
@@ -229,19 +230,11 @@ def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:
 
 class SdlPolicyPlayer:
     def __init__(self, args: argparse.Namespace) -> None:
-        try:
-            from stable_baselines3 import PPO
-        except ImportError as exc:
-            raise SystemExit(
-                "stable_baselines3 is required to play SB3 policies. "
-                "Install it in this environment, then rerun the same command.",
-            ) from exc
-
         self.model_path = resolve_model_path(args.model, args.filename, args.cache_dir)
-        self.model = PPO.load(self.model_path, device=args.device)
-        if getattr(self.model.action_space, "n", None) != len(ACTION_SETS[args.action_set]):
+        self.model = load_policy_checkpoint(self.model_path, device=args.device)
+        if self.model.action_count != len(ACTION_SETS[args.action_set]):
             raise ValueError(
-                f"model action space {self.model.action_space} does not match "
+                f"model action count {self.model.action_count} does not match "
                 f"action_set={args.action_set!r} with {len(ACTION_SETS[args.action_set])} actions",
             )
 
@@ -650,9 +643,9 @@ class SdlPolicyPlayer:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Play a Stable Baselines3 Mario policy from a local .zip or Hugging Face URL.",
+        description="Play a plain PPO or legacy SB3 Mario policy from disk or Hugging Face.",
     )
-    parser.add_argument("model", help="Local SB3 .zip, HF repo id, or https://huggingface.co/... URL")
+    parser.add_argument("model", help="Local .pt/.zip, HF repo id, or Hugging Face URL")
     parser.add_argument("--filename", default=None, help="Checkpoint filename inside an HF repo")
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/hf_cache"))
     parser.add_argument(
