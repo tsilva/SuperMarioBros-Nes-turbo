@@ -9,9 +9,12 @@ reward, the seven-action ``simple`` action set, and the 4,500-step time limit.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import platform
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +58,23 @@ TOTAL_TIMESTEPS = 5_000_000
 MAX_EPISODE_STEPS = 4_500
 CHECKPOINT_FREQ = 500_000
 SUCCESS_WINDOW = 100
+TRAIN_DONE_ON = ("life_loss", "level_change")
+COMPLETION_RATE_METRIC = "completion_rate"
+
+
+@dataclass(frozen=True)
+class TrainingProfile:
+    name: str
+    n_envs: int
+    n_steps: int
+    env_threads: int
+
+
+PROFILES = {
+    "b55": TrainingProfile("b55", n_envs=16, n_steps=512, env_threads=4),
+    # Same 8,192 samples/update as B55, with fewer MPS synchronizations.
+    "m1": TrainingProfile("m1", n_envs=64, n_steps=128, env_threads=6),
+}
 
 
 def linear_schedule(initial: float, final: float, duration: int, total: int):
@@ -99,8 +119,10 @@ class MarioSb3VecEnv(VecEnv):
             frame_stack=4,
             maxpool_last_two=False,
             sticky_action_prob=0.0,
-            info_filter="all",
-            done_on=("life_loss", "level_change"),
+            # Training only consumes terminal infos; avoid constructing ten
+            # columnar info arrays on every nonterminal step.
+            info_filter="terminal",
+            done_on=TRAIN_DONE_ON,
             autoreset_mode="Disabled",
         )
         self._seed = int(seed)
@@ -200,6 +222,17 @@ class MarioSb3VecEnv(VecEnv):
             lane_infos[index]["terminal_observation"] = obs[index].copy()
             lane_infos[index]["TimeLimit.truncated"] = bool(timed_out[index] or truncated[index])
             lane_infos[index]["level_complete"] = bool(completed[index])
+            lane_infos[index]["life_loss"] = bool(life_lost[index])
+            lane_infos[index]["level_change"] = bool(level_changed[index])
+            lane_infos[index]["termination_reason"] = (
+                "level_change"
+                if completed[index]
+                else "life_loss"
+                if life_lost[index]
+                else "max_steps"
+                if timed_out[index] or truncated[index]
+                else "terminated"
+            )
             lane_infos[index]["episode"] = {
                 "r": float(self._episode_returns[index]),
                 "l": int(self._episode_steps[index]),
@@ -265,31 +298,91 @@ class MarioSb3VecEnv(VecEnv):
 
 
 class WinnerScheduleAndStop(BaseCallback):
-    """Decay entropy and stop once the latest 100 episodes are all clears."""
+    """Log completion_rate and stop at a strict rolling 100/100."""
 
-    def __init__(self, *, verbose: int = 1) -> None:
+    def __init__(self, *, metrics_path: Path | None = None, verbose: int = 1) -> None:
         super().__init__(verbose)
         self.outcomes: deque[bool] = deque(maxlen=SUCCESS_WINDOW)
+        self.total_attempts = 0
+        self.total_completions = 0
+        self.metrics_path = metrics_path
+        self._last_persisted_attempt = -1
         self.started_at = 0.0
 
     def _on_training_start(self) -> None:
         self.started_at = time.perf_counter()
+        if self.metrics_path is not None:
+            self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            self.metrics_path.write_text("", encoding="utf-8")
 
     def _on_rollout_start(self) -> None:
         fraction = min(self.num_timesteps / SCHEDULE_STEPS, 1.0)
         self.model.ent_coef = ENT_COEF + fraction * (ENT_COEF_FINAL - ENT_COEF)
 
+    def record_outcomes(self, outcomes: list[bool]) -> bool:
+        for completed in outcomes:
+            self.outcomes.append(bool(completed))
+            self.total_attempts += 1
+            self.total_completions += int(bool(completed))
+        return len(self.outcomes) == SUCCESS_WINDOW and all(self.outcomes)
+
+    def metric_payload(self) -> dict[str, int | float]:
+        if not self.outcomes:
+            return {}
+        rate = sum(self.outcomes) / len(self.outcomes)
+        return {COMPLETION_RATE_METRIC: rate}
+
+    def _log_metrics(self, *, stopped: bool = False) -> None:
+        payload = self.metric_payload()
+        if not payload:
+            return
+        for key, value in payload.items():
+            self.logger.record(key, value)
+        if (
+            self.metrics_path is not None
+            and self.total_attempts != self._last_persisted_attempt
+        ):
+            row = {
+                "timesteps": self.num_timesteps,
+                "total_attempts": self.total_attempts,
+                "window_size": len(self.outcomes),
+                "window_completions": sum(self.outcomes),
+                "window_rate": sum(self.outcomes) / len(self.outcomes),
+                "stopped": stopped,
+                **payload,
+            }
+            with self.metrics_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+            self._last_persisted_attempt = self.total_attempts
+
+    def _on_rollout_end(self) -> None:
+        self._log_metrics()
+        if self.outcomes:
+            rate = sum(self.outcomes) / len(self.outcomes)
+            fields = [
+                f"{COMPLETION_RATE_METRIC}={rate:.6f}",
+                f"window={len(self.outcomes)}/{SUCCESS_WINDOW}",
+                f"completions={self.total_completions}/{self.total_attempts}",
+            ]
+            print(" ".join(fields), flush=True)
+
     def _on_step(self) -> bool:
+        outcomes: list[bool] = []
         for done, info in zip(self.locals["dones"], self.locals["infos"], strict=True):
             if done:
-                self.outcomes.append(bool(info.get("level_complete", False)))
-        if len(self.outcomes) == SUCCESS_WINDOW and all(self.outcomes):
+                outcomes.append(bool(info.get("level_complete", False)))
+        solved = self.record_outcomes(outcomes)
+        if solved:
+            self._log_metrics(stopped=True)
             elapsed = time.perf_counter() - self.started_at
             print(
-                f"Reached strict {SUCCESS_WINDOW}/{SUCCESS_WINDOW} clears at "
+                f"Reached {COMPLETION_RATE_METRIC}=1.0 "
+                f"({SUCCESS_WINDOW}/{SUCCESS_WINDOW}) at "
                 f"{self.num_timesteps:,} steps in {elapsed:.1f}s; stopping.",
                 flush=True,
             )
+            # collect_rollouts exits immediately, so persist the final metric now.
+            self.logger.dump(step=self.num_timesteps)
             return False
         return True
 
@@ -303,13 +396,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=108, help="B55's first winning seed")
     parser.add_argument("--timesteps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument(
+        "--profile",
+        choices=("auto", "b55", "m1"),
+        default="auto",
+        help="auto selects the M1 profile on Apple MPS and B55 elsewhere",
+    )
+    parser.add_argument(
         "--device",
         choices=("auto", "cpu", "cuda", "mps"),
         default="auto",
         help="Training device; auto prefers CUDA, then Apple MPS, then CPU",
     )
-    parser.add_argument("--n-envs", type=int, default=N_ENVS)
-    parser.add_argument("--env-threads", type=int, default=ENV_THREADS)
+    parser.add_argument("--n-envs", type=int, help="Override the selected profile")
+    parser.add_argument("--n-steps", type=int, help="Override PPO steps per environment")
+    parser.add_argument("--env-threads", type=int, help="Override the native Rayon thread count")
     parser.add_argument("--torch-threads", type=int, default=1)
     parser.add_argument("--checkpoint-freq", type=int, default=CHECKPOINT_FREQ)
     return parser
@@ -339,19 +439,49 @@ def resolve_device(device: str) -> str:
     return "cpu"
 
 
+def resolve_training_profile(args: argparse.Namespace, device: str) -> TrainingProfile:
+    name = args.profile
+    if name == "auto":
+        apple_mps = (
+            device == "mps"
+            and platform.system() == "Darwin"
+            and platform.machine() == "arm64"
+        )
+        name = "m1" if apple_mps else "b55"
+    base = PROFILES[name]
+    return TrainingProfile(
+        name=name,
+        n_envs=base.n_envs if args.n_envs is None else args.n_envs,
+        n_steps=base.n_steps if args.n_steps is None else args.n_steps,
+        env_threads=base.env_threads if args.env_threads is None else args.env_threads,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if min(args.timesteps, args.n_envs, args.env_threads, args.torch_threads) <= 0:
-        raise SystemExit("timesteps, n-envs, env-threads, and torch-threads must be positive")
+    device = resolve_device(args.device)
+    profile = resolve_training_profile(args, device)
+    if min(
+        args.timesteps,
+        profile.n_envs,
+        profile.n_steps,
+        profile.env_threads,
+        args.torch_threads,
+    ) <= 0:
+        raise SystemExit(
+            "timesteps, n-envs, n-steps, env-threads, and torch-threads must be positive"
+        )
+    # SuperMarioBrosNesTurboVecEnv's legacy num_threads attribute does not
+    # configure Rayon. Set the real pool size before constructing the core.
+    os.environ["RAYON_NUM_THREADS"] = str(profile.env_threads)
     optimize_torch(args.torch_threads)
     set_random_seed(args.seed)
     args.output.mkdir(parents=True, exist_ok=True)
-    device = resolve_device(args.device)
 
     env = MarioSb3VecEnv(
         rom_path=args.rom,
-        num_envs=args.n_envs,
-        num_threads=args.env_threads,
+        num_envs=profile.n_envs,
+        num_threads=profile.env_threads,
         seed=args.seed,
     )
     lr = linear_schedule(
@@ -364,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         "CnnPolicy",
         env,
         learning_rate=lr,
-        n_steps=N_STEPS,
+        n_steps=profile.n_steps,
         batch_size=BATCH_SIZE,
         n_epochs=N_EPOCHS,
         gamma=0.9,
@@ -381,20 +511,22 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     callbacks: list[BaseCallback] = [
-        WinnerScheduleAndStop(),
+        WinnerScheduleAndStop(metrics_path=args.output / "level_completion.jsonl"),
     ]
     if args.checkpoint_freq > 0:
         callbacks.append(
             CheckpointCallback(
-                save_freq=max(args.checkpoint_freq // args.n_envs, 1),
+                save_freq=max(args.checkpoint_freq // profile.n_envs, 1),
                 save_path=str(args.output / "checkpoints"),
                 name_prefix="ppo_level1-1_b55",
             )
         )
 
     print(
-        f"B55: envs={args.n_envs} env_threads={args.env_threads} "
-        f"rollout={N_STEPS} batch={BATCH_SIZE} device={model.device}",
+        f"B55 profile={profile.name}: envs={profile.n_envs} "
+        f"env_threads={profile.env_threads} rollout={profile.n_steps} "
+        f"samples_per_update={profile.n_envs * profile.n_steps} "
+        f"batch={BATCH_SIZE} device={model.device}",
         flush=True,
     )
     try:
