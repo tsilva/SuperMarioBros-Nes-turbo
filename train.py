@@ -259,10 +259,11 @@ class CompletionTracker:
         if self.rate is None:
             return
         LOGGER.info(
-            "timesteps=%d completion_rate=%.6f window=%d/%d completions=%d/%d",
+            "timesteps=%d completion_rate=%.6f "
+            "window_completions=%d/%d total_completions=%d/%d",
             timesteps,
             self.rate,
-            len(self.outcomes),
+            sum(self.outcomes),
             SUCCESS_WINDOW,
             self.total_completions,
             self.total_attempts,
@@ -559,15 +560,39 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 while next_checkpoint <= timesteps:
                     next_checkpoint += args.checkpoint_freq
+        stop_reason = "completion_rate" if tracker.solved else "max_timesteps"
+        final_completion_rate = tracker.rate if tracker.rate is not None else 0.0
         save_policy_checkpoint(
             args.output / "final_model.pt",
             policy,
             timesteps=timesteps,
-            metadata={"profile": profile.name, "completion_rate": tracker.rate},
+            metadata={
+                "profile": profile.name,
+                "completion_rate": final_completion_rate,
+                "stop_reason": stop_reason,
+                "environment": {
+                    "backend": "native",
+                    "frame_skip": 4,
+                    "frame_stack": 4,
+                    "max_pool_frames": False,
+                    "crop": [32, 0, 0, 0],
+                    "crop_mode": "mask",
+                    "resize": [84, 84],
+                    "action_set": "simple",
+                    "terminate_on_life_loss": True,
+                    "terminate_on_level_change": True,
+                },
+            },
         )
     finally:
         env.close()
-    LOGGER.info("saved=%s timesteps=%d", args.output / "final_model.pt", timesteps)
+    LOGGER.info(
+        "saved=%s timesteps=%d completion_rate=%.6f stop_reason=%s",
+        args.output / "final_model.pt",
+        timesteps,
+        final_completion_rate,
+        stop_reason,
+    )
     return 0
 
 

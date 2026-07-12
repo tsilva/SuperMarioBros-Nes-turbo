@@ -32,6 +32,7 @@ from supermariobrosnes_turbo import (
     ACTION_SETS,
     Actions,
     SuperMarioBrosNesTurboVecEnv,
+    action_mask,
     resolve_required_rom_path,
 )
 from supermariobrosnes_turbo.ppo import load_policy_checkpoint
@@ -228,9 +229,26 @@ def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:
     return result
 
 
+def apply_checkpoint_defaults(args: argparse.Namespace, model_path: Path) -> None:
+    """Select the preprocessing contract used to create the checkpoint."""
+    plain_checkpoint = model_path.suffix != ".zip"
+    if args.backend == "auto":
+        args.backend = "native" if plain_checkpoint else "stable-retro"
+    if args.max_pool_frames is None:
+        args.max_pool_frames = not plain_checkpoint
+    if args.crop_mode is None:
+        args.crop_mode = "mask" if plain_checkpoint else "remove"
+    if args.backend == "stable-retro" and args.crop_mode == "mask":
+        raise ValueError(
+            "stable-retro playback cannot reproduce obs_crop_mode='mask'; "
+            "use --backend native for plain PPO checkpoints",
+        )
+
+
 class SdlPolicyPlayer:
     def __init__(self, args: argparse.Namespace) -> None:
         self.model_path = resolve_model_path(args.model, args.filename, args.cache_dir)
+        apply_checkpoint_defaults(args, self.model_path)
         self.model = load_policy_checkpoint(self.model_path, device=args.device)
         if self.model.action_count != len(ACTION_SETS[args.action_set]):
             raise ValueError(
@@ -241,7 +259,12 @@ class SdlPolicyPlayer:
         self.args = args
         self.action_names = ACTION_SETS[args.action_set]
         self.rom_path = resolve_required_rom_path(args.rom_path)
-        self.retro_action_masks = stable_action_masks(self.action_names, self.rom_path)
+        if args.backend == "native":
+            self.action_masks = np.stack(
+                [action_mask(name) for name in self.action_names]
+            ).astype(np.uint8)
+        else:
+            self.action_masks = stable_action_masks(self.action_names, self.rom_path)
         self.env = self.make_env()
         self.obs, _infos = self.env.reset()
         self.display_env = self.make_display_env() if args.view == "raw" else None
@@ -325,6 +348,8 @@ class SdlPolicyPlayer:
                 frame_stack=self.args.frame_stack,
                 maxpool_last_two=self.args.max_pool_frames,
                 obs_crop=(self.args.crop_top, self.args.crop_bottom, 0, 0),
+                obs_crop_mode=self.args.crop_mode,
+                obs_crop_fill=0,
                 obs_resize=(self.args.resize_height, self.args.resize_width),
                 obs_resize_algorithm="area",
                 obs_layout="chw",
@@ -332,6 +357,7 @@ class SdlPolicyPlayer:
                 reward_clip=False,
                 info_filter="all",
                 done_on=done_on or None,
+                autoreset_mode="Disabled",
             )
             env.seed(self.args.seed)
             return env
@@ -469,7 +495,7 @@ class SdlPolicyPlayer:
         action, _ = self.model.predict(self.obs, deterministic=self.args.deterministic)
         self.action = int(np.asarray(action).reshape(-1)[0])
         obs, rewards, terminations, truncations, infos = self.env.step(
-            self.retro_action_masks[[self.action]]
+            self.action_masks[[self.action]]
         )
         terminated_value = bool(terminations[0])
         truncated_value = bool(truncations[0])
@@ -507,7 +533,7 @@ class SdlPolicyPlayer:
             self.display_info = self.info
             return
         display_obs, _rewards, display_terminations, display_truncations, display_infos = self.display_env.step(
-            self.retro_action_masks[[self.action]],
+            self.action_masks[[self.action]],
         )
         self.display_obs = display_obs
         step_info = lane_info(display_infos, 0)
@@ -641,7 +667,7 @@ class SdlPolicyPlayer:
         return raw.decode("utf-8", errors="replace") if raw else "unknown SDL error"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Play a plain PPO or legacy SB3 Mario policy from disk or Hugging Face.",
     )
@@ -650,9 +676,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/hf_cache"))
     parser.add_argument(
         "--backend",
-        choices=("stable-retro", "native"),
-        default="stable-retro",
-        help="stable-retro matches most HF/SB3 checkpoints; native is useful for fast-env parity checks",
+        choices=("auto", "stable-retro", "native"),
+        default="auto",
+        help="auto uses native for plain .pt checkpoints and stable-retro for legacy .zip checkpoints",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
     parser.add_argument(
@@ -672,9 +698,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
-    parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--crop-top", type=int, default=32)
     parser.add_argument("--crop-bottom", type=int, default=0)
+    parser.add_argument("--crop-mode", choices=("remove", "mask"), default=None)
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--action-set", choices=tuple(ACTION_SETS), default="simple")
@@ -685,7 +712,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hold-complete-frames", type=int, default=30)
     parser.add_argument("--hold-done-frames", type=int, default=0)
     parser.add_argument("--auto-close-frames", type=int, default=None)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:

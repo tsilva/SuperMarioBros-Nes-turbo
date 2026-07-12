@@ -3,6 +3,7 @@
 /target/
 /target-release/
 /artifacts/
+/runs/
 /wheelhouse*/
 /.venv/
 /.venv314/

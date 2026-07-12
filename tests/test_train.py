@@ -55,6 +55,8 @@ def test_completion_rate_uses_standard_logger_and_jsonl(tmp_path, caplog) -> Non
     with caplog.at_level(logging.INFO, logger="ppo_train"):
         tracker.log(12_345)
     assert "completion_rate=0.666667" in caplog.text
+    assert "window_completions=2/100" in caplog.text
+    assert "window=3/100" not in caplog.text
     row = json.loads(path.read_text(encoding="utf-8"))
     assert row[COMPLETION_RATE_METRIC] == pytest.approx(2 / 3)
     assert row["window_size"] == 3
