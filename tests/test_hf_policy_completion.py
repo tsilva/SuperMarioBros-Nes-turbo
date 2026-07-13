@@ -20,7 +20,7 @@ from rom_helpers import require_rom  # noqa: E402
 HF_LEVEL1_POLICY = "https://huggingface.co/tsilva/SuperMarioBros-NES_Level1"
 MAX_EPISODES = 10
 MAX_STEPS_PER_EPISODE = 3_000
-EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post8"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post29"
 
 
 def require_policy_prerequisites() -> None:

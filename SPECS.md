@@ -20,7 +20,7 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
   rollout collection. Selective reset must preserve every unselected lane's
   emulator state, RNG stream, observation/frame stack, sticky action, and counters.
 - Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, deterministic sampled action workload, and comparable JSON.
-- Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
+- Use `stable-retro-turbo==1.0.1.post29` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical ROM, states, preprocessing, vector-env count, and host context.
 - Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; default autoresearch acceptance uses three measured comparison pairs, while `--full` remains available for the longer sequential stability ladder. Ad hoc timings are not acceptance evidence.
 - Treat every newly started autoresearch goal as a fresh improvement round from
   the live `HEAD`, regardless of completed rounds in external controller state;
