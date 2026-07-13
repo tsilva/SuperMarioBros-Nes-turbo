@@ -236,6 +236,10 @@ gates, commits `Release v<version>`, creates the matching tag, and pushes the
 branch plus tag. The pushed tag triggers the release workflow, which builds,
 audits, and publishes the wheels to PyPI via trusted publishing.
 
+Release validation runs on Python 3.14. The native extension remains a
+`cp39-abi3` build, so each platform publishes one stable-ABI wheel that supports
+Python 3.9 through 3.14 without multiplying artifacts per interpreter.
+
 ## Local benchmark target
 
 Use `stable-retro-turbo==1.0.1.post8` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the dedicated local CPU machine.

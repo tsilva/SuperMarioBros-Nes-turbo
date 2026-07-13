@@ -28,4 +28,5 @@ Provide a throughput-first Super Mario Bros NES RL environment specialized for t
 - Keep mutable autoresearch state and benchmark artifacts out of the repo by default; ledgers, ideas, scratchpads, candidate bundles, run dirs, source archives, result caches, and indexes live under `AUTORESEARCH_ROOT_PATH`.
 - Preserve parity/regression tests for Gymnasium VectorEnv behavior, native/stable-retro constructor compatibility, state sampling, terminal infos, sticky/no-op actions, benchmark stats, release flow, and benchmark metadata.
 - Preserve release and supply-chain hardening: aligned Python/Rust versions, clean synced release branch, local gates before tags, validated wheels, `uv` lock state, `exclude-newer`, bad-package constraints, and Rust release-profile performance settings.
+- Validate releases on CPython 3.14 while preserving the `cp39-abi3` extension contract so each supported platform needs only one wheel.
 - Document intentional compatibility breaks, benchmark-contract changes, or public API behavior changes in README and tests before accepting them.

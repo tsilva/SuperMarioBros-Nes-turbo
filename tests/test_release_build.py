@@ -25,6 +25,17 @@ def test_version_file_is_the_single_source_of_truth():
     ).read_text(encoding="utf-8")
 
 
+def test_release_validates_python_314_with_stable_abi_wheels():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8",
+    )
+    cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
+
+    assert 'PYTHON_VERSION: "3.14"' in workflow
+    assert 'features = ["abi3-py39", "extension-module"]' in cargo
+
+
 def test_latest_non_yanked_pypi_version_ignores_fully_yanked_latest_release():
     release_build = _release_build_module()
     releases = {

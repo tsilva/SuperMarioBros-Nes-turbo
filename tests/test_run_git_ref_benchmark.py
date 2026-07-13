@@ -240,7 +240,7 @@ def test_prepare_source_cache_reuses_synced_commit_tree(
         prepared_dir = prepared_source_dir(plan, ref)
         tmp_dir = prepared_dir.with_name(f"{prepared_dir.name}.tmp")
         (tmp_dir / ".venv" / "bin").mkdir(parents=True)
-        site_packages = tmp_dir / ".venv" / "lib" / "python3.13" / "site-packages"
+        site_packages = tmp_dir / ".venv" / "lib" / "python3.14" / "site-packages"
         site_packages.mkdir(parents=True)
         (tmp_dir / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
         (site_packages / "supermariobrosnes_turbo.pth").write_text(
@@ -261,7 +261,7 @@ def test_prepare_source_cache_reuses_synced_commit_tree(
         cache_dir
         / ".venv"
         / "lib"
-        / "python3.13"
+        / "python3.14"
         / "site-packages"
         / "supermariobrosnes_turbo.pth"
     )
