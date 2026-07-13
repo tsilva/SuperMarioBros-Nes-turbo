@@ -2,6 +2,7 @@
 /.env
 /target/
 /target-release/
+/target-release-linux/
 /artifacts/
 /runs/
 /wheelhouse*/

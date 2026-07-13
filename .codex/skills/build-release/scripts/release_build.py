@@ -49,6 +49,7 @@ IGNORED_ROOT_DIR_NAMES = {
     "build",
     "dist",
     "target-release",
+    "target-release-linux",
 }
 IGNORED_FILE_SUFFIXES = {".o", ".a", ".so", ".dylib", ".d", ".pyc", ".pyo"}
 ROM_SUFFIXES = {".nes", ".sfc", ".smc", ".gb", ".gbc", ".gen", ".sms", ".bin"}
@@ -378,6 +379,30 @@ def wheelhouse(version: str, platform_name: str) -> Path:
     return REPO_ROOT / f"wheelhouse-v{version}-{platform_name}"
 
 
+def cargo_target_dir(platform_name: str, root: Path = REPO_ROOT) -> Path:
+    if platform_name == "macos":
+        return root / "target-release"
+    if platform_name == "linux":
+        return root / "target-release-linux"
+    raise ValueError(f"unknown platform: {platform_name}")
+
+
+def linux_build_env(root: Path = REPO_ROOT) -> dict[str, str]:
+    target_dir = cargo_target_dir("linux", root).resolve()
+    return {
+        "CIBW_BUILD": "cp39-manylinux_x86_64",
+        "CIBW_ARCHS_LINUX": "x86_64",
+        "CIBW_SKIP": "*-musllinux_*",
+        "CIBW_BEFORE_ALL_LINUX": "curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal",
+        "CIBW_CONTAINER_ENGINE": f"docker; create_args: --volume={target_dir}:/cargo-target",
+        "CIBW_ENVIRONMENT_LINUX": (
+            'PATH="$HOME/.cargo/bin:$PATH" '
+            "CARGO_NET_GIT_FETCH_WITH_CLI=true "
+            "CARGO_TARGET_DIR=/cargo-target"
+        ),
+    }
+
+
 def prepare_sources(args: argparse.Namespace) -> None:
     version = args.version or read_version()
     validate_version(version)
@@ -427,19 +452,16 @@ def build_commands(args: argparse.Namespace) -> None:
     print(
         "MACOSX_DEPLOYMENT_TARGET=14.0 "
         "ARCHFLAGS='-arch arm64' "
-        f"CARGO_TARGET_DIR={shell_quote(macos_src / 'target-release')} "
+        f"CARGO_TARGET_DIR={shell_quote(cargo_target_dir('macos', macos_src))} "
         f"{shell_quote(PYTHON)} -m maturin build --release --out {shell_quote(macos_out)}"
     )
     print()
     print("# Linux x86_64 manylinux")
     print(f"cd {shell_quote(linux_src)}")
+    linux_env = linux_build_env(linux_src)
     print(
-        "CIBW_BUILD=cp39-manylinux_x86_64 "
-        "CIBW_ARCHS_LINUX=x86_64 "
-        "CIBW_SKIP='*-musllinux_*' "
-        "CIBW_BEFORE_ALL_LINUX='curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal' "
-        "CIBW_ENVIRONMENT_LINUX='PATH=\"$HOME/.cargo/bin:$PATH\" CARGO_NET_GIT_FETCH_WITH_CLI=true' "
-        f"{shell_quote(PYTHON)} -m cibuildwheel --platform linux --output-dir {shell_quote(linux_out)}"
+        " ".join(f"{key}={shell_quote(value)}" for key, value in linux_env.items())
+        + f" {shell_quote(PYTHON)} -m cibuildwheel --platform linux --output-dir {shell_quote(linux_out)}"
     )
 
 
@@ -449,25 +471,19 @@ def build_platform(args: argparse.Namespace) -> None:
     output_dir = wheelhouse(version, args.platform)
     output_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    target_dir = cargo_target_dir(args.platform)
+    target_dir.mkdir(parents=True, exist_ok=True)
     if args.platform == "macos":
         env.update(
             {
                 "MACOSX_DEPLOYMENT_TARGET": "14.0",
                 "ARCHFLAGS": "-arch arm64",
-                "CARGO_TARGET_DIR": str(REPO_ROOT / "target-release"),
+                "CARGO_TARGET_DIR": str(target_dir),
             }
         )
         run([str(PYTHON), "-m", "maturin", "build", "--release", "--out", str(output_dir)], env=env)
         return
-    env.update(
-        {
-            "CIBW_BUILD": "cp39-manylinux_x86_64",
-            "CIBW_ARCHS_LINUX": "x86_64",
-            "CIBW_SKIP": "*-musllinux_*",
-            "CIBW_BEFORE_ALL_LINUX": "curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal",
-            "CIBW_ENVIRONMENT_LINUX": 'PATH="$HOME/.cargo/bin:$PATH" CARGO_NET_GIT_FETCH_WITH_CLI=true',
-        }
-    )
+    env.update(linux_build_env())
     run([str(PYTHON), "-m", "cibuildwheel", "--platform", "linux", "--output-dir", str(output_dir)], env=env)
 
 

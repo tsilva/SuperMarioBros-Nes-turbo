@@ -120,8 +120,10 @@ jobs:
         include:
           - platform: macos
             runner: macos-15
+            cargo_target_dir: target-release
           - platform: linux
             runner: ubuntu-24.04
+            cargo_target_dir: target-release-linux
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -130,6 +132,11 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
+      - name: Resolve checked-out source
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -137,6 +144,14 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
+
+      - name: Restore Cargo build cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cargo_target_dir }}
+          key: cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-
 
       - name: Install release environment
         run: uv sync --frozen --extra dev --group dev

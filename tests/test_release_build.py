@@ -36,6 +36,40 @@ def test_release_validates_python_314_with_stable_abi_wheels():
     assert 'features = ["abi3-py39", "extension-module"]' in cargo
 
 
+def test_release_wheel_builds_use_platform_scoped_cargo_caches():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8",
+    )
+    release_build = _release_build_module()
+
+    assert "actions/cache@v4" in workflow
+    assert "path: ${{ matrix.cargo_target_dir }}" in workflow
+    assert (
+        "key: cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-${{ steps.source.outputs.sha }}"
+        in workflow
+    )
+    assert 'run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"' in workflow
+    assert "cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-" in workflow
+    assert "cargo_target_dir: target-release" in workflow
+    assert "cargo_target_dir: target-release-linux" in workflow
+
+    assert release_build.cargo_target_dir("macos", root) == root / "target-release"
+    assert release_build.cargo_target_dir("linux", root) == root / "target-release-linux"
+
+
+def test_linux_release_cache_is_mounted_into_cibuildwheel(tmp_path):
+    release_build = _release_build_module()
+    env = release_build.linux_build_env(tmp_path)
+
+    assert env["CIBW_CONTAINER_ENGINE"] == (
+        f"docker; create_args: --volume={(tmp_path / 'target-release-linux').resolve()}:/cargo-target"
+    )
+    assert "CARGO_TARGET_DIR=/cargo-target" in env["CIBW_ENVIRONMENT_LINUX"]
+    assert release_build.should_ignore(Path("target-release-linux"))
+    assert not release_build.should_ignore(Path("nested/target-release-linux"))
+
+
 def test_latest_non_yanked_pypi_version_ignores_fully_yanked_latest_release():
     release_build = _release_build_module()
     releases = {
