@@ -1,10 +1,9 @@
 # SuperMarioBros-Nes-turbo Codex Notes
 
-- Always obey repo-root `SPECS.md` as this checkout's durable acceptance
-  contract. If it is missing a requirement, mismatched with purpose, ambiguous,
-  contradictory, or incongruent with the live project, ask the user for
-  clarification, then update `SPECS.md` from that feedback before dependent
-  work continues.
+## Product Specifications
+
+Before any task in this repository, use the `$specs-author` skill to read the root `SPECS.md`. Use `$specs-author` whenever reading or writing `SPECS.md`.
+
 - Use `/autoresearch-speed` for throughput optimization involving
   `scripts/benchmark_sps.py`, emulator hot paths, `env_steps_per_sec`, or
   autoresearch campaigns. Skill: `.codex/skills/autoresearch-speed/SKILL.md`.

@@ -1,32 +1,17 @@
-## PURPOSE
+## PROJECT PURPOSE
 
-Provide a throughput-first Super Mario Bros NES RL environment specialized for the supported SMB/NROM workload while preserving Gymnasium VectorEnv contracts, stable-retro-turbo parity, playback, benchmarking, and release validation.
+Provide reinforcement-learning researchers with a high-throughput, vectorized Gymnasium environment for the supported Super Mario Bros NES mapper 0/NROM workload while preserving deterministic lane-isolated execution, training and playback compatibility, and reproducible performance evaluation.
 
-## REQUIREMENTS
+## PROJECT REQUIREMENTS
 
-- Support only the Super Mario Bros NES mapper 0/NROM fast path unless broader emulator scope is explicitly designed and benchmarked.
-- Keep ROM files out of the repo; require ROM paths through flags, environment, `.env`, or constructors; validate canonical benchmark/smoke input against SHA-256 `f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de`.
-- Preserve public package/API shape: `supermariobrosnes_turbo`, `SuperMarioBrosNesTurboVecEnv`, `Actions`, action meanings/sets, state helpers, constructors, and manual/policy playback scripts.
-- Expose environment truth through Gymnasium `VectorEnv` APIs only: `reset()` returns `(obs, infos)`, `step()` returns `(obs, rewards, terminations, truncations, infos)`, and `metadata["autoreset_mode"]` is permanently `DISABLED`. Require Gymnasium-compatible `options["reset_mask"]` selective resets after terminal transitions.
-- Keep `train.py` as a standalone plain-PyTorch PPO implementation with no Stable Baselines3 dependency. Preserve playback for its native `.pt` checkpoints and existing legacy PPO `.zip` artifacts without requiring Stable Baselines3. Plain-PPO playback must automatically reproduce the training observation and action contract, including native mask cropping and disabled frame max-pooling.
-- Preserve a fast native Rust/Python `step()` path for batch stepping, native rewards and termination checks, preprocessing, frame stacking, typed info extraction, Gymnasium vector `infos`, and manual terminal transitions without per-step Python wrapper chains. Throughput benchmarks and autoresearch optimization target `step()`, not an info-bypassing alternate step API.
-- Preserve action modes `Actions.ALL`, `Actions.FILTERED`, and Stable Retro-compatible 36-way `Actions.DISCRETE`.
-- Preserve preprocessing options: grayscale/RGB, frame skip, optional max-pooling, crop remove or mask mode, resize, frame stack, and CHW/HWC layouts.
-- Preserve stable-retro-style constructor state handling: packaged/named states, paths/bytes, per-lane states, weighted initial sampling, explicit `start_indices`, active-state reporting, and documented SMB states including `Level1-1` through `Level1-4`. Do not expose dynamic reset-policy mutation methods.
-- Preserve native game-over and flag-completion termination. Expose raw lives, level, score, time, position, and scrolling signals so downstream task kernels can derive task events, reward shaping, task termination, and outcomes without provider-side `done_on`, named events, or same-step terminal payloads.
-- Maintain deterministic seeding and lane behavior; every lane must execute its
-  own emulator state during vector steps, without repeated-state or
-  uniform-action leader/peer copy shortcuts that do not apply to stochastic PPO
-  rollout collection. Selective reset must preserve every unselected lane's
-  emulator state, RNG stream, observation/frame stack, sticky action, and counters.
-- Keep benchmarks centered on `scripts/benchmark_sps.py`, reporting `env_steps_per_sec`, workload metadata, ROM/state identity, observation shape/dtype, deterministic sampled action workload, and comparable JSON.
-- Use `stable-retro-turbo==1.0.1.post30` as the Stable Retro PyPI oracle unless intentionally updating the benchmark contract; rerun oracle baselines before quoting speedups with identical manual-reset lifecycle, provider-native termination, ROM, states, preprocessing, vector-env count, and host context.
-- Keep official local benchmarks exact-ref based, load-gated, and statistically checked through repo helpers; default autoresearch acceptance uses three measured comparison pairs, while `--full` remains available for the longer sequential stability ladder. Ad hoc timings are not acceptance evidence.
-- Treat every newly started autoresearch goal as a fresh improvement round from
-  the live `HEAD`, regardless of completed rounds in external controller state;
-  only continuations of the same active goal resume its already-fixed baseline.
-- Keep mutable autoresearch state and benchmark artifacts out of the repo by default; ledgers, ideas, scratchpads, candidate bundles, run dirs, source archives, result caches, and indexes live under `AUTORESEARCH_ROOT_PATH`.
-- Preserve parity/regression tests for Gymnasium VectorEnv behavior, native/stable-retro constructor compatibility, constructor state sampling, terminal-lane blocking, masked reset, raw signals, sticky/no-op actions, benchmark stats, release flow, and benchmark metadata.
-- Preserve release and supply-chain hardening: aligned Python/Rust versions, clean synced release branch, local gates before tags, validated wheels, `uv` lock state, `exclude-newer`, bad-package constraints, and Rust release-profile performance settings.
-- Validate releases on CPython 3.14 while preserving the `cp39-abi3` extension contract so each supported platform needs only one wheel.
-- Document intentional compatibility breaks, benchmark-contract changes, or public API behavior changes in README and tests before accepting them.
+- Support only Super Mario Bros NES on mapper 0/NROM unless broader emulator scope is deliberately added and validated without regressing the specialized workload.
+- Keep ROM content out of the repository and require users to supply it; canonical validation and performance comparisons must use ROM SHA-256 `f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de`.
+- Preserve the public `supermariobrosnes_turbo` package, `SuperMarioBrosNesTurboVecEnv`, `Actions`, action meanings and sets, constructor and state helpers, and manual and policy playback entry points.
+- Conform to the Gymnasium `VectorEnv` reset and step return contracts, permanently report disabled autoreset, block further stepping of terminal lanes, and support selective reset through `options["reset_mask"]`.
+- Keep every vector lane deterministic under seeding and independently emulated; resetting selected lanes must leave every unselected lane's emulator state, random stream, observation history, sticky action, and counters unchanged.
+- Preserve `Actions.ALL`, `Actions.FILTERED`, and Stable Retro-compatible 36-way `Actions.DISCRETE`, together with grayscale or RGB observations, frame skip, optional max-pooling, crop removal or masking, resize, frame stacking, and CHW or HWC layouts.
+- Preserve constructor-time initialization from packaged or named states, paths or bytes, per-lane states, weighted sampling, explicit start indices, and active-state reporting, including packaged states from `Level1-1` through `Level1-4`; do not expose runtime mutation of the reset policy.
+- Preserve native game-over and flag-completion termination and expose raw lives, level, score, time, position, and scrolling signals so downstream systems can own additional reward shaping, task events, termination, and outcomes.
+- Keep `train.py` independent of Stable Baselines3 and preserve playback of its native `.pt` checkpoints and existing legacy PPO `.zip` artifacts without requiring Stable Baselines3; playback must reproduce each checkpoint's training observation and action contract automatically.
+- Keep the public `step()` path throughput-oriented across batched emulation, native reward and termination, preprocessing, frame stacking, and Gymnasium infos; performance claims must evaluate that path with matched workloads and statistically validated, reproducible comparisons.
+- Preserve the `cp39-abi3` extension contract for supported platforms and validate releases on CPython 3.14 so one wheel per platform remains compatible with supported Python versions.
