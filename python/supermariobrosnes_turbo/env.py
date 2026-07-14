@@ -40,30 +40,6 @@ ACTION_BUTTONS = {
     "start": ("START",),
 }
 MASK_BIT_WEIGHTS = (1 << np.arange(len(NES_BUTTONS), dtype=np.uint16)).astype(np.uint16)
-SMB_EVENT_SPECS = {
-    "life_loss": {
-        "description": "Player lost a life.",
-        "triggers": [
-            {
-                "id": "lives_decrease",
-                "variables": ["lives"],
-                "op": "decrease",
-                "compare": "reset",
-            },
-        ],
-    },
-    "level_change": {
-        "description": "Current level identifier changed.",
-        "triggers": [
-            {
-                "id": "level_bytes_changed",
-                "variables": ["levelHi", "levelLo"],
-                "op": "change",
-                "compare": "reset",
-            },
-        ],
-    },
-}
 DEFAULT_STABLE_RETRO_GAME = "SuperMarioBros-Nes-v0"
 ROM_PATH_ENV_VAR = "ROM_PATH"
 GZIP_MAGIC = b"\x1f\x8b"
@@ -92,8 +68,6 @@ _BASE_INFO_ARRAYS = (
     ("xscrollLo", "_xscroll_lo"),
 )
 StateSpec = str | Path | bytes | bytearray | memoryview
-DoneOnInfoSpec = Mapping[str, Any]
-DoneOnInfoRule = tuple[str, str, tuple[str, ...], str, str]
 
 
 class Actions(Enum):
@@ -477,72 +451,6 @@ def _normalize_obs_crop_fill(obs_crop_fill: int) -> int:
     return fill
 
 
-def _scenario_events(scenario: str | Path | None) -> Mapping[str, Any]:
-    if scenario is None:
-        return SMB_EVENT_SPECS
-    if not str(scenario).endswith(".json"):
-        return SMB_EVENT_SPECS
-    try:
-        with Path(scenario).expanduser().open(encoding="utf-8") as handle:
-            scenario_data = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return SMB_EVENT_SPECS
-    events = scenario_data.get("events", {})
-    return events if isinstance(events, Mapping) else {}
-
-
-def _resolve_done_on_event_rules(
-    names: Sequence[Any],
-    *,
-    scenario: str | Path | None,
-    label: str,
-) -> dict[str, Any]:
-    event_rules = _scenario_events(scenario)
-    resolved: dict[str, Any] = {}
-    missing: list[str] = []
-    for raw_name in names:
-        name = str(raw_name)
-        if not name:
-            raise ValueError(f"{label} event names must not be empty")
-        if name not in event_rules:
-            missing.append(name)
-            continue
-        resolved[name] = event_rules[name]
-    if missing:
-        available = ", ".join(sorted(str(name) for name in event_rules)) or "none"
-        raise ValueError(
-            f"{label} unknown configured event(s): {', '.join(missing)}. "
-            f"Available events: {available}"
-        )
-    return resolved
-
-
-def _normalize_done_on_alias(
-    done_on: Any,
-    *,
-    scenario: str | Path | None = None,
-    label: str = "done_on",
-) -> DoneOnInfoSpec | None:
-    if done_on is None:
-        return None
-    if isinstance(done_on, Sequence) and not isinstance(done_on, (str, bytes, bytearray)):
-        return _resolve_done_on_event_rules(done_on, scenario=scenario, label=label)
-    if not isinstance(done_on, Mapping):
-        raise ValueError(
-            f"{label} must be a mapping of rule names to event specs "
-            "or a sequence of configured event names"
-        )
-    resolved: dict[str, Any] = {}
-    for raw_name, spec in done_on.items():
-        name = str(raw_name)
-        if not name:
-            raise ValueError(f"{label} rule names must not be empty")
-        if spec is None:
-            spec = _resolve_done_on_event_rules((name,), scenario=scenario, label=label)[name]
-        resolved[name] = spec
-    return resolved
-
-
 def _normalize_retro_crop(obs_crop: Sequence[int] | None) -> tuple[int, int, int, int]:
     if obs_crop is None:
         return 0, 0, 0, 0
@@ -571,166 +479,10 @@ def _normalize_retro_resize(
     return width, height
 
 
-def _normalize_done_on_info(
-    done_on_info: DoneOnInfoSpec | None,
-    terminate_on_life_loss: bool,
-    terminate_on_level_change: bool,
-) -> tuple[DoneOnInfoRule, ...]:
-    rules: list[DoneOnInfoRule] = []
-    if done_on_info is not None:
-        if not isinstance(done_on_info, Mapping):
-            raise ValueError(
-                "done_on_info must be a mapping of rule names to event specs"
-            )
-        for raw_name, spec in done_on_info.items():
-            name = str(raw_name)
-            if not name:
-                raise ValueError("done_on_info rule names must not be empty")
-            rules.extend(_normalize_event_spec(name, spec, label="done_on_info"))
-
-    event_names = {name for name, _trigger, _keys, _op, _compare in rules}
-    if terminate_on_life_loss and "life_loss" not in event_names:
-        rules.extend(_normalize_event_spec("life_loss", SMB_EVENT_SPECS["life_loss"], label="done_on_info"))
-    if terminate_on_level_change and "level_change" not in event_names:
-        rules.extend(_normalize_event_spec("level_change", SMB_EVENT_SPECS["level_change"], label="done_on_info"))
-
-    return tuple(rules)
-
-
-def _normalize_event_spec(name: str, spec: Any, *, label: str) -> tuple[DoneOnInfoRule, ...]:
-    if _is_compact_event_spec(spec):
-        return (_normalize_event_trigger(name, spec, label=label),)
-
-    if not isinstance(spec, Mapping):
-        raise ValueError(
-            f"{label} values must be compact (variables, op) pairs or "
-            "mappings with variables/op or triggers"
-        )
-
-    allowed = {"description", "triggers", "id", "variables", "keys", "op", "compare"}
-    unknown = set(spec) - allowed
-    if unknown:
-        names = ", ".join(sorted(str(key) for key in unknown))
-        raise ValueError(f"{label} event {name!r} has unknown keys: {names}")
-
-    if "triggers" not in spec:
-        return (_normalize_event_trigger(name, spec, label=label),)
-
-    raw_triggers = spec["triggers"]
-    if isinstance(raw_triggers, (str, bytes, bytearray)) or not isinstance(raw_triggers, Sequence):
-        raise ValueError(f"{label} event {name!r} triggers must be a sequence")
-    if not raw_triggers:
-        raise ValueError(f"{label} event {name!r} must contain at least one trigger")
-
-    trigger_count = len(raw_triggers)
-    return tuple(
-        _normalize_event_trigger(
-            name,
-            raw_trigger,
-            label=label,
-            index=index,
-            trigger_count=trigger_count,
-        )
-        for index, raw_trigger in enumerate(raw_triggers)
-    )
-
-
-def _is_compact_event_spec(spec: Any) -> bool:
-    return (
-        isinstance(spec, Sequence)
-        and not isinstance(spec, (str, bytes, bytearray))
-        and len(spec) == 2
-    )
-
-
-def _normalize_event_trigger(
-    event_name: str,
-    trigger: Any,
-    *,
-    label: str,
-    index: int = 0,
-    trigger_count: int = 1,
-) -> DoneOnInfoRule:
-    if _is_compact_event_spec(trigger):
-        raw_keys, raw_op = trigger
-        trigger_id = "default" if trigger_count == 1 else f"trigger_{index + 1}"
-        compare = "reset"
-    elif isinstance(trigger, Mapping):
-        allowed = {"description", "id", "variables", "keys", "op", "compare"}
-        unknown = set(trigger) - allowed
-        if unknown:
-            names = ", ".join(sorted(str(key) for key in unknown))
-            raise ValueError(f"{label} event {event_name!r} trigger has unknown keys: {names}")
-        if "variables" in trigger and "keys" in trigger:
-            raise ValueError(
-                f"{label} event {event_name!r} trigger cannot use both variables and keys"
-            )
-        raw_keys = trigger.get("variables", trigger.get("keys"))
-        raw_op = trigger.get("op")
-        trigger_id = str(
-            trigger.get("id", "default" if trigger_count == 1 else f"trigger_{index + 1}")
-        )
-        compare = str(trigger.get("compare", "reset"))
-    else:
-        raise ValueError(
-            f"{label} event {event_name!r} triggers must be compact pairs or mappings"
-        )
-
-    if not trigger_id:
-        raise ValueError(f"{label} event {event_name!r} trigger ids must not be empty")
-    keys = _normalize_event_variables(raw_keys, label=label)
-    op = _normalize_event_op(raw_op, label=label)
-    compare = _normalize_event_compare(compare, label=label)
-    return event_name, trigger_id, keys, op, compare
-
-
-def _normalize_event_variables(raw_keys: Any, *, label: str) -> tuple[str, ...]:
-    if isinstance(raw_keys, str):
-        keys = (raw_keys,)
-    elif isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (bytes, bytearray)):
-        keys = tuple(str(key) for key in raw_keys)
-    else:
-        raise ValueError(f"{label} variables must be a string or sequence of strings")
-    if not keys or any(not key for key in keys):
-        raise ValueError(f"{label} rules must reference at least one variable")
-    unknown = [key for key in keys if key not in INFO_KEYS]
-    if unknown:
-        valid = ", ".join(INFO_KEYS)
-        raise ValueError(f"unknown {label} key(s) {unknown!r}; valid keys: {valid}")
-    return keys
-
-
-def _normalize_event_op(raw_op: Any, *, label: str) -> str:
-    op = str(raw_op)
-    if op not in {"change", "increase", "decrease"}:
-        raise ValueError(f"{label} ops must be 'change', 'increase', or 'decrease'")
-    return op
-
-
-def _normalize_event_compare(raw_compare: Any, *, label: str) -> str:
-    compare = str(raw_compare)
-    if compare != "reset":
-        raise ValueError(f"{label} compare must be 'reset'")
-    return compare
-
-
-def _native_done_on_info_rules(
-    rules: Sequence[DoneOnInfoRule],
-) -> tuple[list[tuple[str, list[str], str]], dict[str, DoneOnInfoRule]]:
-    native_rules: list[tuple[str, list[str], str]] = []
-    metadata: dict[str, DoneOnInfoRule] = {}
-    for index, rule in enumerate(rules):
-        event_name, _trigger_id, keys, op, _compare = rule
-        internal_name = f"__event_rule_{index}__{event_name}"
-        native_rules.append((internal_name, list(keys), op))
-        metadata[internal_name] = rule
-    return native_rules, metadata
-
-
 class SuperMarioBrosNesTurboVecEnv(VectorEnv):
     """Gymnasium VectorEnv for the native Super Mario Bros NES fast path."""
 
-    metadata = {"render_modes": ["rgb_array"], "autoreset_mode": AutoresetMode.SAME_STEP}
+    metadata = {"render_modes": ["rgb_array"], "autoreset_mode": AutoresetMode.DISABLED}
     _BUTTON_COMBOS = [[0, 16, 32], [0, 64, 128], [0, 1, 256, 257]]
 
     def __init__(
@@ -764,8 +516,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         sticky_action_prob: float = 0.0,
         reward_clip: bool | Sequence[float] = False,
         info_filter: Any = "all",
-        done_on: Any = None,
-        autoreset_mode: AutoresetMode | str = AutoresetMode.SAME_STEP,
     ) -> None:
         if str(game) != DEFAULT_STABLE_RETRO_GAME:
             raise ValueError(f"SuperMarioBrosNesTurboVecEnv only supports {DEFAULT_STABLE_RETRO_GAME!r}")
@@ -796,10 +546,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         source_height = VISIBLE_HEIGHT if mask_crop else VISIBLE_HEIGHT - crop_top - crop_bottom
         resize_width, resize_height = _normalize_retro_resize(obs_resize, source_width, source_height)
         action_mode = _normalize_action_mode(use_restricted_actions)
-        autoreset_mode = self._normalize_autoreset_mode(autoreset_mode)
-        self.autoreset_mode = autoreset_mode
-        self.metadata = dict(type(self).metadata)
-        self.metadata["autoreset_mode"] = autoreset_mode
+        self.autoreset_mode = AutoresetMode.DISABLED
         self.game = str(game)
         self.action_meanings = ACTION_SETS["full"]
         self.action_set = "full"
@@ -808,19 +555,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         state = _normalize_retro_state(state)
         self._state_collection = isinstance(state, Mapping) or (
             isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview))
-        )
-        normalized_done_on_info = (
-            None
-            if done_on is None
-            else _normalize_done_on_alias(done_on, scenario=scenario)
-        )
-        done_on_info_rules = _normalize_done_on_info(
-            normalized_done_on_info,
-            False,
-            False,
-        )
-        native_done_on_info_rules, done_on_info_metadata = _native_done_on_info_rules(
-            done_on_info_rules
         )
         initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
             state,
@@ -856,9 +590,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             list(initial_state_names),
             initial_state_weights,
             0,
-            False,
-            False,
-            native_done_on_info_rules,
             bool(maxpool_last_two),
             noop_reset_max,
             sticky_action_prob,
@@ -867,11 +598,9 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             normalized_crop_mode,
             normalized_crop_fill,
             self.obs_resize_algorithm,
-            autoreset_mode is AutoresetMode.SAME_STEP,
         )
         self._state_policy_names = tuple(self._core.initial_state_policy_names())
         self.initial_state_names = self._state_policy_names
-        self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
         self.num_envs = self._core.num_envs
         self.num_threads = self.num_envs if num_threads is None else int(num_threads)
         self.num_buttons = len(NES_BUTTONS)
@@ -883,8 +612,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self.obs_grayscale = self._core.grayscale
         self.frame_stack = self._core.frame_stack
         self.maxpool_last_two = self._core.frame_maxpool
-        self.done_on_info_rules = done_on_info_rules
-        self._done_on_info_metadata = done_on_info_metadata
         self.noop_reset_max = self._core.noop_reset_max
         self.sticky_action_prob = self._core.sticky_action_prob
         self.crop_top = crop_top
@@ -954,73 +681,12 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._active_state_indices = np.empty((self.num_envs,), dtype=np.int32)
         self._active_state_labels: tuple[str | None, ...] = tuple(None for _ in range(self.num_envs))
         self._info_all_lanes_mask = np.ones((self.num_envs,), dtype=np.bool_)
-        self._done_on_info: list[dict[str, dict[str, Any]]] = [
-            {} for _ in range(self.num_envs)
-        ]
-        self._terminal_observations: list[np.ndarray | None] = [
-            None for _ in range(self.num_envs)
-        ]
-        self._terminal_infos: list[dict[str, int] | None] = [
-            None for _ in range(self.num_envs)
-        ]
         self._rgb_frames: np.ndarray | None = (
             np.empty(self._core.rgb_frame_shape(), dtype=np.uint8)
             if render_mode == "rgb_array"
             else None
         )
         self._write_active_state_indices()
-
-    @staticmethod
-    def _normalize_autoreset_mode(value: AutoresetMode | str) -> AutoresetMode:
-        if isinstance(value, AutoresetMode):
-            mode = value
-        else:
-            try:
-                mode = AutoresetMode(value)
-            except (TypeError, ValueError):
-                name = str(value).split(".")[-1].upper()
-                try:
-                    mode = AutoresetMode[name]
-                except KeyError as exc:
-                    raise ValueError(f"unsupported autoreset_mode: {value!r}") from exc
-        if mode not in (AutoresetMode.SAME_STEP, AutoresetMode.DISABLED):
-            raise ValueError(
-                "autoreset_mode must be AutoresetMode.SAME_STEP or AutoresetMode.DISABLED"
-            )
-        return mode
-
-    def set_state_policy(self, state: Any) -> None:
-        """Update the state reset policy used by future resets and autoresets."""
-        state = _normalize_retro_state(state)
-        self._state_collection = isinstance(state, Mapping) or (
-            isinstance(state, Sequence) and not isinstance(state, (str, bytes, bytearray, memoryview))
-        )
-        initial_states, initial_state_names, initial_state_weights = _normalize_initial_state_config(
-            state,
-            None,
-            self.num_envs,
-        )
-        self._core.set_initial_states(
-            initial_states,
-            list(initial_state_names),
-            initial_state_weights,
-        )
-        self._state_policy_names = tuple(self._core.initial_state_policy_names())
-        self.initial_state_names = self._state_policy_names
-        self._state_sampling_weights = tuple(float(value) for value in self._core.initial_state_weights())
-
-    def set_state_sampling_weights(self, weights: Mapping[str, float] | Sequence[float]) -> None:
-        if isinstance(weights, Mapping):
-            self.set_state_policy(weights)
-            return
-        if isinstance(weights, (str, bytes, bytearray)) or not isinstance(weights, Sequence):
-            raise ValueError("state sampling weights must be a mapping or sequence")
-        if len(weights) != len(self._state_policy_names):
-            raise ValueError("state sampling weight sequence length must match current state policy")
-        self.set_state_policy(dict(zip(self._state_policy_names, weights, strict=True)))
-
-    def state_sampling_weights(self) -> dict[str, float]:
-        return dict(zip(self._state_policy_names, self._state_sampling_weights, strict=True))
 
     def reset(
         self,
@@ -1064,10 +730,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         self._rewards[reset_mask] = 0
         self._terminated[reset_mask] = False
         self._truncated[reset_mask] = False
-        for index in np.flatnonzero(reset_mask):
-            self._done_on_info[int(index)] = {}
-            self._terminal_observations[int(index)] = None
-            self._terminal_infos[int(index)] = None
         self._write_active_state_indices()
         self._write_info_arrays()
         lane_infos: list[dict[str, Any]] = []
@@ -1076,7 +738,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
                 lane_infos.append({})
                 continue
             info = self._reset_info_dict(index)
-            if self.autoreset_mode is AutoresetMode.DISABLED and self._info_mode != "none":
+            if self._info_mode != "none":
                 raw_info = self._base_info_dict(index)
                 if self._info_keys is not None:
                     raw_info = {
@@ -1231,7 +893,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             self._xscroll_hi,
             self._xscroll_lo,
         )
-        has_terminal = self._finish_native_step()
+        has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
         obs, rewards, terminated, truncated = (
             self._return_obs(),
             self._return_rewards(),
@@ -1240,77 +902,6 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         )
         infos = self._step_infos(has_terminal)
         return obs, rewards, terminated, truncated, infos
-
-    def _finish_native_step(self) -> bool:
-        has_terminal = bool(np.any(self._terminated) or np.any(self._truncated))
-        if has_terminal and self.autoreset_mode is AutoresetMode.SAME_STEP:
-            self._write_active_state_indices()
-            self._write_terminal_observations()
-            self._write_terminal_infos()
-        if self.done_on_info_rules:
-            self._write_done_on_info()
-        return has_terminal
-
-    def _write_done_on_info(self) -> None:
-        reports = self._core.done_on_info()
-        self._done_on_info = []
-        for lane_reports in reports:
-            lane_done_on_info: dict[str, dict[str, Any]] = {}
-            for name, keys, op, prev, next_values in lane_reports:
-                metadata = self._done_on_info_metadata.get(str(name))
-                if metadata is None:
-                    event_name = str(name)
-                    trigger_id = "default"
-                    compare = "reset"
-                    variables = list(keys)
-                else:
-                    event_name, trigger_id, variables_tuple, _metadata_op, compare = metadata
-                    variables = list(variables_tuple)
-                trigger_payload = {
-                    "trigger": trigger_id,
-                    "op": str(op),
-                    "compare": compare,
-                    "keys": list(keys),
-                    "variables": variables,
-                    "prev": list(prev),
-                    "next": list(next_values),
-                }
-                if event_name not in lane_done_on_info:
-                    lane_done_on_info[event_name] = dict(trigger_payload)
-                    continue
-                existing = lane_done_on_info[event_name]
-                first_trigger = {
-                    key: existing[key]
-                    for key in ("trigger", "op", "compare", "keys", "variables", "prev", "next")
-                }
-                triggers = existing.setdefault("triggers", [first_trigger])
-                triggers.append(trigger_payload)
-            self._done_on_info.append(lane_done_on_info)
-
-    def _write_terminal_observations(self) -> None:
-        reports = self._core.terminal_observations()
-        obs_shape = self._obs.shape[1:]
-        self._terminal_observations = []
-        for report in reports:
-            if report is None:
-                self._terminal_observations.append(None)
-                continue
-            if isinstance(report, (bytes, bytearray, memoryview)):
-                terminal_obs = np.frombuffer(report, dtype=np.uint8).reshape(obs_shape).copy()
-            else:
-                terminal_obs = np.asarray(report, dtype=np.uint8).reshape(obs_shape)
-            self._terminal_observations.append(self._public_single_obs(terminal_obs))
-
-    def _write_terminal_infos(self) -> None:
-        reports = self._core.terminal_infos()
-        self._terminal_infos = []
-        for report in reports:
-            if report is None:
-                self._terminal_infos.append(None)
-                continue
-            self._terminal_infos.append(
-                {key: int(value) for key, value in zip(INFO_KEYS, report)}
-            )
 
     def step_gymnasium(
         self,
@@ -1387,7 +978,7 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
             return {}
         if self._info_mode == "terminal" and not has_terminal:
             return {}
-        if has_terminal or any(self._done_on_info):
+        if has_terminal:
             return self._vector_infos([self._info_dict(index) for index in range(self.num_envs)])
         return self._base_vector_infos()
 
@@ -1401,32 +992,11 @@ class SuperMarioBrosNesTurboVecEnv(VectorEnv):
         info = self._base_info_dict(index)
         if self._info_keys is not None:
             info = {key: info[key] for key in self._info_keys if key in info}
-        done_on_info = self._done_on_info[index]
-        include_done_on_info = self._info_keys is None or "done_on_info" in self._info_keys
-        if done_on_info and include_done_on_info and not terminal:
-            info["done_on_info"] = self._done_on_info[index]
         if terminal:
-            if self.autoreset_mode is AutoresetMode.DISABLED:
-                if done_on_info and include_done_on_info:
-                    info["done_on_info"] = done_on_info
-                if bool(self._terminated[index]):
-                    info["terminated"] = True
-                if bool(self._truncated[index]):
-                    info["truncated"] = True
-                return info
-            reset_info = self._reset_info_dict(index)
-            info.update(reset_info)
-            final_info: dict[str, Any] = dict(self._terminal_infos[index] or {})
-            if done_on_info and include_done_on_info:
-                final_info["done_on_info"] = done_on_info
             if bool(self._terminated[index]):
-                final_info["terminated"] = True
+                info["terminated"] = True
             if bool(self._truncated[index]):
-                final_info["truncated"] = True
-            final_obs = self._terminal_observations[index]
-            if final_obs is not None:
-                info["final_obs"] = final_obs
-            info["final_info"] = final_info
+                info["truncated"] = True
         return info
 
     def _vector_infos(self, lane_infos: Sequence[dict[str, Any]]) -> dict[str, Any]:

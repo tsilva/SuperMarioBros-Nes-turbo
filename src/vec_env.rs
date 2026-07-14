@@ -61,183 +61,6 @@ pub enum ResizeAlgorithm {
     Bilinear,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InfoKey {
-    XPos,
-    Coins,
-    LevelHi,
-    LevelLo,
-    Lives,
-    Score,
-    Scrolling,
-    Time,
-    XScrollHi,
-    XScrollLo,
-}
-
-impl InfoKey {
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "x_pos" => Some(Self::XPos),
-            "coins" => Some(Self::Coins),
-            "levelHi" => Some(Self::LevelHi),
-            "levelLo" => Some(Self::LevelLo),
-            "lives" => Some(Self::Lives),
-            "score" => Some(Self::Score),
-            "scrolling" => Some(Self::Scrolling),
-            "time" => Some(Self::Time),
-            "xscrollHi" => Some(Self::XScrollHi),
-            "xscrollLo" => Some(Self::XScrollLo),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::XPos => "x_pos",
-            Self::Coins => "coins",
-            Self::LevelHi => "levelHi",
-            Self::LevelLo => "levelLo",
-            Self::Lives => "lives",
-            Self::Score => "score",
-            Self::Scrolling => "scrolling",
-            Self::Time => "time",
-            Self::XScrollHi => "xscrollHi",
-            Self::XScrollLo => "xscrollLo",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DoneOnInfoOp {
-    Change,
-    Increase,
-    Decrease,
-}
-
-impl DoneOnInfoOp {
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "change" => Some(Self::Change),
-            "increase" => Some(Self::Increase),
-            "decrease" => Some(Self::Decrease),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Change => "change",
-            Self::Increase => "increase",
-            Self::Decrease => "decrease",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct DoneOnInfoRule {
-    pub name: String,
-    pub keys: Vec<InfoKey>,
-    pub op: DoneOnInfoOp,
-}
-
-#[derive(Clone, Debug)]
-pub struct FiredDoneOnInfoRule {
-    pub name: String,
-    pub keys: Vec<InfoKey>,
-    pub op: DoneOnInfoOp,
-    pub previous_values: Vec<i64>,
-    pub current_values: Vec<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct InfoSnapshot {
-    x_pos: i64,
-    coins: i64,
-    level_hi: i64,
-    level_lo: i64,
-    lives: i64,
-    score: i64,
-    scrolling: i64,
-    time: i64,
-    xscroll_hi: i64,
-    xscroll_lo: i64,
-}
-
-impl InfoSnapshot {
-    fn from_env(env: &NesEmulator) -> Self {
-        Self {
-            x_pos: i64::from(env.x_pos()),
-            coins: i64::from(env.coins()),
-            level_hi: i64::from(env.level_hi()),
-            level_lo: i64::from(env.level_lo()),
-            lives: i64::from(env.lives()),
-            score: i64::from(env.score()),
-            scrolling: i64::from(env.scrolling()),
-            time: i64::from(env.time()),
-            xscroll_hi: i64::from(env.xscroll_hi()),
-            xscroll_lo: i64::from(env.xscroll_lo()),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn from_outputs(
-        x_pos: u16,
-        coins: u8,
-        level_hi: i16,
-        level_lo: i16,
-        lives: i16,
-        score: u32,
-        scrolling: i16,
-        time: u16,
-        xscroll_hi: u8,
-        xscroll_lo: u8,
-    ) -> Self {
-        Self {
-            x_pos: i64::from(x_pos),
-            coins: i64::from(coins),
-            level_hi: i64::from(level_hi),
-            level_lo: i64::from(level_lo),
-            lives: i64::from(lives),
-            score: i64::from(score),
-            scrolling: i64::from(scrolling),
-            time: i64::from(time),
-            xscroll_hi: i64::from(xscroll_hi),
-            xscroll_lo: i64::from(xscroll_lo),
-        }
-    }
-
-    fn as_tuple(self) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) {
-        (
-            self.x_pos,
-            self.coins,
-            self.level_hi,
-            self.level_lo,
-            self.lives,
-            self.score,
-            self.scrolling,
-            self.time,
-            self.xscroll_hi,
-            self.xscroll_lo,
-        )
-    }
-
-    fn value(self, key: InfoKey) -> i64 {
-        match key {
-            InfoKey::XPos => self.x_pos,
-            InfoKey::Coins => self.coins,
-            InfoKey::LevelHi => self.level_hi,
-            InfoKey::LevelLo => self.level_lo,
-            InfoKey::Lives => self.lives,
-            InfoKey::Score => self.score,
-            InfoKey::Scrolling => self.scrolling,
-            InfoKey::Time => self.time,
-            InfoKey::XScrollHi => self.xscroll_hi,
-            InfoKey::XScrollLo => self.xscroll_lo,
-        }
-    }
-}
-
 impl VecEnvConfig {
     pub fn source_width(&self) -> usize {
         match self.crop_mode {
@@ -304,14 +127,8 @@ pub struct MarioVecEnv {
     weighted_initial_states: bool,
     active_state_indices: Vec<i32>,
     initial_state_names: Vec<String>,
-    done_on_info_rules: Vec<DoneOnInfoRule>,
-    done_on_info_baselines: Vec<InfoSnapshot>,
-    last_done_on_info: Vec<Vec<FiredDoneOnInfoRule>>,
-    last_terminal_observations: Vec<Option<Vec<u8>>>,
-    last_terminal_infos: Vec<Option<InfoSnapshot>>,
     last_actions: Vec<u8>,
     rngs: Vec<XorShift64>,
-    autoreset_same_step: bool,
     pending_reset: Vec<bool>,
     any_pending_reset: bool,
     scratch: Vec<Vec<u8>>,
@@ -326,8 +143,6 @@ impl MarioVecEnv {
         initial_states: Vec<InitialState>,
         weighted_initial_states: bool,
         seed: u64,
-        done_on_info_rules: Vec<DoneOnInfoRule>,
-        autoreset_same_step: bool,
     ) -> Result<Self, StateLoadError> {
         let resize_plan = AreaResizePlan::new(
             config.source_width(),
@@ -350,16 +165,10 @@ impl MarioVecEnv {
             weighted_initial_states,
             active_state_indices: vec![-1; config.num_envs],
             initial_state_names: Vec::new(),
-            done_on_info_rules,
-            done_on_info_baselines: vec![InfoSnapshot::default(); config.num_envs],
-            last_done_on_info: vec![Vec::new(); config.num_envs],
-            last_terminal_observations: vec![None; config.num_envs],
-            last_terminal_infos: vec![None; config.num_envs],
             last_actions: vec![MarioAction::Noop as u8; config.num_envs],
             rngs: (0..config.num_envs)
                 .map(|env_idx| XorShift64::new(seed.wrapping_add(env_idx as u64)))
                 .collect(),
-            autoreset_same_step,
             pending_reset: vec![false; config.num_envs],
             any_pending_reset: false,
             scratch,
@@ -369,17 +178,6 @@ impl MarioVecEnv {
         env.intern_initial_state_names();
         env.reset_envs()?;
         Ok(env)
-    }
-
-    pub fn set_initial_states(
-        &mut self,
-        initial_states: Vec<InitialState>,
-        weighted_initial_states: bool,
-    ) -> Result<(), StateLoadError> {
-        self.initial_states = initial_states;
-        self.weighted_initial_states = weighted_initial_states;
-        self.intern_initial_state_names();
-        Ok(())
     }
 
     fn intern_initial_state_names(&mut self) {
@@ -403,7 +201,6 @@ impl MarioVecEnv {
                 self.envs[env_idx].reset();
                 self.last_actions[env_idx] = MarioAction::Noop as u8;
                 self.apply_noop_reset(env_idx);
-                self.refresh_done_baseline(env_idx);
             }
             self.active_state_indices.fill(-1);
             return Ok(());
@@ -415,7 +212,6 @@ impl MarioVecEnv {
             self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
             self.last_actions[env_idx] = MarioAction::Noop as u8;
             self.apply_noop_reset(env_idx);
-            self.refresh_done_baseline(env_idx);
         }
         Ok(())
     }
@@ -503,9 +299,6 @@ impl MarioVecEnv {
                 (start_indices[env_idx] >= 0).then_some(start_indices[env_idx] as usize);
             self.reset_one_env(env_idx, explicit_index)?;
             self.pending_reset[env_idx] = false;
-            self.last_done_on_info[env_idx].clear();
-            self.last_terminal_observations[env_idx] = None;
-            self.last_terminal_infos[env_idx] = None;
         }
 
         if reset_mask.iter().filter(|&&selected| selected).count() >= PARALLEL_ENV_THRESHOLD {
@@ -571,23 +364,6 @@ impl MarioVecEnv {
         &self.active_state_indices
     }
 
-    pub fn done_on_info(&self) -> &[Vec<FiredDoneOnInfoRule>] {
-        &self.last_done_on_info
-    }
-
-    pub fn terminal_observations(&self) -> &[Option<Vec<u8>>] {
-        &self.last_terminal_observations
-    }
-
-    pub fn terminal_infos(
-        &self,
-    ) -> Vec<Option<(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)>> {
-        self.last_terminal_infos
-            .iter()
-            .map(|snapshot| snapshot.map(InfoSnapshot::as_tuple))
-            .collect()
-    }
-
     pub fn rgb_frames_hwc_into(&self, dst: &mut [u8]) {
         let frame_stride = visual_rgb_frame_len();
         debug_assert_eq!(dst.len(), self.config.num_envs * frame_stride);
@@ -610,7 +386,7 @@ impl MarioVecEnv {
     }
 
     pub fn has_pending_reset(&self) -> bool {
-        !self.autoreset_same_step && self.any_pending_reset
+        self.any_pending_reset
     }
 
     pub fn enable_profiler(&mut self) {
@@ -708,24 +484,12 @@ impl MarioVecEnv {
             self.last_actions.copy_from_slice(actions);
             actions
         };
-        for lane in &mut self.last_done_on_info {
-            lane.clear();
-        }
-        for terminal_obs in &mut self.last_terminal_observations {
-            *terminal_obs = None;
-        }
-        for terminal_info in &mut self.last_terminal_infos {
-            *terminal_info = None;
-        }
-
         if config.num_envs >= PARALLEL_ENV_THRESHOLD {
             let resize_plan = &self.resize_plan;
             self.envs
                 .par_iter_mut()
                 .zip(self.scratch.par_iter_mut())
                 .zip(actions.par_iter())
-                .zip(self.done_on_info_baselines.par_iter())
-                .zip(self.last_done_on_info.par_iter_mut())
                 .zip(obs.par_chunks_mut(obs_stride))
                 .zip(rewards.par_iter_mut())
                 .zip(terminated.par_iter_mut())
@@ -755,17 +519,12 @@ impl MarioVecEnv {
                     let (zipped, terminated_out) = zipped;
                     let (zipped, reward_out) = zipped;
                     let (zipped, obs_chunk) = zipped;
-                    let (zipped, fired_done_on_info) = zipped;
-                    let (zipped, done_on_info_baseline) = zipped;
                     let ((env, scratch), action) = zipped;
                     step_one(
                         config,
                         resize_plan,
                         env,
                         scratch,
-                        *done_on_info_baseline,
-                        &self.done_on_info_rules,
-                        fired_done_on_info,
                         *action,
                         obs_chunk,
                         reward_out,
@@ -792,9 +551,6 @@ impl MarioVecEnv {
                     &self.resize_plan,
                     &mut self.envs[env_idx],
                     &mut self.scratch[env_idx],
-                    self.done_on_info_baselines[env_idx],
-                    &self.done_on_info_rules,
-                    &mut self.last_done_on_info[env_idx],
                     actions[env_idx],
                     &mut obs[start..end],
                     &mut rewards[env_idx],
@@ -815,17 +571,10 @@ impl MarioVecEnv {
         }
 
         if terminated.iter().any(|done| *done) || truncated.iter().any(|done| *done) {
-            if self.autoreset_same_step {
-                self.autoreset_done_lanes(
-                    obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
-                    scrolling, time, xscroll_hi, xscroll_lo,
-                );
-            } else {
-                for env_idx in 0..config.num_envs {
-                    self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
-                }
-                self.any_pending_reset = true;
+            for env_idx in 0..config.num_envs {
+                self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
             }
+            self.any_pending_reset = true;
         }
     }
 
@@ -865,24 +614,12 @@ impl MarioVecEnv {
             self.last_actions.copy_from_slice(actions);
             actions
         };
-        for lane in &mut self.last_done_on_info {
-            lane.clear();
-        }
-        for terminal_obs in &mut self.last_terminal_observations {
-            *terminal_obs = None;
-        }
-        for terminal_info in &mut self.last_terminal_infos {
-            *terminal_info = None;
-        }
-
         if config.num_envs >= PARALLEL_ENV_THRESHOLD {
             let resize_plan = &self.resize_plan;
             self.envs
                 .par_iter_mut()
                 .zip(self.scratch.par_iter_mut())
                 .zip(actions.par_iter())
-                .zip(self.done_on_info_baselines.par_iter())
-                .zip(self.last_done_on_info.par_iter_mut())
                 .zip(obs.par_chunks_mut(obs_stride))
                 .zip(rewards.par_iter_mut())
                 .zip(terminated.par_iter_mut())
@@ -914,17 +651,12 @@ impl MarioVecEnv {
                     let (zipped, terminated_out) = zipped;
                     let (zipped, reward_out) = zipped;
                     let (zipped, obs_chunk) = zipped;
-                    let (zipped, fired_done_on_info) = zipped;
-                    let (zipped, done_on_info_baseline) = zipped;
                     let ((env, scratch), action) = zipped;
                     step_one_profiled(
                         config,
                         resize_plan,
                         env,
                         scratch,
-                        *done_on_info_baseline,
-                        &self.done_on_info_rules,
-                        fired_done_on_info,
                         *action,
                         obs_chunk,
                         reward_out,
@@ -952,9 +684,6 @@ impl MarioVecEnv {
                     &self.resize_plan,
                     &mut self.envs[env_idx],
                     &mut self.scratch[env_idx],
-                    self.done_on_info_baselines[env_idx],
-                    &self.done_on_info_rules,
-                    &mut self.last_done_on_info[env_idx],
                     actions[env_idx],
                     &mut obs[start..end],
                     &mut rewards[env_idx],
@@ -976,22 +705,11 @@ impl MarioVecEnv {
         }
 
         if terminated.iter().any(|done| *done) || truncated.iter().any(|done| *done) {
-            if self.autoreset_same_step {
-                self.autoreset_done_lanes(
-                    obs, terminated, truncated, x_pos, coins, level_hi, level_lo, lives, score,
-                    scrolling, time, xscroll_hi, xscroll_lo,
-                );
-            } else {
-                for env_idx in 0..config.num_envs {
-                    self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
-                }
-                self.any_pending_reset = true;
+            for env_idx in 0..config.num_envs {
+                self.pending_reset[env_idx] = terminated[env_idx] || truncated[env_idx];
             }
+            self.any_pending_reset = true;
         }
-    }
-
-    fn refresh_done_baseline(&mut self, env_idx: usize) {
-        self.done_on_info_baselines[env_idx] = InfoSnapshot::from_env(&self.envs[env_idx]);
     }
 
     fn reset_one_env(
@@ -1004,7 +722,6 @@ impl MarioVecEnv {
             self.active_state_indices[env_idx] = -1;
             self.last_actions[env_idx] = MarioAction::Noop as u8;
             self.apply_noop_reset(env_idx);
-            self.refresh_done_baseline(env_idx);
             return Ok(());
         }
 
@@ -1014,72 +731,7 @@ impl MarioVecEnv {
         self.envs[env_idx].load_fceu_state(&self.initial_states[state_index].data)?;
         self.last_actions[env_idx] = MarioAction::Noop as u8;
         self.apply_noop_reset(env_idx);
-        self.refresh_done_baseline(env_idx);
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn autoreset_done_lanes(
-        &mut self,
-        obs: &mut [u8],
-        terminated: &mut [bool],
-        truncated: &mut [bool],
-        x_pos: &mut [u16],
-        coins: &mut [u8],
-        level_hi: &mut [i16],
-        level_lo: &mut [i16],
-        lives: &mut [i16],
-        score: &mut [u32],
-        scrolling: &mut [i16],
-        time: &mut [u16],
-        xscroll_hi: &mut [u8],
-        xscroll_lo: &mut [u8],
-    ) {
-        let config = self.config;
-        let obs_stride = config.obs_len_per_env();
-        for env_idx in 0..config.num_envs {
-            if !terminated[env_idx] && !truncated[env_idx] {
-                continue;
-            }
-
-            let start = env_idx * obs_stride;
-            let end = start + obs_stride;
-            self.last_terminal_observations[env_idx] = Some(obs[start..end].to_vec());
-            self.last_terminal_infos[env_idx] = Some(InfoSnapshot::from_outputs(
-                x_pos[env_idx],
-                coins[env_idx],
-                level_hi[env_idx],
-                level_lo[env_idx],
-                lives[env_idx],
-                score[env_idx],
-                scrolling[env_idx],
-                time[env_idx],
-                xscroll_hi[env_idx],
-                xscroll_lo[env_idx],
-            ));
-            self.reset_one_env(env_idx, None)
-                .expect("previously validated initial state failed to reload");
-            write_reset_stack(
-                config,
-                &self.resize_plan,
-                &self.envs[env_idx],
-                &mut self.scratch[env_idx],
-                &mut obs[start..end],
-            );
-            write_info_from_env(
-                &self.envs[env_idx],
-                &mut x_pos[env_idx],
-                &mut coins[env_idx],
-                &mut level_hi[env_idx],
-                &mut level_lo[env_idx],
-                &mut lives[env_idx],
-                &mut score[env_idx],
-                &mut scrolling[env_idx],
-                &mut time[env_idx],
-                &mut xscroll_hi[env_idx],
-                &mut xscroll_lo[env_idx],
-            );
-        }
     }
 
     pub fn env_ram(&self, env_idx: usize) -> Option<&[u8; 2048]> {
@@ -1214,9 +866,6 @@ fn step_one(
     resize_plan: &AreaResizePlan,
     env: &mut NesEmulator,
     scratch: &mut [u8],
-    done_on_info_baseline: InfoSnapshot,
-    done_on_info_rules: &[DoneOnInfoRule],
-    fired_done_on_info: &mut Vec<FiredDoneOnInfoRule>,
     action_id: u8,
     obs_chunk: &mut [u8],
     reward_out: &mut f32,
@@ -1250,13 +899,7 @@ fn step_one(
             };
             write_rgb_source_frame(config, env, target);
             recent_count += 1;
-            let done_on_info = check_done_on_info(
-                env,
-                done_on_info_baseline,
-                done_on_info_rules,
-                fired_done_on_info,
-            );
-            done = env.is_done() || done_on_info;
+            done = env.is_done();
             if done {
                 break;
             }
@@ -1273,13 +916,7 @@ fn step_one(
     } else {
         for _ in 0..config.frame_skip {
             reward += env.step_frame(action);
-            let done_on_info = check_done_on_info(
-                env,
-                done_on_info_baseline,
-                done_on_info_rules,
-                fired_done_on_info,
-            );
-            done = env.is_done() || done_on_info;
+            done = env.is_done();
             if done {
                 break;
             }
@@ -1312,9 +949,6 @@ fn step_one_profiled(
     resize_plan: &AreaResizePlan,
     env: &mut NesEmulator,
     scratch: &mut [u8],
-    done_on_info_baseline: InfoSnapshot,
-    done_on_info_rules: &[DoneOnInfoRule],
-    fired_done_on_info: &mut Vec<FiredDoneOnInfoRule>,
     action_id: u8,
     obs_chunk: &mut [u8],
     reward_out: &mut f32,
@@ -1351,13 +985,7 @@ fn step_one_profiled(
             write_rgb_source_frame(config, env, target);
             profiler.record_render(render_start.elapsed());
             recent_count += 1;
-            let done_on_info = check_done_on_info(
-                env,
-                done_on_info_baseline,
-                done_on_info_rules,
-                fired_done_on_info,
-            );
-            done = env.is_done() || done_on_info;
+            done = env.is_done();
             if done {
                 break;
             }
@@ -1378,13 +1006,7 @@ fn step_one_profiled(
     } else {
         for _ in 0..config.frame_skip {
             reward += env.step_frame_profiled(action, profiler);
-            let done_on_info = check_done_on_info(
-                env,
-                done_on_info_baseline,
-                done_on_info_rules,
-                fired_done_on_info,
-            );
-            done = env.is_done() || done_on_info;
+            done = env.is_done();
             if done {
                 break;
             }
@@ -1418,72 +1040,6 @@ fn step_one_profiled(
         xscroll_hi_out,
         xscroll_lo_out,
     );
-}
-
-fn check_done_on_info(
-    env: &NesEmulator,
-    baseline: InfoSnapshot,
-    rules: &[DoneOnInfoRule],
-    fired_rules: &mut Vec<FiredDoneOnInfoRule>,
-) -> bool {
-    if rules.is_empty() {
-        return false;
-    }
-    let mut fired_any = false;
-    for rule in rules {
-        let mut fired = false;
-        for key in &rule.keys {
-            if done_on_info_value_fired(
-                rule.op,
-                baseline.value(*key),
-                info_value_from_env(env, *key),
-            ) {
-                fired = true;
-                break;
-            }
-        }
-        if !fired {
-            continue;
-        }
-        fired_any = true;
-        let mut previous_values = Vec::with_capacity(rule.keys.len());
-        let mut current_values = Vec::with_capacity(rule.keys.len());
-        for key in &rule.keys {
-            previous_values.push(baseline.value(*key));
-            current_values.push(info_value_from_env(env, *key));
-        }
-        fired_rules.push(FiredDoneOnInfoRule {
-            name: rule.name.clone(),
-            keys: rule.keys.clone(),
-            op: rule.op,
-            previous_values,
-            current_values,
-        });
-    }
-    fired_any
-}
-
-fn info_value_from_env(env: &NesEmulator, key: InfoKey) -> i64 {
-    match key {
-        InfoKey::XPos => i64::from(env.x_pos()),
-        InfoKey::Coins => i64::from(env.coins()),
-        InfoKey::LevelHi => i64::from(env.level_hi()),
-        InfoKey::LevelLo => i64::from(env.level_lo()),
-        InfoKey::Lives => i64::from(env.lives()),
-        InfoKey::Score => i64::from(env.score()),
-        InfoKey::Scrolling => i64::from(env.scrolling()),
-        InfoKey::Time => i64::from(env.time()),
-        InfoKey::XScrollHi => i64::from(env.xscroll_hi()),
-        InfoKey::XScrollLo => i64::from(env.xscroll_lo()),
-    }
-}
-
-fn done_on_info_value_fired(op: DoneOnInfoOp, baseline: i64, current: i64) -> bool {
-    match op {
-        DoneOnInfoOp::Change => current != baseline,
-        DoneOnInfoOp::Increase => current > baseline,
-        DoneOnInfoOp::Decrease => current < baseline,
-    }
 }
 
 fn write_reset_stack(

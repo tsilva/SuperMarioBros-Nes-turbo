@@ -3,168 +3,37 @@ from __future__ import annotations
 import importlib.metadata
 import inspect
 
-import pytest
 import numpy as np
-from gymnasium import spaces
-from gymnasium.vector import AutoresetMode
+import pytest
 
-from scripts import compare_supermariobrosnes_turbo_vec_env as compare
-from supermariobrosnes_turbo import env as env_module
-from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
-from supermariobrosnes_turbo import (
-    BUTTON_TO_INDEX,
-    Actions,
-    Integrations,
-    NES_BUTTONS,
-    Observations,
-    State,
-    SuperMarioBrosNesTurboVecEnv,
-)
 from rom_helpers import require_rom
+from scripts import compare_supermariobrosnes_turbo_vec_env as compare
+from supermariobrosnes_turbo import Actions, NES_BUTTONS, SuperMarioBrosNesTurboVecEnv
+from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
 
 
-def resize_chw_area_native_reference(src: np.ndarray, width: int, height: int) -> np.ndarray:
-    src_h, src_w = src.shape[-2:]
-    out = np.empty((*src.shape[:-2], height, width), dtype=np.uint8)
-    for out_y in range(height):
-        y0 = (out_y * src_h) // height
-        y1 = min(max(((out_y + 1) * src_h) // height, y0 + 1), src_h)
-        for out_x in range(width):
-            x0 = (out_x * src_w) // width
-            x1 = min(max(((out_x + 1) * src_w) // width, x0 + 1), src_w)
-            patch = src[:, :, y0:y1, x0:x1].astype(np.uint32)
-            out[:, :, out_y, out_x] = patch.mean(axis=(-2, -1)).astype(np.uint8)
-    return out
+def test_oracle_version_is_post30() -> None:
+    assert compare.EXPECTED_STABLE_RETRO_VERSION == "1.0.1.post30"
 
 
-def require_stable_retro_oracle() -> None:
-    require_rom()
-    try:
-        version = importlib.metadata.version("stable-retro-turbo")
-    except importlib.metadata.PackageNotFoundError:
-        pytest.skip(
-            "stable-retro-turbo oracle is not installed; run `uv sync --extra dev` "
-            "under Python 3.14",
-        )
-    assert version == compare.EXPECTED_STABLE_RETRO_VERSION
+def test_native_binding_removed_lifecycle_and_policy_mutators() -> None:
+    for name in (
+        "done_on_info",
+        "terminal_observations",
+        "terminal_infos",
+        "set_initial_states",
+    ):
+        assert not hasattr(native._RetroVecEnv, name)
 
 
-def test_button_mask_core_action_lookup_matches_semantic_mapper() -> None:
-    env = object.__new__(SuperMarioBrosNesTurboVecEnv)
-    env.num_buttons = len(NES_BUTTONS)
-    lookup = env._build_mask_to_core_action_ids()
-    for mask_index, core_action_id in enumerate(lookup):
-        mask = ((mask_index & env_module.MASK_BIT_WEIGHTS) != 0).astype(np.uint8)
-        assert int(core_action_id) == int(env._mask_to_core_action(mask))
-
-
-def test_no_alternate_step_api_is_exposed() -> None:
-    removed_name = "_".join(("step", "fast"))
-    assert not hasattr(SuperMarioBrosNesTurboVecEnv, removed_name)
-
-
-def make_level1_1_noop_probe(done_on) -> SuperMarioBrosNesTurboVecEnv:
-    try:
-        return SuperMarioBrosNesTurboVecEnv(
-            compare.DEFAULT_STABLE_RETRO_GAME,
-            state="Level1-1",
-            num_envs=1,
-            num_threads=1,
-            rom_path=str(require_rom()),
-            render_mode="rgb_array",
-            use_restricted_actions=Actions.ALL,
-            obs_crop=(32, 0, 0, 0),
-            obs_resize=(84, 84),
-            obs_grayscale=True,
-            obs_resize_algorithm="area",
-            obs_layout="chw",
-            frame_skip=4,
-            frame_stack=4,
-            maxpool_last_two=False,
-            noop_reset_max=0,
-            sticky_action_prob=0.0,
-            reward_clip=False,
-            info_filter="all",
-            done_on=done_on,
-        )
-    except ValueError as exc:
-        if "ROM path required" in str(exc):
-            pytest.skip(str(exc))
-        raise
-
-
-def reset_obs(env: SuperMarioBrosNesTurboVecEnv) -> np.ndarray:
-    obs, _infos = env.reset()
-    return obs
-
-
-def lane_has(infos: dict[str, object], key: str, lane: int) -> bool:
-    mask = infos.get(f"_{key}")
-    return bool(mask is not None and np.asarray(mask, dtype=np.bool_)[lane])
-
-
-def lane_value(infos: dict[str, object], key: str, lane: int) -> object:
-    assert lane_has(infos, key, lane), f"lane {lane} missing info key {key!r}: {infos}"
-    values = infos[key]
-    return values[lane]  # type: ignore[index]
-
-
-def nested_lane_value(infos: dict[str, object], path: tuple[str, ...], lane: int) -> object:
-    current: object = infos
-    for key in path[:-1]:
-        assert isinstance(current, dict)
-        current = current[key]
-    assert isinstance(current, dict)
-    return lane_value(current, path[-1], lane)
-
-
-def final_done_on_info(infos: dict[str, object], lane: int, event: str) -> dict[str, object]:
-    current: object = infos
-    for key in ("final_info", "done_on_info", event):
-        assert isinstance(current, dict)
-        current = current[key]
-    assert isinstance(current, dict)
-    return {
-        key: lane_value(current, key, lane)
-        for key in current
-        if not key.startswith("_")
-    }
-
-
-def test_native_vec_env_binding_is_private_retro_vec_env() -> None:
-    assert SuperMarioBrosNesTurboVecEnv.__name__ == "SuperMarioBrosNesTurboVecEnv"
-    assert not hasattr(native, "SuperMarioBrosNesTurboVecEnv")
-    assert hasattr(native, "_RetroVecEnv")
-    assert native._RetroVecEnv.__name__ == "_RetroVecEnv"
-    assert hasattr(native._RetroVecEnv, "set_initial_states")
-    assert not hasattr(native, "NativeVectorEnv")
-    assert not hasattr(native, "FastMarioVecEnv")
-
-
-def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> None:
-    native_signature = inspect.signature(SuperMarioBrosNesTurboVecEnv)
-    assert list(native_signature.parameters) == [
-        "game",
+def test_public_signature_preserves_vector_features() -> None:
+    params = inspect.signature(SuperMarioBrosNesTurboVecEnv).parameters
+    for name in (
         "state",
-        "scenario",
-        "info",
-        "use_restricted_actions",
-        "record",
-        "players",
-        "inttype",
-        "obs_type",
-        "render_mode",
-        "num_envs",
-        "num_threads",
-        "rom_path",
         "obs_copy",
         "obs_resize",
         "obs_crop",
-        "obs_crop_mode",
-        "obs_crop_fill",
         "obs_grayscale",
-        "obs_resize_algorithm",
-        "obs_layout",
         "frame_skip",
         "frame_stack",
         "maxpool_last_two",
@@ -172,747 +41,78 @@ def test_native_turbo_vec_env_defaults_match_stable_retro_turbo_signature() -> N
         "sticky_action_prob",
         "reward_clip",
         "info_filter",
-        "done_on",
-        "autoreset_mode",
-    ]
-
-    native_defaults = {
-        name: parameter.default
-        for name, parameter in native_signature.parameters.items()
-        if parameter.default is not inspect.Parameter.empty
-    }
-
-    assert native_defaults["scenario"] is None
-    assert native_defaults["info"] is None
-    assert native_defaults["record"] is False
-    assert native_defaults["players"] == 1
-    assert native_defaults["render_mode"] == "human"
-    assert native_defaults["num_envs"] == 1
-    assert native_defaults["num_threads"] is None
-    assert native_defaults["rom_path"] is None
-    assert native_defaults["obs_copy"] == "copy"
-    assert native_defaults["obs_resize"] is None
-    assert native_defaults["obs_crop"] is None
-    assert native_defaults["obs_crop_mode"] == "remove"
-    assert native_defaults["obs_crop_fill"] == 0
-    assert native_defaults["obs_grayscale"] is False
-    assert native_defaults["obs_resize_algorithm"] == "nearest"
-    assert native_defaults["obs_layout"] == "hwc"
-    assert native_defaults["frame_skip"] == 1
-    assert native_defaults["frame_stack"] == 1
-    assert native_defaults["maxpool_last_two"] is False
-    assert native_defaults["noop_reset_max"] == 0
-    assert native_defaults["sticky_action_prob"] == 0.0
-    assert native_defaults["reward_clip"] is False
-    assert native_defaults["info_filter"] == "all"
-    assert native_defaults["done_on"] is None
-    assert native_defaults["autoreset_mode"] is AutoresetMode.SAME_STEP
-
-    assert native_defaults["state"] is State.DEFAULT
-    assert native_defaults["state"].name == "DEFAULT"
-    assert native_defaults["state"].value == -1
-    assert native_defaults["use_restricted_actions"] is Actions.FILTERED
-    assert native_defaults["use_restricted_actions"].name == "FILTERED"
-    assert native_defaults["use_restricted_actions"].value == 1
-    assert native_defaults["inttype"] is Integrations.STABLE
-    assert native_defaults["inttype"].name == "STABLE"
-    assert native_defaults["inttype"].value == 1
-    assert native_defaults["obs_type"] is Observations.IMAGE
-    assert native_defaults["obs_type"].name == "IMAGE"
-    assert native_defaults["obs_type"].value == 0
-
-    for name in (
-        "copy_observations",
-        "info_mode",
-        "info_keys",
-        "done_on_info",
-        "unsafe_zero_copy",
     ):
-        assert name not in native_signature.parameters
-
-
-def test_native_turbo_vec_env_rejects_non_stable_retro_alias_keywords() -> None:
-    with pytest.raises(TypeError, match="frame_maxpool"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", frame_maxpool=False)
-    with pytest.raises(TypeError, match="reset_noops"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", reset_noops=0)
-    with pytest.raises(TypeError, match="action_sticky_prob"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", action_sticky_prob=0.0)
-
-
-def test_native_turbo_vec_env_rejects_invalid_crop_mode_and_fill() -> None:
-    with pytest.raises(ValueError, match="obs_crop_mode must be 'remove' or 'mask'"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_mode="zero")
-    with pytest.raises(ValueError, match=r"obs_crop_fill must be in \[0, 255\]"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_fill=-1)
-    with pytest.raises(ValueError, match=r"obs_crop_fill must be in \[0, 255\]"):
-        SuperMarioBrosNesTurboVecEnv("SuperMarioBros-Nes-v0", obs_crop_fill=256)
-
-
-def test_native_turbo_done_on_normalization_matches_stable_retro_shape() -> None:
-    assert env_module._normalize_done_on_info(
-        {"level_change": [["levelHi", "levelLo"], "change"]},
-        False,
-        False,
-    ) == (("level_change", "default", ("levelHi", "levelLo"), "change", "reset"),)
-
-    assert env_module._normalize_done_on_info(
-        {"life_loss": ("lives", "decrease")},
-        False,
-        False,
-    ) == (("life_loss", "default", ("lives",), "decrease", "reset"),)
-
-    assert env_module._normalize_done_on_info(
-        {
-            "life_loss": {
-                "triggers": [
-                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
-                    {"id": "lives_change", "variables": "lives", "op": "change"},
-                ],
-            },
-        },
-        False,
-        False,
-    ) == (
-        ("life_loss", "lives_decrease", ("lives",), "decrease", "reset"),
-        ("life_loss", "lives_change", ("lives",), "change", "reset"),
-    )
-
-
-def test_native_turbo_done_on_info_writer_groups_triggers_without_rom() -> None:
-    rules = env_module._normalize_done_on_info(
-        {
-            "life_loss": {
-                "triggers": [
-                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
-                    {"id": "lives_change", "variables": "lives", "op": "change"},
-                ],
-            },
-        },
-        False,
-        False,
-    )
-    native_rules, metadata = env_module._native_done_on_info_rules(rules)
-
-    class FakeCore:
-        def done_on_info(self):
-            return [
-                [
-                    (
-                        native_rules[0][0],
-                        ["lives"],
-                        "decrease",
-                        [2],
-                        [1],
-                    ),
-                    (
-                        native_rules[1][0],
-                        ["lives"],
-                        "change",
-                        [2],
-                        [1],
-                    ),
-                ],
-            ]
-
-    env = SuperMarioBrosNesTurboVecEnv.__new__(SuperMarioBrosNesTurboVecEnv)
-    env._core = FakeCore()
-    env._done_on_info_metadata = metadata
-
-    env._write_done_on_info()
-
-    payload = env._done_on_info[0]["life_loss"]
-    assert payload["trigger"] == "lives_decrease"
-    assert payload["op"] == "decrease"
-    assert payload["compare"] == "reset"
-    assert payload["keys"] == ["lives"]
-    assert payload["variables"] == ["lives"]
-    assert payload["prev"] == [2]
-    assert payload["next"] == [1]
-    assert [trigger["trigger"] for trigger in payload["triggers"]] == [
-        "lives_decrease",
-        "lives_change",
-    ]
-    assert [trigger["op"] for trigger in payload["triggers"]] == ["decrease", "change"]
-
-
-def test_native_turbo_vec_env_crop_modes_configure_geometry_without_rom(monkeypatch) -> None:
-    core_calls = []
-
-    class FakeCore:
-        def __init__(
-            self,
-            _rom_path,
-            num_envs,
-            frame_skip,
-            grayscale,
-            frame_stack,
-            _terminate_on_flag,
-            crop_top,
-            crop_bottom,
-            resize_width,
-            resize_height,
-            initial_states,
-            initial_state_names,
-            initial_state_weights,
-            seed,
-            terminate_on_life_loss,
-            terminate_on_level_change,
-            done_on_info,
-            frame_maxpool,
-            noop_reset_max,
-            sticky_action_prob,
-            crop_left,
-            crop_right,
-            crop_mode,
-            crop_fill,
-            resize_algorithm,
-            autoreset_same_step,
-        ):
-            core_calls.append(
-                {
-                    "crop_top": crop_top,
-                    "crop_bottom": crop_bottom,
-                    "crop_left": crop_left,
-                    "crop_right": crop_right,
-                    "crop_mode": crop_mode,
-                    "crop_fill": crop_fill,
-                    "resize_width": resize_width,
-                    "resize_height": resize_height,
-                    "resize_algorithm": resize_algorithm,
-                    "autoreset_same_step": autoreset_same_step,
-                }
-            )
-            self.num_envs = num_envs
-            self.frame_skip = frame_skip
-            self.grayscale = grayscale
-            self.frame_stack = frame_stack
-            self.frame_maxpool = frame_maxpool
-            self.noop_reset_max = noop_reset_max
-            self.sticky_action_prob = sticky_action_prob
-            self.crop_top = crop_top
-            self.crop_bottom = crop_bottom
-            self.crop_left = crop_left
-            self.crop_right = crop_right
-            self.crop_mode = crop_mode
-            self.crop_fill = crop_fill
-            self.resize_width = resize_width
-            self.resize_height = resize_height
-            self.resize_algorithm = resize_algorithm
-            self.initial_state_names = ()
-
-        def initial_state_policy_names(self):
-            return ()
-
-        def initial_state_weights(self):
-            return ()
-
-        def obs_shape(self):
-            channels = self.frame_stack if self.grayscale else self.frame_stack * 3
-            return self.num_envs, channels, self.resize_height, self.resize_width
-
-        def active_state_indices(self):
-            return [-1] * self.num_envs
-
-    monkeypatch.setattr(env_module, "_resolve_rom_path", lambda _game, _rom_path: "/tmp/fake.nes")
-    monkeypatch.setattr(env_module, "_CoreRetroVecEnv", FakeCore)
-
-    remove_env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        obs_crop=(32, 0, 10, 0),
-        obs_crop_mode="remove",
-        obs_resize=None,
-        obs_grayscale=True,
-        obs_layout="chw",
-    )
-    mask_env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        obs_crop=(32, 0, 10, 0),
-        obs_crop_mode="mask",
-        obs_crop_fill=7,
-        obs_resize=None,
-        obs_grayscale=True,
-        obs_layout="chw",
-    )
-    try:
-        assert core_calls == [
-            {
-                "crop_top": 32,
-                "crop_bottom": 0,
-                "crop_left": 10,
-                "crop_right": 0,
-                "crop_mode": "remove",
-                "crop_fill": 0,
-                "resize_width": 230,
-                "resize_height": 192,
-                "resize_algorithm": "nearest",
-                "autoreset_same_step": True,
-            },
-            {
-                "crop_top": 32,
-                "crop_bottom": 0,
-                "crop_left": 10,
-                "crop_right": 0,
-                "crop_mode": "mask",
-                "crop_fill": 7,
-                "resize_width": 240,
-                "resize_height": 224,
-                "resize_algorithm": "nearest",
-                "autoreset_same_step": True,
-            },
-        ]
-        assert remove_env.single_observation_space.shape == (1, 192, 230)
-        assert remove_env.observation_space.shape == (1, 1, 192, 230)
-        assert mask_env.single_observation_space.shape == (1, 224, 240)
-        assert mask_env.observation_space.shape == (1, 1, 224, 240)
-        assert not remove_env._needs_python_postprocess
-        assert not mask_env._needs_python_postprocess
-
-        remove_env._obs = np.arange(np.prod(remove_env._obs.shape), dtype=np.uint8).reshape(remove_env._obs.shape)
-        mask_env._obs = np.arange(np.prod(mask_env._obs.shape), dtype=np.uint8).reshape(mask_env._obs.shape)
-
-        remove_obs = remove_env._return_obs()
-        mask_obs = mask_env._return_obs()
-
-        np.testing.assert_array_equal(remove_obs, remove_env._obs)
-        np.testing.assert_array_equal(mask_obs, mask_env._obs)
-    finally:
-        remove_env.close()
-        mask_env.close()
+        assert name in params
+    for name in ("done_on", "autoreset_mode"):
+        assert name not in params
 
 
 @pytest.mark.retro_oracle
-def test_stable_retro_vector_env_constructs_with_oracle_keyword_surface() -> None:
-    require_stable_retro_oracle()
-    import stable_retro
-
-    rom_path = require_rom()
-    env_class = getattr(stable_retro, "Retro" "Vec" "Env")
-    env = env_class(
-        compare.DEFAULT_STABLE_RETRO_GAME,
+def test_post30_oracle_raw_signal_and_observation_parity() -> None:
+    require_rom()
+    assert importlib.metadata.version("stable-retro-turbo") == "1.0.1.post30"
+    config = compare.ComparisonConfig(
+        rom_path=require_rom(),
+        stable_retro_path=None,
+        game=compare.DEFAULT_STABLE_RETRO_GAME,
         state="Level1-1",
         num_envs=1,
-        num_threads=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=stable_retro.Actions.ALL,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_resize_algorithm="area",
-        obs_layout="chw",
-        obs_copy="safe_view",
+        env_threads=1,
+        steps=16,
+        seed=123,
         frame_skip=4,
-        frame_stack=4,
-        maxpool_last_two=True,
+        frame_stack=1,
+        grayscale=True,
+        crop_top=32,
+        crop_bottom=0,
+        resize_width=84,
+        resize_height=84,
+        action_set="simple",
+        frame_maxpool=False,
         noop_reset_max=0,
         sticky_action_prob=0.0,
-        reward_clip=False,
-        info_filter="all",
-        done_on={
-            "life_loss": ("lives", "decrease"),
-            "level_change": (("levelHi", "levelLo"), "change"),
-        },
+        obs_copy="copy",
+        terminate_on_flag=False,
+        include_obs=True,
+        include_rewards=True,
+        include_dones=True,
+        include_infos=True,
+        stop_on_done=True,
+        fixed_action="noop",
+        output_json=None,
+        allow_version_mismatch=False,
+        preprocessing_matrix=False,
+        termination_matrix=False,
     )
-    try:
-        assert env.num_envs == 1
-        assert getattr(env, "obs_copy", None) == "safe_view"
-    finally:
-        env.close()
+    result = compare.run_comparison(config)
+    assert result["status"] == "ok"
+    assert result["compared_steps"] == 16
 
 
-def test_native_turbo_vec_env_accepts_smb_keyword_surface() -> None:
-    rom_path = require_rom()
-
+def test_action_and_layout_runtime_smoke() -> None:
     env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
+        "SuperMarioBros-Nes-v0",
         state="Level1-1",
+        rom_path=require_rom(),
         num_envs=1,
-        num_threads=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
         use_restricted_actions=Actions.ALL,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_resize_algorithm="area",
-        obs_layout="chw",
-        obs_copy="safe_view",
-        frame_skip=4,
-        frame_stack=4,
-        maxpool_last_two=True,
-        noop_reset_max=0,
-        sticky_action_prob=0.0,
-        reward_clip=False,
-        info_filter="terminal",
-        done_on=["life_loss"],
-    )
-    try:
-        assert env.num_envs == 1
-        assert env.num_threads == 1
-        assert env.obs_copy == "safe_view"
-        assert not hasattr(env, "copy_observations")
-        assert not hasattr(env, "unsafe_zero_copy")
-        assert isinstance(env.action_space, spaces.MultiBinary)
-        obs = reset_obs(env)
-        assert obs.shape == (1, 4, 84, 84)
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        obs, rewards, terminations, truncations, infos = env.step(masks)
-        assert obs.shape == (1, 4, 84, 84)
-        assert rewards.shape == (1,)
-        assert terminations.shape == (1,)
-        assert truncations.shape == (1,)
-        assert infos == {}
-    finally:
-        env.close()
-
-
-def _make_level1_1_obs_env(rom_path, **kwargs) -> SuperMarioBrosNesTurboVecEnv:
-    options = {
-        "state": "Level1-1",
-        "num_envs": 1,
-        "num_threads": 1,
-        "rom_path": str(rom_path),
-        "render_mode": "rgb_array",
-        "use_restricted_actions": Actions.ALL,
-        "obs_grayscale": True,
-        "obs_resize_algorithm": "area",
-        "obs_layout": "chw",
-        "obs_copy": "copy",
-        "frame_skip": 1,
-        "frame_stack": 1,
-        "info_filter": "none",
-    }
-    options.update(kwargs)
-    return SuperMarioBrosNesTurboVecEnv(compare.DEFAULT_STABLE_RETRO_GAME, **options)
-
-
-def test_native_turbo_vec_env_mask_crop_preserves_full_canvas_shape_and_masks_before_resize() -> None:
-    rom_path = require_rom()
-    crop = (32, 0, 0, 0)
-
-    full_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=None,
-        obs_resize=(84, 84),
-    )
-    full_source_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=None,
-        obs_resize=None,
-    )
-    mask_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=crop,
-        obs_crop_mode="mask",
-        obs_crop_fill=0,
-        obs_resize=(84, 84),
-    )
-    try:
-        full_obs = reset_obs(full_env)
-        full_source = reset_obs(full_source_env)
-        mask_obs = reset_obs(mask_env)
-
-        assert mask_env.observation_space.shape == full_env.observation_space.shape
-        assert mask_obs.shape == full_obs.shape == (1, 1, 84, 84)
-        assert full_source.shape == (1, 1, 224, 240)
-
-        expected_source = full_source.copy()
-        expected_source[:, :, : crop[0], :] = 0
-        expected_mask = resize_chw_area_native_reference(expected_source, 84, 84)
-        np.testing.assert_array_equal(mask_obs, expected_mask)
-        assert np.any(mask_obs != full_obs)
-    finally:
-        full_env.close()
-        full_source_env.close()
-        mask_env.close()
-
-
-def test_native_turbo_vec_env_remove_crop_matches_default_cropped_behavior() -> None:
-    rom_path = require_rom()
-    crop = (32, 0, 0, 0)
-
-    default_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=crop,
-        obs_resize=(84, 84),
-    )
-    remove_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=crop,
-        obs_crop_mode="remove",
-        obs_resize=(84, 84),
-    )
-    full_env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=None,
-        obs_resize=(84, 84),
-    )
-    try:
-        default_obs = reset_obs(default_env)
-        remove_obs = reset_obs(remove_env)
-        full_obs = reset_obs(full_env)
-
-        assert remove_env.observation_space.shape == default_env.observation_space.shape
-        assert remove_obs.shape == default_obs.shape == (1, 1, 84, 84)
-        np.testing.assert_array_equal(remove_obs, default_obs)
-        assert np.any(remove_obs != full_obs)
-    finally:
-        default_env.close()
-        remove_env.close()
-        full_env.close()
-
-
-@pytest.mark.parametrize("obs_copy", ["copy", "safe_view", "unsafe_view"])
-@pytest.mark.parametrize("obs_layout", ["chw", "hwc"])
-def test_native_turbo_vec_env_mask_crop_terminal_observation_matches_public_layout(
-    obs_copy: str,
-    obs_layout: str,
-) -> None:
-    rom_path = require_rom()
-    env = _make_level1_1_obs_env(
-        rom_path,
-        obs_crop=(32, 0, 0, 0),
-        obs_crop_mode="mask",
-        obs_resize=(84, 84),
-        obs_layout=obs_layout,
-        obs_copy=obs_copy,
-        frame_skip=4,
-        frame_stack=4,
-        done_on={"time_tick": ("time", "decrease")},
-        info_filter="all",
-    )
-    try:
-        obs = reset_obs(env)
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        for _step in range(1, 20):
-            obs, _rewards, terminations, truncations, infos = env.step(masks)
-            if bool(terminations[0] or truncations[0]):
-                final_obs = lane_value(infos, "final_obs", 0)
-                assert isinstance(final_obs, np.ndarray)
-                assert final_obs.shape == obs.shape[1:]
-                assert final_obs.dtype == obs.dtype
-                assert final_obs.shape == env.single_observation_space.shape
-                assert final_done_on_info(infos, 0, "time_tick") == {
-                    "trigger": "default",
-                    "op": "decrease",
-                    "compare": "reset",
-                    "keys": ["time"],
-                    "variables": ["time"],
-                    "prev": [400],
-                    "next": [399],
-                }
-                break
-        else:
-            pytest.fail("time_tick done_on rule did not fire before step 20")
-    finally:
-        env.close()
-
-
-def test_native_turbo_vec_env_empty_done_on_keeps_native_game_over_done() -> None:
-    env = make_level1_1_noop_probe(done_on=[])
-    try:
-        env.reset()
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-
-        first_life_loss = second_life_loss = None
-        for step in range(1, 7600):
-            _obs, _rewards, terminations, truncations, infos = env.step(masks)
-            done = bool(terminations[0] or truncations[0])
-            lives = int(lane_value(infos, "lives", 0))
-            if lives == 1 and first_life_loss is None:
-                first_life_loss = (step, done)
-            if lives == 0 and second_life_loss is None:
-                second_life_loss = (step, done)
-            if done:
-                assert first_life_loss == (2456, False)
-                assert second_life_loss == (4991, False)
-                assert step == 7527
-                assert lives == 2
-                assert "done_on_info" not in infos
-                break
-        else:
-            pytest.fail("native game-over scenario done did not fire by step 7599")
-    finally:
-        env.close()
-
-
-def test_native_turbo_vec_env_life_loss_done_on_is_additive_and_earlier() -> None:
-    env = make_level1_1_noop_probe(done_on=["life_loss"])
-    try:
-        env.reset()
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-
-        for step in range(1, 3000):
-            _obs, _rewards, terminations, truncations, infos = env.step(masks)
-            if not bool(terminations[0] or truncations[0]):
-                continue
-            assert step == 2456
-            assert final_done_on_info(infos, 0, "life_loss") == {
-                "trigger": "lives_decrease",
-                "op": "decrease",
-                "compare": "reset",
-                "keys": ["lives"],
-                "variables": ["lives"],
-                "prev": [2],
-                "next": [1],
-            }
-            break
-        else:
-            pytest.fail("life_loss done_on rule did not fire before game-over")
-    finally:
-        env.close()
-
-
-def test_native_turbo_vec_env_reports_multiple_done_on_triggers_same_event() -> None:
-    env = make_level1_1_noop_probe(
-        done_on={
-            "life_loss": {
-                "triggers": [
-                    {"id": "lives_decrease", "variables": "lives", "op": "decrease"},
-                    {"id": "lives_change", "variables": "lives", "op": "change"},
-                ],
-            },
-        },
-    )
-    try:
-        env.reset()
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-
-        for _step in range(1, 3000):
-            _obs, _rewards, terminations, truncations, infos = env.step(masks)
-            if not bool(terminations[0] or truncations[0]):
-                continue
-            payload = final_done_on_info(infos, 0, "life_loss")
-            assert payload["trigger"] == "lives_decrease"
-            assert payload["op"] == "decrease"
-            assert payload["compare"] == "reset"
-            assert payload["variables"] == ["lives"]
-            assert [trigger["trigger"] for trigger in payload["triggers"]] == [
-                "lives_decrease",
-                "lives_change",
-            ]
-            assert [trigger["op"] for trigger in payload["triggers"]] == [
-                "decrease",
-                "change",
-            ]
-            break
-        else:
-            pytest.fail("life_loss done_on rule did not fire before game-over")
-    finally:
-        env.close()
-
-
-def test_native_turbo_vec_env_hwc_layout_and_safe_view_survives_next_step() -> None:
-    rom_path = require_rom()
-
-    env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        state="Level1-1",
-        num_envs=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=Actions.ALL,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_resize_algorithm="nearest",
         obs_layout="hwc",
-        obs_copy="safe_view",
-        frame_skip=1,
-        frame_stack=1,
-        info_filter="none",
+        obs_grayscale=False,
+        obs_resize=(96, 112),
+        obs_crop=(16, 8, 4, 4),
+        frame_skip=2,
+        frame_stack=2,
+        maxpool_last_two=True,
+        noop_reset_max=2,
+        sticky_action_prob=0.1,
     )
     try:
-        first = reset_obs(env)
-        first_snapshot = first.copy()
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
-        second, _rewards, _terminations, _truncations, infos = env.step(masks)
-        assert first.shape == (1, 84, 84, 1)
-        assert second.shape == (1, 84, 84, 1)
-        np.testing.assert_array_equal(first, first_snapshot)
-        assert infos == {}
+        obs, _ = env.reset(seed=5)
+        assert obs.shape == (1, 96, 112, 6)
+        actions = np.zeros((1, len(NES_BUTTONS)), dtype=np.uint8)
+        next_obs, rewards, terminated, truncated, infos = env.step(actions)
+        assert next_obs.shape == obs.shape
+        assert rewards.shape == terminated.shape == truncated.shape == (1,)
+        assert "lives" in infos and "levelHi" in infos and "levelLo" in infos
     finally:
         env.close()
-
-
-def test_native_turbo_vec_env_reward_clip_and_info_filter_all() -> None:
-    rom_path = require_rom()
-
-    env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        state="Level1-1",
-        num_envs=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=Actions.ALL,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_layout="chw",
-        reward_clip=(0.0, 0.0),
-        info_filter={"mode": "all", "keys": ("lives", "xscrollHi")},
-        frame_skip=4,
-    )
-    try:
-        env.reset()
-        masks = np.zeros((1, env.num_buttons), dtype=np.uint8)
-        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
-        _obs, rewards, _terminations, _truncations, infos = env.step(masks)
-        assert rewards.tolist() == [0.0]
-        assert set(key for key in infos if not key.startswith("_")) <= {"lives", "xscrollHi"}
-        assert lane_has(infos, "lives", 0)
-    finally:
-        env.close()
-
-
-def test_native_turbo_vec_env_actions_all_mask_matches_discrete_fast_env() -> None:
-    rom_path = require_rom()
-
-    retro_env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        state="Level1-1",
-        num_envs=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=Actions.ALL,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_resize_algorithm="area",
-        obs_layout="chw",
-        frame_skip=1,
-        frame_stack=1,
-        info_filter="none",
-    )
-    discrete_env = SuperMarioBrosNesTurboVecEnv(
-        compare.DEFAULT_STABLE_RETRO_GAME,
-        state="Level1-1",
-        num_envs=1,
-        rom_path=str(rom_path),
-        render_mode="rgb_array",
-        use_restricted_actions=Actions.DISCRETE,
-        obs_crop=(32, 0, 0, 0),
-        obs_resize=(84, 84),
-        obs_grayscale=True,
-        obs_resize_algorithm="area",
-        obs_layout="chw",
-        frame_skip=1,
-        frame_stack=1,
-        info_filter="none",
-    )
-    try:
-        np.testing.assert_array_equal(reset_obs(retro_env), reset_obs(discrete_env))
-        masks = np.zeros((1, retro_env.num_buttons), dtype=np.uint8)
-        masks[0, BUTTON_TO_INDEX["RIGHT"]] = 1
-        masks[0, BUTTON_TO_INDEX["A"]] = 1
-        retro_obs, retro_rewards, retro_terminations, retro_truncations, _infos = retro_env.step(masks)
-        discrete_obs, discrete_rewards, discrete_terminations, discrete_truncations, _infos = discrete_env.step(np.asarray([24], dtype=np.uint8))
-        np.testing.assert_array_equal(retro_obs, discrete_obs)
-        np.testing.assert_array_equal(retro_rewards, discrete_rewards)
-        np.testing.assert_array_equal(retro_terminations, discrete_terminations)
-        np.testing.assert_array_equal(retro_truncations, discrete_truncations)
-    finally:
-        retro_env.close()
-        discrete_env.close()

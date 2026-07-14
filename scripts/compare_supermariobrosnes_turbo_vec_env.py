@@ -27,7 +27,7 @@ except ModuleNotFoundError:
 
 
 DEFAULT_ROM = default_rom_path()
-EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post29"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post30"
 STABLE_VISIBLE_WIDTH = 240
 STABLE_VISIBLE_HEIGHT = 224
 INFO_KEY_MAP = {
@@ -72,8 +72,6 @@ class ComparisonConfig:
     sticky_action_prob: float
     obs_copy: str
     terminate_on_flag: bool
-    terminate_on_life_loss: bool
-    terminate_on_level_change: bool
     include_obs: bool
     include_rewards: bool
     include_dones: bool
@@ -171,20 +169,6 @@ def parse_args() -> ComparisonConfig:
         action="store_true",
         help="Enable fast-env flag termination. Stable-retro still uses its scenario done rules.",
     )
-    parser.add_argument(
-        "--no-terminate-on-life-loss",
-        dest="terminate_on_life_loss",
-        action="store_false",
-        default=True,
-        help="Disable the fast-env equivalent of sandbox-sb3's life_loss done_on rule.",
-    )
-    parser.add_argument(
-        "--no-terminate-on-level-change",
-        dest="terminate_on_level_change",
-        action="store_false",
-        default=True,
-        help="Disable the fast-env equivalent of sandbox-sb3's level_change done_on rule.",
-    )
     parser.add_argument("--skip-obs", action="store_true")
     parser.add_argument("--skip-rewards", action="store_true")
     parser.add_argument("--skip-dones", action="store_true")
@@ -274,8 +258,6 @@ def parse_args() -> ComparisonConfig:
         sticky_action_prob=args.sticky_action_prob,
         obs_copy=args.obs_copy,
         terminate_on_flag=args.terminate_on_flag,
-        terminate_on_life_loss=args.terminate_on_life_loss,
-        terminate_on_level_change=args.terminate_on_level_change,
         include_obs=not args.skip_obs,
         include_rewards=not args.skip_rewards,
         include_dones=not args.skip_dones,
@@ -321,12 +303,6 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosNesTurboVecEnv:
     obs_resize = None
     if config.resize_width != STABLE_VISIBLE_WIDTH or config.resize_height != source_height:
         obs_resize = (config.resize_height, config.resize_width)
-    done_on = {}
-    if config.terminate_on_life_loss:
-        done_on["life_loss"] = ("lives", "decrease")
-    if config.terminate_on_level_change:
-        done_on["level_change"] = (("levelHi", "levelLo"), "change")
-    done_on_config = done_on if done_on else []
 
     env = SuperMarioBrosNesTurboVecEnv(
         config.game,
@@ -349,7 +325,6 @@ def make_fast_env(config: ComparisonConfig) -> SuperMarioBrosNesTurboVecEnv:
         sticky_action_prob=config.sticky_action_prob,
         reward_clip=False,
         info_filter="all",
-        done_on=done_on_config,
     )
     env.seed(config.seed)
     return env
@@ -386,12 +361,6 @@ def make_retro_env(config: ComparisonConfig):
         "obs_layout": "chw",
         "obs_copy": config.obs_copy,
     }
-    done_on = {}
-    if config.terminate_on_life_loss:
-        done_on["life_loss"] = ("lives", "decrease")
-    if config.terminate_on_level_change:
-        done_on["level_change"] = (("levelHi", "levelLo"), "change")
-    kwargs["done_on"] = done_on
     env_class = getattr(retro, "Retro" "Vec" "Env")
     env = env_class(config.game, **kwargs)
     if hasattr(env, "seed"):
@@ -805,44 +774,7 @@ def termination_matrix_configs(config: ComparisonConfig) -> list[tuple[str, Comp
         "stop_on_done": True,
         "fixed_action": "noop",
     }
-    return [
-        (
-            "native_only",
-            replace(
-                config,
-                terminate_on_life_loss=False,
-                terminate_on_level_change=False,
-                **common,
-            ),
-        ),
-        (
-            "level_change",
-            replace(
-                config,
-                terminate_on_life_loss=False,
-                terminate_on_level_change=True,
-                **common,
-            ),
-        ),
-        (
-            "life_loss",
-            replace(
-                config,
-                terminate_on_life_loss=True,
-                terminate_on_level_change=False,
-                **common,
-            ),
-        ),
-        (
-            "life_loss_level_change",
-            replace(
-                config,
-                terminate_on_life_loss=True,
-                terminate_on_level_change=True,
-                **common,
-            ),
-        ),
-    ]
+    return [("provider_native", replace(config, **common))]
 
 
 def run_termination_matrix(config: ComparisonConfig) -> dict[str, Any]:
@@ -904,8 +836,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
         "sticky_action_prob": config.sticky_action_prob,
         "obs_copy": config.obs_copy,
         "terminate_on_flag": config.terminate_on_flag,
-        "terminate_on_life_loss": config.terminate_on_life_loss,
-        "terminate_on_level_change": config.terminate_on_level_change,
+        "termination": "provider_native",
         "sandbox_sb3_level1_1_native_turbo_vec_env_profile": {
             "environment_hash": SANDBOX_SB3_LEVEL1_1_ENVIRONMENT_HASH,
             "game": DEFAULT_STABLE_RETRO_GAME,
@@ -925,10 +856,7 @@ def config_json(config: ComparisonConfig) -> dict[str, Any]:
             "sticky_action_prob": 0.0,
             "action_set": "simple",
             "info_filter": "all",
-            "done_on": {
-                "life_loss": ["lives", "decrease"],
-                "level_change": [["levelHi", "levelLo"], "change"],
-            },
+            "termination": "provider_native",
         },
         "include_obs": config.include_obs,
         "include_rewards": config.include_rewards,

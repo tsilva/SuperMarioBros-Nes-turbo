@@ -20,7 +20,7 @@ from rom_helpers import require_rom  # noqa: E402
 HF_LEVEL1_POLICY = "https://huggingface.co/tsilva/SuperMarioBros-NES_Level1"
 MAX_EPISODES = 10
 MAX_STEPS_PER_EPISODE = 3_000
-EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post29"
+EXPECTED_STABLE_RETRO_VERSION = "1.0.1.post30"
 
 
 def require_policy_prerequisites() -> None:
@@ -37,10 +37,6 @@ def require_policy_prerequisites() -> None:
 
 def level_was_cleared(info: dict[str, object]) -> bool:
     if bool(info.get("level_complete")) or bool(info.get("completion_event")):
-        return True
-
-    done_on_info = info.get("done_on_info")
-    if isinstance(done_on_info, dict) and "level_change" in done_on_info:
         return True
 
     info_events = info.get("info_events")
@@ -73,8 +69,6 @@ def level1_policy_config(*, steps: int = MAX_STEPS_PER_EPISODE) -> compare.Compa
         sticky_action_prob=0.0,
         obs_copy="safe_view",
         terminate_on_flag=False,
-        terminate_on_life_loss=True,
-        terminate_on_level_change=True,
         include_obs=True,
         include_rewards=False,
         include_dones=False,

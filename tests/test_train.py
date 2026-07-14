@@ -14,7 +14,7 @@ from supermariobrosnes_turbo.ppo import (
     load_policy_checkpoint,
     save_policy_checkpoint,
 )
-from train import COMPLETION_RATE_METRIC, CompletionTracker, SUCCESS_WINDOW, TRAIN_DONE_ON
+from train import COMPLETION_RATE_METRIC, CompletionTracker, SUCCESS_WINDOW
 
 
 def record_outcomes(tracker: CompletionTracker, outcomes: list[bool]) -> None:
@@ -22,10 +22,6 @@ def record_outcomes(tracker: CompletionTracker, outcomes: list[bool]) -> None:
         np.ones(len(outcomes), dtype=bool),
         [{"level_complete": value} for value in outcomes],
     )
-
-
-def test_training_terminates_on_life_loss_and_level_change() -> None:
-    assert TRAIN_DONE_ON == ("life_loss", "level_change")
 
 
 def test_completion_window_requires_exactly_100_successes(tmp_path) -> None:

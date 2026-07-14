@@ -216,8 +216,6 @@ def test_direct_benchmark_results_record_rom_identity(
         state_dir=None,
         include_info=True,
         terminate_on_flag=False,
-        terminate_on_life_loss=True,
-        terminate_on_level_change=True,
         no_start_game=False,
     )
     native = build_native_benchmark_result(
@@ -247,12 +245,10 @@ def test_direct_benchmark_results_record_rom_identity(
         action="noop",
         obs_copy="safe_view",
         obs_resize_algorithm="area",
-        terminate_on_life_loss=True,
-        terminate_on_level_change=True,
     )
     stable = build_stable_retro_pypi_result(
         stable_args,
-        "1.0.1.post29",
+        "1.0.1.post30",
         obs,
         runs,
         ("Level1-1",),
@@ -264,16 +260,12 @@ def test_direct_benchmark_results_record_rom_identity(
     assert native["config"]["rayon_num_threads"] == 12
     assert native["config"]["obs_crop_mode"] == "mask"
     assert native["config"]["obs_resize_algorithm"] == "area"
-    assert native["config"]["terminate_on_life_loss"] is True
-    assert native["config"]["terminate_on_level_change"] is True
-    assert native["config"]["done_on"] == ["life_loss", "level_change"]
+    assert native["config"]["termination"] == "provider_native"
     assert native["package"] == native_package_metadata()
     assert stable["config"]["rom_path"] == str(rom_path)
     assert stable["config"]["rom_sha256"] == expected_sha
     assert stable["config"]["obs_crop_mode"] == "mask"
-    assert stable["config"]["terminate_on_life_loss"] is True
-    assert stable["config"]["terminate_on_level_change"] is True
-    assert stable["config"]["done_on"] == ["life_loss", "level_change"]
+    assert stable["config"]["termination"] == "provider_native"
 
 
 def test_native_benchmark_load_preflight_uses_strict_boundary(
@@ -336,17 +328,17 @@ def test_pypi_workload_hash_inputs_include_rom_digest() -> None:
         measured_invocations=11,
     )
 
-    stable_payload = stable_pypi_workload(args, "1.0.1.post29")
+    stable_payload = stable_pypi_workload(args, "1.0.1.post30")
     smb_payload = smb_pypi_workload(args, "0.1.2")
 
     assert stable_payload["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert stable_payload["rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert stable_payload["obs_crop_mode"] == "mask"
-    assert stable_payload["done_on"] == ["life_loss", "level_change"]
+    assert stable_payload["termination"] == "provider_native"
     assert smb_payload["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert smb_payload["rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert smb_payload["obs_crop_mode"] == "mask"
-    assert smb_payload["done_on"] == ["life_loss", "level_change"]
+    assert smb_payload["termination"] == "provider_native"
     assert smb_payload["state_sha256"] == state_sha256
 
 
@@ -416,9 +408,7 @@ def stable_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "action": workload_payload["action"],
         "obs_copy": workload_payload["obs_copy"],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
-        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
-        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
-        "done_on": workload_payload["done_on"],
+        "termination": workload_payload["termination"],
     }
 
 
@@ -451,9 +441,7 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "lane_states": [states[index % len(states)] for index in range(workload_payload["num_envs"])],
         "include_info": workload_payload["include_info"],
         "terminate_on_flag": False,
-        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
-        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
-        "done_on": workload_payload["done_on"],
+        "termination": workload_payload["termination"],
         "start_game": False,
     }
 

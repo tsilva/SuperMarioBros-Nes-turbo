@@ -36,8 +36,6 @@ try:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
     )
 except ModuleNotFoundError:
     from scripts.benchmark_rom import validate_rom_hash
@@ -53,8 +51,6 @@ except ModuleNotFoundError:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
     )
 
 
@@ -63,8 +59,6 @@ DEFAULT_STATES = CANONICAL_STATE_NAMES
 DEFAULT_BENCHMARK_ACTIONS = CANONICAL_ACTION_NAMES
 DEFAULT_ACTION_SEED = CANONICAL_ACTION_SEED
 DEFAULT_OBS_CROP_MODE = CANONICAL_OBS_CROP_MODE
-DEFAULT_TERMINATE_ON_LIFE_LOSS = CANONICAL_TERMINATE_ON_LIFE_LOSS
-DEFAULT_TERMINATE_ON_LEVEL_CHANGE = CANONICAL_TERMINATE_ON_LEVEL_CHANGE
 DEFAULT_MIN_START_LOAD_LIMIT = 4.0
 DEFAULT_START_LOAD_CPU_FRACTION = 0.5
 PACKAGE_NAME = "supermariobrosnes-turbo"
@@ -119,18 +113,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--state-dir", type=Path, default=None)
-    parser.add_argument(
-        "--terminate-on-life-loss",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_TERMINATE_ON_LIFE_LOSS,
-        help="Terminate and autoreset benchmark lanes when lives decrease.",
-    )
-    parser.add_argument(
-        "--terminate-on-level-change",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_TERMINATE_ON_LEVEL_CHANGE,
-        help="Terminate and autoreset benchmark lanes when levelHi/levelLo changes.",
-    )
     parser.add_argument(
         "--include-info",
         action="store_true",
@@ -250,15 +232,6 @@ def has_initial_state(args: argparse.Namespace) -> bool:
     return args.state is not None or args.parsed_states is not None
 
 
-def benchmark_done_on(args: argparse.Namespace) -> dict[str, Any] | None:
-    done_on: dict[str, Any] = {}
-    if args.terminate_on_life_loss:
-        done_on["life_loss"] = ("lives", "decrease")
-    if args.terminate_on_level_change:
-        done_on["level_change"] = (("levelHi", "levelLo"), "change")
-    return done_on or None
-
-
 def default_max_start_load() -> float:
     return max(
         DEFAULT_MIN_START_LOAD_LIMIT,
@@ -374,7 +347,10 @@ def sampled_action_sequence(
 
 
 def step_env(env: SuperMarioBrosNesTurboVecEnv, actions: np.ndarray) -> None:
-    env.step(actions)
+    _obs, _rewards, terminated, truncated, _infos = env.step(actions)
+    reset_mask = terminated | truncated
+    if np.any(reset_mask):
+        env.reset(options={"reset_mask": reset_mask})
 
 
 def step_repeated(
@@ -480,9 +456,7 @@ def build_result(
             "state_dir": str(args.state_dir) if args.state_dir is not None else None,
             "include_info": True,
             "terminate_on_flag": args.terminate_on_flag,
-            "terminate_on_life_loss": args.terminate_on_life_loss,
-            "terminate_on_level_change": args.terminate_on_level_change,
-            "done_on": list(benchmark_done_on(args) or ()),
+            "termination": "provider_native",
             "start_game": (
                 not args.no_start_game
                 and not has_initial_state(args)
@@ -521,8 +495,7 @@ def print_human(result: dict[str, Any]) -> None:
         f"action_set={config['action_set']} actions={config['actions']} "
         f"action_seed={config['action_seed']} "
         f"state={config['state']} states={config['states']} "
-        f"terminate_on_life_loss={config['terminate_on_life_loss']} "
-        f"terminate_on_level_change={config['terminate_on_level_change']} "
+        f"termination={config['termination']} "
         f"include_info={config['include_info']}"
     )
     if config["lane_states"] is not None:
@@ -585,7 +558,6 @@ def main() -> None:
         obs_resize=(args.resize_height, args.resize_width),
         obs_resize_algorithm="area",
         obs_layout="chw",
-        done_on=benchmark_done_on(args),
     )
     if args.profile_output is not None:
         env.enable_profiler()

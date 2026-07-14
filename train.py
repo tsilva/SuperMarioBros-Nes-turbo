@@ -38,7 +38,6 @@ TOTAL_TIMESTEPS = 5_000_000
 MAX_EPISODE_STEPS = 4_500
 CHECKPOINT_FREQ = 500_000
 SUCCESS_WINDOW = 100
-TRAIN_DONE_ON = ("life_loss", "level_change")
 COMPLETION_RATE_METRIC = "completion_rate"
 GAMMA = 0.9
 GAE_LAMBDA = 1.0
@@ -99,8 +98,6 @@ class MarioVectorTask:
             maxpool_last_two=False,
             sticky_action_prob=0.0,
             info_filter="terminal",
-            done_on=TRAIN_DONE_ON,
-            autoreset_mode="Disabled",
         )
         self.num_envs = int(num_envs)
         self.seed = int(seed)
@@ -579,8 +576,7 @@ def main(argv: list[str] | None = None) -> int:
                     "crop_mode": "mask",
                     "resize": [84, 84],
                     "action_set": "simple",
-                    "terminate_on_life_loss": True,
-                    "terminate_on_level_change": True,
+                    "termination": "provider_native_or_episode_timeout",
                 },
             },
         )

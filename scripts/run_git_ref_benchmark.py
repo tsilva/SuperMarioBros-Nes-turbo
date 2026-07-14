@@ -45,8 +45,6 @@ try:
         CANONICAL_STATE_NAMES,
         CANONICAL_START_GAME,
         CANONICAL_TERMINATE_ON_FLAG,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         canonical_env_args,
         shell_args,
     )
@@ -80,8 +78,6 @@ except ModuleNotFoundError:
         CANONICAL_STATE_NAMES,
         CANONICAL_START_GAME,
         CANONICAL_TERMINATE_ON_FLAG,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         canonical_env_args,
         shell_args,
     )
@@ -740,9 +736,7 @@ def require_raw_payload_matches_plan(
         "state_dir": plan.state_dir,
         "include_info": True,
         "terminate_on_flag": CANONICAL_TERMINATE_ON_FLAG,
-        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
-        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        "done_on": ["life_loss", "level_change"],
+        "termination": "provider_native",
         "start_game": CANONICAL_START_GAME,
     }
     mismatches = [

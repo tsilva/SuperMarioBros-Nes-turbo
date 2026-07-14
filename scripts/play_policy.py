@@ -330,11 +330,6 @@ class SdlPolicyPlayer:
 
     def make_env(self):
         if self.args.backend == "native":
-            done_on = {}
-            if self.args.terminate_on_life_loss:
-                done_on["life_loss"] = ("lives", "decrease")
-            if self.args.terminate_on_level_change:
-                done_on["level_change"] = (("levelHi", "levelLo"), "change")
             env = SuperMarioBrosNesTurboVecEnv(
                 self.args.game,
                 state=self.args.state,
@@ -356,8 +351,6 @@ class SdlPolicyPlayer:
                 obs_copy="safe_view",
                 reward_clip=False,
                 info_filter="all",
-                done_on=done_on or None,
-                autoreset_mode="Disabled",
             )
             env.seed(self.args.seed)
             return env
@@ -371,11 +364,6 @@ class SdlPolicyPlayer:
         obs_resize = None
         if self.args.resize_width != 240 or self.args.resize_height != source_height:
             obs_resize = (self.args.resize_height, self.args.resize_width)
-        done_on = {}
-        if self.args.terminate_on_life_loss:
-            done_on["life_loss"] = ("lives", "decrease")
-        if self.args.terminate_on_level_change:
-            done_on["level_change"] = (("levelHi", "levelLo"), "change")
         env_class = getattr(stable_retro, "Retro" "Vec" "Env")
         env = env_class(
             self.args.game,
@@ -398,7 +386,6 @@ class SdlPolicyPlayer:
             info_filter="all",
             obs_layout="chw",
             obs_copy="safe_view",
-            done_on=done_on or None,
         )
         if hasattr(env, "seed"):
             env.seed(self.args.seed)
@@ -406,11 +393,6 @@ class SdlPolicyPlayer:
 
     def make_display_env(self):
         if self.args.backend == "native":
-            done_on = {}
-            if self.args.terminate_on_life_loss:
-                done_on["life_loss"] = ("lives", "decrease")
-            if self.args.terminate_on_level_change:
-                done_on["level_change"] = (("levelHi", "levelLo"), "change")
             env = SuperMarioBrosNesTurboVecEnv(
                 self.args.game,
                 state=self.args.state,
@@ -430,18 +412,12 @@ class SdlPolicyPlayer:
                 obs_copy="safe_view",
                 reward_clip=False,
                 info_filter="all",
-                done_on=done_on or None,
             )
             env.seed(self.args.seed)
             return env
 
         import stable_retro
 
-        done_on = {}
-        if self.args.terminate_on_life_loss:
-            done_on["life_loss"] = ("lives", "decrease")
-        if self.args.terminate_on_level_change:
-            done_on["level_change"] = (("levelHi", "levelLo"), "change")
         env_class = getattr(stable_retro, "Retro" "Vec" "Env")
         env = env_class(
             self.args.game,
@@ -464,7 +440,6 @@ class SdlPolicyPlayer:
             info_filter="all",
             obs_layout="chw",
             obs_copy="safe_view",
-            done_on=done_on or None,
         )
         if hasattr(env, "seed"):
             env.seed(self.args.seed)
@@ -503,9 +478,7 @@ class SdlPolicyPlayer:
         self.step_display_env()
         self.reward += float(rewards[0])
         step_info = lane_info(infos, 0)
-        self.info = dict(step_info.get("final_info", step_info))
-        if "final_obs" in step_info:
-            self.info["final_obs"] = step_info["final_obs"]
+        self.info = dict(step_info)
         self.step += 1
         self.max_x = max(self.max_x, int(self.info.get("x_pos", 0)))
         completed = self.is_completed()
@@ -538,17 +511,12 @@ class SdlPolicyPlayer:
         self.display_obs = display_obs
         step_info = lane_info(display_infos, 0)
         if bool(display_terminations[0] or display_truncations[0]):
-            self.display_info = dict(step_info.get("final_info", step_info))
-            if "final_obs" in step_info:
-                self.display_info["final_obs"] = step_info["final_obs"]
+            self.display_info = dict(step_info)
         else:
             self.display_info = step_info
 
     def is_completed(self) -> bool:
         if bool(self.info.get("level_complete")) or bool(self.info.get("completion_event")):
-            return True
-        done_on_info = self.info.get("done_on_info")
-        if isinstance(done_on_info, dict) and "level_change" in done_on_info:
             return True
         info_events = self.info.get("info_events")
         if isinstance(info_events, dict) and "level_change" in info_events:
@@ -559,17 +527,6 @@ class SdlPolicyPlayer:
 
     def hold_terminal_frame(self, completed: bool) -> None:
         hold_frames = self.args.hold_complete_frames if completed else self.args.hold_done_frames
-        final_observation = (
-            self.display_info.get("final_obs")
-            if self.display_env is not None
-            else self.info.get("final_obs")
-        )
-        if isinstance(final_observation, np.ndarray):
-            terminal_batch = final_observation[None, ...] if final_observation.ndim == 3 else final_observation
-            if self.display_env is not None:
-                self.display_obs = terminal_batch
-            else:
-                self.obs = terminal_batch
         for _ in range(max(0, hold_frames)):
             self.poll_events()
             if not self.running:
@@ -707,8 +664,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--action-set", choices=tuple(ACTION_SETS), default="simple")
     parser.add_argument("--completion-x-threshold", type=int, default=3160)
     parser.add_argument("--terminate-on-flag", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--terminate-on-life-loss", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hold-complete-frames", type=int, default=30)
     parser.add_argument("--hold-done-frames", type=int, default=0)
     parser.add_argument("--auto-close-frames", type=int, default=None)

@@ -7,10 +7,7 @@ use crate::cartridge::Cartridge;
 use crate::emulator::{
     NES_HEIGHT, NES_WIDTH, RGB_CHANNELS, VISIBLE_FRAME_HEIGHT, VISIBLE_FRAME_WIDTH,
 };
-use crate::vec_env::{
-    CropMode, DoneOnInfoOp, DoneOnInfoRule, InfoKey, InitialState, MarioVecEnv, ResizeAlgorithm,
-    VecEnvConfig,
-};
+use crate::vec_env::{CropMode, InitialState, MarioVecEnv, ResizeAlgorithm, VecEnvConfig};
 
 #[pyclass(name = "_RetroVecEnv")]
 pub struct RetroVecEnv {
@@ -20,7 +17,7 @@ pub struct RetroVecEnv {
 #[pymethods]
 impl RetroVecEnv {
     #[new]
-    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, terminate_on_life_loss=false, terminate_on_level_change=false, done_on_info=None, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0, crop_left=0, crop_right=0, crop_mode="remove", crop_fill=0, resize_algorithm="area", autoreset_same_step=true))]
+    #[pyo3(signature = (rom_path, num_envs, frame_skip=4, grayscale=true, frame_stack=4, terminate_on_flag=true, crop_top=0, crop_bottom=0, resize_width=84, resize_height=84, initial_states=None, initial_state_names=None, initial_state_weights=None, seed=0, frame_maxpool=false, noop_reset_max=0, sticky_action_prob=0.0, crop_left=0, crop_right=0, crop_mode="remove", crop_fill=0, resize_algorithm="area"))]
     pub fn new(
         rom_path: String,
         num_envs: usize,
@@ -36,9 +33,6 @@ impl RetroVecEnv {
         initial_state_names: Option<Vec<String>>,
         initial_state_weights: Option<Vec<f64>>,
         seed: u64,
-        terminate_on_life_loss: bool,
-        terminate_on_level_change: bool,
-        done_on_info: Option<Vec<(String, Vec<String>, String)>>,
         frame_maxpool: bool,
         noop_reset_max: isize,
         sticky_action_prob: f64,
@@ -47,7 +41,6 @@ impl RetroVecEnv {
         crop_mode: &str,
         crop_fill: u8,
         resize_algorithm: &str,
-        autoreset_same_step: bool,
     ) -> PyResult<Self> {
         if num_envs == 0 {
             return Err(PyValueError::new_err("num_envs must be > 0"));
@@ -94,11 +87,6 @@ impl RetroVecEnv {
             initial_state_weights,
             num_envs,
         )?;
-        let done_on_info_rules = build_done_on_info_rules(
-            done_on_info,
-            terminate_on_life_loss,
-            terminate_on_level_change,
-        )?;
         let config = VecEnvConfig {
             num_envs,
             frame_skip,
@@ -119,16 +107,8 @@ impl RetroVecEnv {
             sticky_action_prob,
         };
         Ok(Self {
-            inner: MarioVecEnv::new(
-                cart,
-                config,
-                initial_states,
-                weighted_initial_states,
-                seed,
-                done_on_info_rules,
-                autoreset_same_step,
-            )
-            .map_err(|err| PyValueError::new_err(err.to_string()))?,
+            inner: MarioVecEnv::new(cart, config, initial_states, weighted_initial_states, seed)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?,
         })
     }
 
@@ -209,60 +189,8 @@ impl RetroVecEnv {
         self.inner.initial_state_weights()
     }
 
-    #[pyo3(signature = (initial_states, initial_state_names=None, initial_state_weights=None))]
-    pub fn set_initial_states(
-        &mut self,
-        initial_states: Vec<Vec<u8>>,
-        initial_state_names: Option<Vec<String>>,
-        initial_state_weights: Option<Vec<f64>>,
-    ) -> PyResult<()> {
-        let (initial_states, weighted_initial_states) = build_initial_states(
-            initial_states,
-            initial_state_names.unwrap_or_default(),
-            initial_state_weights,
-            self.inner.config().num_envs,
-        )?;
-        self.inner
-            .set_initial_states(initial_states, weighted_initial_states)
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        Ok(())
-    }
-
     pub fn active_state_indices(&self) -> Vec<i32> {
         self.inner.active_state_indices().to_vec()
-    }
-
-    pub fn done_on_info(&self) -> Vec<Vec<(String, Vec<String>, String, Vec<i64>, Vec<i64>)>> {
-        self.inner
-            .done_on_info()
-            .iter()
-            .map(|lane| {
-                lane.iter()
-                    .map(|rule| {
-                        (
-                            rule.name.clone(),
-                            rule.keys
-                                .iter()
-                                .map(|key| key.name().to_string())
-                                .collect::<Vec<_>>(),
-                            rule.op.name().to_string(),
-                            rule.previous_values.clone(),
-                            rule.current_values.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
-
-    pub fn terminal_observations(&self) -> Vec<Option<Vec<u8>>> {
-        self.inner.terminal_observations().to_vec()
-    }
-
-    pub fn terminal_infos(
-        &self,
-    ) -> Vec<Option<(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)>> {
-        self.inner.terminal_infos()
     }
 
     pub fn rgb_frame_shape(&self) -> (usize, usize, usize, usize) {
@@ -746,68 +674,6 @@ fn build_resize_algorithm(algorithm: &str) -> PyResult<ResizeAlgorithm> {
             "resize_algorithm must be one of: nearest, bilinear, area",
         )),
     }
-}
-
-fn build_done_on_info_rules(
-    done_on_info: Option<Vec<(String, Vec<String>, String)>>,
-    terminate_on_life_loss: bool,
-    terminate_on_level_change: bool,
-) -> PyResult<Vec<DoneOnInfoRule>> {
-    let mut rules = Vec::new();
-    for (name, keys, op) in done_on_info.unwrap_or_default() {
-        rules.push(parse_done_on_info_rule(name, keys, op)?);
-    }
-
-    if terminate_on_life_loss && !rules.iter().any(|rule| rule.name == "life_loss") {
-        rules.push(parse_done_on_info_rule(
-            "life_loss".to_string(),
-            vec!["lives".to_string()],
-            "decrease".to_string(),
-        )?);
-    }
-    if terminate_on_level_change && !rules.iter().any(|rule| rule.name == "level_change") {
-        rules.push(parse_done_on_info_rule(
-            "level_change".to_string(),
-            vec!["levelHi".to_string(), "levelLo".to_string()],
-            "change".to_string(),
-        )?);
-    }
-    Ok(rules)
-}
-
-fn parse_done_on_info_rule(
-    name: String,
-    keys: Vec<String>,
-    op: String,
-) -> PyResult<DoneOnInfoRule> {
-    if name.is_empty() {
-        return Err(PyValueError::new_err(
-            "done_on_info rule names must not be empty",
-        ));
-    }
-    if keys.is_empty() {
-        return Err(PyValueError::new_err(
-            "done_on_info rules must reference at least one key",
-        ));
-    }
-    let parsed_keys = keys
-        .into_iter()
-        .map(|key| {
-            if key.is_empty() {
-                return Err(PyValueError::new_err("done_on_info keys must not be empty"));
-            }
-            InfoKey::from_name(&key)
-                .ok_or_else(|| PyValueError::new_err(format!("unknown done_on_info key: {key}")))
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-    let op = DoneOnInfoOp::from_name(&op).ok_or_else(|| {
-        PyValueError::new_err("done_on_info op must be change, increase, or decrease")
-    })?;
-    Ok(DoneOnInfoRule {
-        name,
-        keys: parsed_keys,
-        op,
-    })
 }
 
 #[pymodule]

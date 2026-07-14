@@ -57,12 +57,11 @@ paths:
   ROM byte signatures for the idle loop, sprite-0 polling loop, and OAM clear
   helper, then advances equivalent CPU/PPU cycles without interpreting every
   repeated 6502 instruction.
-- **Rust-side reward and terminal rules**: x-position reward, flag completion,
-  life-loss/level-change style `done_on_info` rules, final observation
-  capture, and autoreset bookkeeping stay in the Rust/Python fast-env boundary
-  rather than in wrapper chains.
+- **Provider-native rewards and termination**: x-position reward, native game-over,
+  and flag completion stay in the emulator. Raw lives, level, score, time,
+  position, and scrolling signals remain available to downstream task kernels.
 - **Scoped compatibility paths**: RGB, uncropped rendering, Gymnasium vector
-  `info` dictionaries, final observations, sticky actions, random no-op
+  `info` dictionaries, sticky actions, random no-op
   starts, and multi-state curricula are still available, but the benchmark path
   keeps them on explicit typed/native routes instead of paying broad Stable Retro
   overhead unconditionally.
@@ -141,17 +140,14 @@ env = SuperMarioBrosNesTurboVecEnv(
 
 Mask crop is useful for hiding HUD or other static regions during initial training while preserving spatial compatibility for later finetuning on full observations.
 
-`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. Same-step autoreset remains the default: a completed lane returns its reset observation while `infos["final_obs"]` and `infos["final_info"]` preserve the completed transition. Consumers that own episode boundaries can pass `autoreset_mode=AutoresetMode.DISABLED`; terminal observations are then returned directly and another step is rejected until all done lanes are reset with `reset(options={"reset_mask": mask})`. A masked reset changes only selected lanes and returns reset info only for those lanes. Throughput benchmarks target this `step()` path so speed work improves the public API users actually call.
+`SuperMarioBrosNesTurboVecEnv` follows the Gymnasium `VectorEnv` contract directly. `reset()` returns `(obs, infos)`, and `step(actions)` returns `(obs, rewards, terminations, truncations, infos)` with separate termination and truncation arrays. Autoreset is permanently disabled: terminal observations are returned directly and another step is rejected until all done lanes are reset with `reset(options={"reset_mask": mask})`. A masked reset changes only selected lanes and returns reset info only for those lanes.
 
 ```python
 import numpy as np
-from gymnasium.vector import AutoresetMode
-
 env = SuperMarioBrosNesTurboVecEnv(
     "SuperMarioBros-Nes-v0",
     rom_path="/path/to/SuperMarioBros.nes",
     num_envs=16,
-    autoreset_mode=AutoresetMode.DISABLED,
 )
 obs, infos = env.reset(seed=123)
 obs, rewards, terminated, truncated, infos = env.step(actions)
@@ -189,16 +185,11 @@ env = SuperMarioBrosNesTurboVecEnv(
     rom_path="/path/to/SuperMarioBros.nes",
     num_envs=16,
     state={"Level1-1": 0.5, "Level1-4": 0.5},
-    done_on={
-        "life_loss": ("lives", "decrease"),
-        "level_change": (("levelHi", "levelLo"), "change"),
-    },
 )
 env.seed(123)
 
 obs, infos = env.reset()
 sampled_states = env.active_states()
-env.set_state_policy({"Level1-2": 1.0, "Level1-4": 0.0})  # future reset/autoreset policy
 ```
 
 ## Commands
@@ -242,7 +233,7 @@ Python 3.9 through 3.14 without multiplying artifacts per interpreter.
 
 ## Local benchmark target
 
-Use `stable-retro-turbo==1.0.1.post29` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Rerun the PyPI oracle baseline before quoting a current speedup, so the comparison uses the same `SuperMarioBros-Nes-v0` ROM, saved-state set, frame skip, frame stack, grayscale/crop/resize preprocessing, and `16` vector envs on the dedicated local CPU machine.
+Use `stable-retro-turbo==1.0.1.post30` as the Stable Retro PyPI oracle for new benchmarks and comparisons. Both environments use manual reset and provider-native termination.
 
 For autoresearch throughput work, use the lightweight path first:
 
@@ -276,7 +267,7 @@ Historical local benchmark results:
 | Environment | Version / Ref | Official median env steps/sec | Mean invocation-median env steps/sec | Run-median CV | Notes |
 | --- | --- | ---: | ---: | ---: | --- |
 | `SuperMarioBros-Nes-turbo` | `main` | `47,611.14` | `47,605.89` | `0.28%` | Full official local benchmark run; all validity gates passed. |
-| `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Historical only; superseded by `1.0.1.post29` for new comparisons. Statistical gates passed, but the post-run load gate failed because the 1-minute load was sampled immediately after the benchmark's own CPU-heavy timing. |
+| `stable-retro-turbo` PyPI oracle | `1.0.0.post23` | `7,437.65` | `7,440.04` | `0.44%` | Historical only; superseded by `1.0.1.post30` for new comparisons. |
 
 New local benchmark runs, result caches, indexes, and matching source archives
 default under `AUTORESEARCH_ROOT_PATH/benchmarks/` so benchmark state stays
@@ -294,9 +285,8 @@ single-action loop.
 - The Python package exposes `SuperMarioBrosNesTurboVecEnv`, `ACTION_MEANINGS`, `CORE_ACTION_MEANINGS`, and `ACTION_SETS`. `SuperMarioBrosNesTurboVecEnv` subclasses Gymnasium `VectorEnv` and does not subclass or require Stable Baselines3.
 - `use_restricted_actions=Actions.ALL` and `Actions.FILTERED` consume per-button `MultiBinary` masks; `Actions.DISCRETE` consumes Stable Retro's 36-way discrete action encoding.
 - `scripts/play_policy.py` loads plain PyTorch PPO `.pt` checkpoints and legacy SB3 `.zip` checkpoints without depending on Stable Baselines3. Sources may be local files, Hugging Face repo ids, or `https://huggingface.co/...` URLs. Auto mode selects the exact native mask-crop/no-max-pool contract for plain `.pt` policies and the Stable Retro contract for legacy `.zip` policies; pass `--view preprocessed` to inspect model input.
-- By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1`, `Level1-2`, `Level1-3`, and `Level1-4` repeated round-robin, uses `obs_crop_mode="mask"` for HUD cropping, terminates/autoresets lanes on life loss or level change, then samples benchmark steps from `noop`, `right`, `right_b`, and `right_a` using a deterministic precomputed action sequence. Use `--obs-crop-mode remove`, `--no-terminate-on-life-loss`, or `--no-terminate-on-level-change` only for diagnostic runs that intentionally keep older benchmark boundaries or preprocessing. Use `--state Level1-1` or another packaged stable-retro state to start every lane from one saved level state. This package includes the stable Super Mario Bros NES states from `Level1-1` through `Level8-4`, plus `Level1-1-99lives`, `Level2-1-clouds`, and `Level2-1-clouds-easy`. Use `--states ...` to choose a different round-robin state list. In Python, `state=` accepts a single state name/path/bytes value, a sequence with exactly one state per env, or a weighted mapping such as `{"Level1-1": 0.5, "Level1-4": 0.5}`. Mapping weights may be zero when the total weight is positive. `set_state_policy(...)` accepts the same forms and updates only future explicit resets or per-lane autoresets. After reset, `active_state_indices()` and `active_states()` report the sampled state for each lane. `state_sampling_weights()` reports the current future reset policy. If needed, pass `--state-dir` or set `SUPERMARIOBROSNES_FASTENV_STATE_DIR`.
-- For `SuperMarioBrosNesTurboVecEnv`, `done_on` accepts stable-retro-style compact rules like `{"life_loss": ("lives", "decrease")}`, named events such as `["life_loss"]`, and verbose event objects with `variables`/`keys`, `op`, `compare`, and `triggers`. Supported ops are `change`, `increase`, and `decrease`; keys are drawn from `INFO_KEYS`. Fired terminal rules are reported through Gymnasium vector infos under `infos["final_info"]["done_on_info"]` with `trigger`, `op`, `compare`, `keys`, `variables`, `prev`, `next`, and `triggers` fields.
-- Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post29` for new benchmarks and comparisons, and constructs the upstream vector env with the current flat keyword names: `maxpool_last_two`, `noop_reset_max`, `sticky_action_prob`, `info_filter`, `obs_copy`, and `done_on`. Runtime fired terminal rules are still read from `info["done_on_info"]`.
+- By default, `scripts/benchmark_sps.py` starts lanes from `Level1-1` through `Level1-4` round-robin, uses mask cropping, samples a deterministic action sequence, and explicitly resets provider-native terminal lanes. Constructor `state=` accepts a single state, one state per env, or a weighted mapping. `active_state_indices()` and `active_states()` report each lane's current start.
+- Stable Retro oracle/playback tooling targets `stable-retro-turbo==1.0.1.post30` and compares raw life/level values as information signals, not provider-owned episode boundaries.
 - Benchmark JSON can be written with `scripts/benchmark_sps.py --output-json ...`.
 - Play mode uses the native SDL2 library and opens RGB gameplay plus the grayscale frame stack in separate windows. If SDL2 is not installed or discoverable, `scripts/play.py` exits with an SDL backend error.
 - ROM files are not included in the repository; use the SHA-256 digest above to confirm test inputs when needed.

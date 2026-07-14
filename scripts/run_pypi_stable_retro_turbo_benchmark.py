@@ -30,8 +30,6 @@ try:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         joined_states,
     )
     from dotenv_utils import require_arg_or_env_or_dotenv_path, require_env_or_dotenv_path
@@ -47,8 +45,6 @@ except ModuleNotFoundError:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         joined_states,
     )
     from scripts.dotenv_utils import (
@@ -128,9 +124,7 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "action": "noop",
         "obs_copy": "safe_view",
         "obs_resize_algorithm": "area",
-        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
-        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        "done_on": ["life_loss", "level_change"],
+        "termination": "provider_native",
     }
 
 
@@ -363,9 +357,7 @@ def require_raw_payload_matches_workload(
         "action": workload_payload["action"],
         "obs_copy": workload_payload["obs_copy"],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
-        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
-        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
-        "done_on": workload_payload["done_on"],
+        "termination": workload_payload["termination"],
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"
@@ -467,7 +459,6 @@ def run_invocations(args: argparse.Namespace, run_dir: Path) -> None:
         f"--obs-crop-mode {CANONICAL_OBS_CROP_MODE} "
         f"--resize-width {CANONICAL_RESIZE_WIDTH} --resize-height {CANONICAL_RESIZE_HEIGHT} "
         f"--states {quote(joined_states())} --action noop --obs-copy safe_view --obs-resize-algorithm area "
-        "--terminate-on-life-loss --terminate-on-level-change "
         f"--json --output-json "
     )
     run(["bash", "-lc", f"uptime > {quote(str(run_dir / 'raw' / 'load-before-warmup.txt'))}"])

@@ -27,8 +27,6 @@ try:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         joined_states,
     )
     from stable_retro_compat import install_sb3_vecenv_shim_if_needed
@@ -44,8 +42,6 @@ except ModuleNotFoundError:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         joined_states,
     )
     from scripts.stable_retro_compat import install_sb3_vecenv_shim_if_needed
@@ -60,8 +56,6 @@ DEFAULT_ROM = (
 )
 DEFAULT_STATES = CANONICAL_STATE_NAMES
 DEFAULT_OBS_CROP_MODE = CANONICAL_OBS_CROP_MODE
-DEFAULT_TERMINATE_ON_LIFE_LOSS = CANONICAL_TERMINATE_ON_LIFE_LOSS
-DEFAULT_TERMINATE_ON_LEVEL_CHANGE = CANONICAL_TERMINATE_ON_LEVEL_CHANGE
 ACTION_BUTTONS = {
     "noop": (),
     "right": ("RIGHT",),
@@ -150,18 +144,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action", choices=sorted(ACTION_BUTTONS), default="noop")
     parser.add_argument("--obs-copy", default="safe_view")
     parser.add_argument("--obs-resize-algorithm", default="area")
-    parser.add_argument(
-        "--terminate-on-life-loss",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_TERMINATE_ON_LIFE_LOSS,
-        help="Terminate and autoreset benchmark lanes when lives decrease.",
-    )
-    parser.add_argument(
-        "--terminate-on-level-change",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_TERMINATE_ON_LEVEL_CHANGE,
-        help="Terminate and autoreset benchmark lanes when levelHi/levelLo changes.",
-    )
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
@@ -187,15 +169,6 @@ def lane_states(num_envs: int, states: tuple[str, ...]) -> list[str]:
     return [states[index % len(states)] for index in range(num_envs)]
 
 
-def benchmark_done_on(args: argparse.Namespace) -> dict[str, Any] | None:
-    done_on: dict[str, Any] = {}
-    if args.terminate_on_life_loss:
-        done_on["life_loss"] = ("lives", "decrease")
-    if args.terminate_on_level_change:
-        done_on["level_change"] = (("levelHi", "levelLo"), "change")
-    return done_on or None
-
-
 def retro_button_names(retro, rom_path: Path) -> tuple[str | None, ...]:
     system = retro.get_romfile_system(str(rom_path))
     core = retro.get_system_info(system)
@@ -216,7 +189,10 @@ def fill_actions(num_envs: int, action_name: str, buttons: tuple[str | None, ...
 
 def step_repeated(env: Any, actions: np.ndarray, count: int) -> None:
     for _ in range(count):
-        env.step(actions)
+        _obs, _rewards, terminated, truncated, _infos = env.step(actions)
+        reset_mask = terminated | truncated
+        if np.any(reset_mask):
+            env.reset(options={"reset_mask": reset_mask})
 
 
 def run_once(env: Any, actions: np.ndarray, args: argparse.Namespace) -> dict[str, float]:
@@ -283,9 +259,7 @@ def build_result(
             "action": args.action,
             "obs_copy": args.obs_copy,
             "obs_resize_algorithm": args.obs_resize_algorithm,
-            "terminate_on_life_loss": args.terminate_on_life_loss,
-            "terminate_on_level_change": args.terminate_on_level_change,
-            "done_on": list(benchmark_done_on(args) or ()),
+            "termination": "provider_native",
         },
         "observation": {
             "shape": list(obs.shape),
@@ -340,7 +314,6 @@ def main() -> None:
         sticky_action_prob=0.0,
         reward_clip=False,
         info_filter="none",
-        done_on=benchmark_done_on(args),
     )
     try:
         obs = env.reset()

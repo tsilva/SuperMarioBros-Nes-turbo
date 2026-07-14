@@ -33,8 +33,6 @@ try:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         canonical_env_args,
         shell_args,
     )
@@ -57,8 +55,6 @@ except ModuleNotFoundError:
         CANONICAL_RESIZE_HEIGHT,
         CANONICAL_RESIZE_WIDTH,
         CANONICAL_STATE_NAMES,
-        CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        CANONICAL_TERMINATE_ON_LIFE_LOSS,
         canonical_env_args,
         shell_args,
     )
@@ -168,9 +164,7 @@ def workload(args: argparse.Namespace, version: str) -> dict[str, Any]:
         "action_seed": DEFAULT_ACTION_SEED,
         "include_info": True,
         "obs_resize_algorithm": "area",
-        "terminate_on_life_loss": CANONICAL_TERMINATE_ON_LIFE_LOSS,
-        "terminate_on_level_change": CANONICAL_TERMINATE_ON_LEVEL_CHANGE,
-        "done_on": ["life_loss", "level_change"],
+        "termination": "provider_native",
     }
 
 
@@ -423,9 +417,7 @@ def require_raw_payload_matches_workload(
         "action_seed": workload_payload["action_seed"],
         "include_info": workload_payload["include_info"],
         "terminate_on_flag": False,
-        "terminate_on_life_loss": workload_payload["terminate_on_life_loss"],
-        "terminate_on_level_change": workload_payload["terminate_on_level_change"],
-        "done_on": workload_payload["done_on"],
+        "termination": workload_payload["termination"],
         "start_game": False,
     }
     mismatches = [

@@ -79,9 +79,7 @@ def benchmark_raw_config(
         "state_dir": plan.state_dir,
         "include_info": True,
         "terminate_on_flag": False,
-        "terminate_on_life_loss": True,
-        "terminate_on_level_change": True,
-        "done_on": ["life_loss", "level_change"],
+        "termination": "provider_native",
         "start_game": False,
     }
 
