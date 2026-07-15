@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,6 +14,12 @@ from supermariobrosnes_turbo import (
     list_available_states,
 )
 from supermariobrosnes_turbo.env import _normalize_initial_state_config
+
+CANONICAL_LEVEL_STATES = tuple(
+    f"Level{world}-{level}"
+    for world in range(1, 9)
+    for level in range(1, 5)
+)
 
 
 def make_env(**kwargs: object) -> SuperMarioBrosNesTurboVecEnv:
@@ -63,6 +68,33 @@ def test_constructor_state_forms_and_packaged_inventory() -> None:
         _normalize_initial_state_config(
             {"Level1-1": 0.0, "Level1-2": 0.0}, None, num_envs=2
         )
+
+
+def test_all_canonical_packaged_states_load_and_step() -> None:
+    assert set(CANONICAL_LEVEL_STATES) <= set(list_available_states())
+    env = make_env(
+        state=list(CANONICAL_LEVEL_STATES),
+        num_envs=len(CANONICAL_LEVEL_STATES),
+        frame_skip=1,
+    )
+    expected_level_hi = np.repeat(np.arange(8, dtype=np.int32), 4)
+    expected_level_lo = np.tile(np.arange(4, dtype=np.int32), 8)
+    try:
+        obs, infos = env.reset(seed=0)
+        assert obs.shape == (len(CANONICAL_LEVEL_STATES), 1, 84, 84)
+        assert env.active_states() == CANONICAL_LEVEL_STATES
+        np.testing.assert_array_equal(infos["levelHi"], expected_level_hi)
+        np.testing.assert_array_equal(infos["levelLo"], expected_level_lo)
+
+        _obs, _rewards, terminated, truncated, infos = env.step(
+            noop(len(CANONICAL_LEVEL_STATES))
+        )
+        assert not np.any(terminated)
+        assert not np.any(truncated)
+        np.testing.assert_array_equal(infos["levelHi"], expected_level_hi)
+        np.testing.assert_array_equal(infos["levelLo"], expected_level_lo)
+    finally:
+        env.close()
 
 
 def test_reset_step_raw_signals_preprocessing_and_reward_clip() -> None:

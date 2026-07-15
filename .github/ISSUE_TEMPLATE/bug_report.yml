@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a reproducible defect in a supported package release.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach ROMs. For vulnerabilities, use the private process in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system, architecture, and Python version.
+      placeholder: Ubuntu 24.04, x86-64, Python 3.14
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include constructor options and the ROM SHA-256, but no ROM content.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Actual result
+      description: Include the complete traceback or incorrect observable behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I am using a supported ROM and have included only its SHA-256.
+          required: true
+        - label: I searched existing issues for duplicates.
+          required: true

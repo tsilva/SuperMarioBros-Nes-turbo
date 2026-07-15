@@ -3,6 +3,10 @@ name = "supermariobrosnes-turbo"
 version = "0.3.0"
 edition = "2021"
 license = "MIT"
+description = "High-throughput vectorized Super Mario Bros NES environment for reinforcement learning"
+repository = "https://github.com/tsilva/SuperMarioBros-Nes-turbo"
+homepage = "https://github.com/tsilva/SuperMarioBros-Nes-turbo"
+readme = "README.md"
 publish = false
 
 [lib]

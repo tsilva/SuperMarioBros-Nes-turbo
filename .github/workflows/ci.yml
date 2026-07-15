@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ALLOW_MISSING_ROM_TESTS: "1"
+  CARGO_TERM_COLOR: always
+  UV_CACHE_DIR: .uv-cache
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Restore Cargo cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: target
+          key: ci-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ci-cargo-${{ runner.os }}-
+
+      - name: Install test environment
+        run: uv sync --frozen --extra dev --group dev
+
+      - name: Check formatting and release compilation
+        run: |
+          cargo fmt --check
+          cargo check --release
+
+      - name: Build editable extension
+        run: uv run maturin develop --release
+
+      - name: Run Rust and Python tests
+        run: make test PYTHON=.venv/bin/python
+
+  package:
+    name: Package
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Install packaging environment
+        run: uv sync --frozen --no-default-groups --group release
+
+      - name: Build and audit distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION.txt)"
+          uv run maturin build --release --out dist
+          uv run maturin sdist --out dist
+          uv run python .codex/skills/build-release/scripts/release_build.py audit-wheels \
+            --version "$version" \
+            dist/*.whl
+          uv run python .codex/skills/build-release/scripts/release_build.py audit-sdist \
+            --version "$version" \
+            dist/*.tar.gz
+          uv run twine check dist/*
+
+      - name: Smoke stable ABI on Python 3.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv python install 3.9
+          uv run python .codex/skills/build-release/scripts/release_build.py smoke-wheel \
+            dist/*.whl \
+            --python "$(uv python find 3.9)"
+          uv run python .codex/skills/build-release/scripts/release_build.py smoke-sdist \
+            dist/*.tar.gz \
+            --python "$(uv python find 3.9)"
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-distributions
+          path: dist/*
+          if-no-files-found: error

@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite it using this metadata."
+title: "SuperMarioBros-Nes-turbo"
+type: software
+authors:
+  - family-names: Silva
+    given-names: Tiago
+license: MIT
+repository-code: "https://github.com/tsilva/SuperMarioBros-Nes-turbo"
+url: "https://pypi.org/project/supermariobrosnes-turbo/"
+version: 0.3.0
+date-released: 2026-07-14
+keywords:
+  - reinforcement learning
+  - Gymnasium
+  - Super Mario Bros
+  - NES
+  - Rust

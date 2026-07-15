@@ -717,6 +717,7 @@ def require_raw_payload_matches_plan(
         "warmup": 100,
         "frame_skip": CANONICAL_FRAME_SKIP,
         "frame_stack": CANONICAL_FRAME_STACK,
+        "frame_maxpool": False,
         "grayscale": True,
         "crop_top": CANONICAL_CROP_TOP,
         "crop_bottom": CANONICAL_CROP_BOTTOM,
@@ -724,6 +725,7 @@ def require_raw_payload_matches_plan(
         "resize_width": CANONICAL_RESIZE_WIDTH,
         "resize_height": CANONICAL_RESIZE_HEIGHT,
         "obs_resize_algorithm": "area",
+        "obs_layout": "chw",
         "action_set": CANONICAL_ACTION_SET,
         "action": None,
         "actions": list(ACTION_NAMES),
@@ -738,6 +740,7 @@ def require_raw_payload_matches_plan(
         "terminate_on_flag": CANONICAL_TERMINATE_ON_FLAG,
         "termination": "provider_native",
         "start_game": CANONICAL_START_GAME,
+        "vectorization": "native",
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"

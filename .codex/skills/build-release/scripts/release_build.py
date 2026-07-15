@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.request
@@ -28,11 +29,19 @@ VERSION_PATH = REPO_ROOT / "VERSION.txt"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CARGO_TOML = REPO_ROOT / "Cargo.toml"
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
-PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+CITATION_CFF = REPO_ROOT / "CITATION.cff"
+PYTHON = Path(sys.executable)
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_NAME = "supermariobrosnes_turbo"
 EXTENSION_NAME = "_supermariobrosnes_turbo"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|\.post\d+|\.dev\d+)?$")
+RELEASE_PLATFORMS = (
+    "macos-arm64",
+    "macos-x86_64",
+    "linux-x86_64",
+    "linux-aarch64",
+    "windows-x86_64",
+)
 
 IGNORED_DIR_NAMES_ANYWHERE = {
     ".git",
@@ -120,6 +129,13 @@ def cargo_lock_version() -> str:
     return section_version(CARGO_LOCK, "package", package_name=PACKAGE_NAME)
 
 
+def citation_version() -> str:
+    for line in CITATION_CFF.read_text(encoding="utf-8").splitlines():
+        if line.startswith("version: "):
+            return line.split(":", 1)[1].strip().strip('"')
+    raise RuntimeError(f"could not find version in {CITATION_CFF}")
+
+
 def validate_version(version: str) -> None:
     if VERSION_RE.match(version) is None:
         raise SystemExit(f"unsupported version format: {version!r}")
@@ -173,6 +189,20 @@ def replace_section_version(path: Path, section: str, version: str) -> None:
     path.write_text("".join(lines), encoding="utf-8")
 
 
+def replace_citation_version(version: str) -> None:
+    lines = CITATION_CFF.read_text(encoding="utf-8").splitlines(keepends=True)
+    changed = False
+    for index, line in enumerate(lines):
+        if line.startswith("version: "):
+            newline = "\n" if line.endswith("\n") else ""
+            lines[index] = f"version: {version}{newline}"
+            changed = True
+            break
+    if not changed:
+        raise RuntimeError(f"could not replace version in {CITATION_CFF}")
+    CITATION_CFF.write_text("".join(lines), encoding="utf-8")
+
+
 def write_version(version: str) -> None:
     VERSION_PATH.write_text(f"{version}\n", encoding="utf-8")
 
@@ -183,6 +213,7 @@ def check_version(args: argparse.Namespace) -> None:
         "pyproject": pyproject_version(),
         "cargo_toml": cargo_version(),
         "cargo_lock": cargo_lock_version(),
+        "citation_cff": citation_version(),
     }
     expected = args.version
     failures = []
@@ -243,6 +274,7 @@ def bump_version(args: argparse.Namespace) -> None:
         write_version(target)
         replace_section_version(PYPROJECT, "project", target)
         replace_section_version(CARGO_TOML, "package", target)
+        replace_citation_version(target)
     print(target)
 
 
@@ -251,6 +283,7 @@ def sync_version(args: argparse.Namespace) -> None:
     validate_version(version)
     replace_section_version(PYPROJECT, "project", version)
     replace_section_version(CARGO_TOML, "package", version)
+    replace_citation_version(version)
     print(version)
 
 
@@ -323,7 +356,9 @@ def latest_pypi(args: argparse.Namespace) -> None:
 def should_ignore(rel: Path) -> bool:
     if any(part in IGNORED_DIR_NAMES_ANYWHERE for part in rel.parts):
         return True
-    if len(rel.parts) == 1 and rel.name in IGNORED_ROOT_DIR_NAMES:
+    if len(rel.parts) == 1 and (
+        rel.name in IGNORED_ROOT_DIR_NAMES or rel.name.startswith("target-release-")
+    ):
         return True
     if rel.name.startswith("wheelhouse"):
         return True
@@ -380,18 +415,25 @@ def wheelhouse(version: str, platform_name: str) -> Path:
 
 
 def cargo_target_dir(platform_name: str, root: Path = REPO_ROOT) -> Path:
-    if platform_name == "macos":
-        return root / "target-release"
-    if platform_name == "linux":
-        return root / "target-release-linux"
-    raise ValueError(f"unknown platform: {platform_name}")
+    legacy = {
+        "macos": "target-release",
+        "linux": "target-release-linux",
+    }
+    if platform_name in legacy:
+        return root / legacy[platform_name]
+    if platform_name not in RELEASE_PLATFORMS:
+        raise ValueError(f"unknown platform: {platform_name}")
+    return root / f"target-release-{platform_name}"
 
 
-def linux_build_env(root: Path = REPO_ROOT) -> dict[str, str]:
-    target_dir = cargo_target_dir("linux", root).resolve()
+def linux_build_env(platform_name: str, root: Path = REPO_ROOT) -> dict[str, str]:
+    if platform_name not in {"linux-x86_64", "linux-aarch64"}:
+        raise ValueError(f"not a Linux release platform: {platform_name}")
+    arch = platform_name.removeprefix("linux-")
+    target_dir = cargo_target_dir(platform_name, root).resolve()
     return {
-        "CIBW_BUILD": "cp39-manylinux_x86_64",
-        "CIBW_ARCHS_LINUX": "x86_64",
+        "CIBW_BUILD": f"cp39-manylinux_{arch}",
+        "CIBW_ARCHS_LINUX": arch,
         "CIBW_SKIP": "*-musllinux_*",
         "CIBW_BEFORE_ALL_LINUX": "curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal",
         "CIBW_CONTAINER_ENGINE": f"docker; create_args: --volume={target_dir}:/cargo-target",
@@ -458,7 +500,7 @@ def build_commands(args: argparse.Namespace) -> None:
     print()
     print("# Linux x86_64 manylinux")
     print(f"cd {shell_quote(linux_src)}")
-    linux_env = linux_build_env(linux_src)
+    linux_env = linux_build_env("linux-x86_64", linux_src)
     print(
         " ".join(f"{key}={shell_quote(value)}" for key, value in linux_env.items())
         + f" {shell_quote(PYTHON)} -m cibuildwheel --platform linux --output-dir {shell_quote(linux_out)}"
@@ -473,18 +515,26 @@ def build_platform(args: argparse.Namespace) -> None:
     env = os.environ.copy()
     target_dir = cargo_target_dir(args.platform)
     target_dir.mkdir(parents=True, exist_ok=True)
-    if args.platform == "macos":
+    if args.platform.startswith("macos-"):
+        arch = args.platform.removeprefix("macos-")
         env.update(
             {
-                "MACOSX_DEPLOYMENT_TARGET": "14.0",
-                "ARCHFLAGS": "-arch arm64",
+                "MACOSX_DEPLOYMENT_TARGET": "14.0" if arch == "arm64" else "13.0",
+                "ARCHFLAGS": f"-arch {arch}",
                 "CARGO_TARGET_DIR": str(target_dir),
             }
         )
         run([str(PYTHON), "-m", "maturin", "build", "--release", "--out", str(output_dir)], env=env)
         return
-    env.update(linux_build_env())
-    run([str(PYTHON), "-m", "cibuildwheel", "--platform", "linux", "--output-dir", str(output_dir)], env=env)
+    if args.platform.startswith("windows-"):
+        env["CARGO_TARGET_DIR"] = str(target_dir)
+        run([str(PYTHON), "-m", "maturin", "build", "--release", "--out", str(output_dir)], env=env)
+        return
+    env.update(linux_build_env(args.platform))
+    run(
+        [str(PYTHON), "-m", "cibuildwheel", "--platform", "linux", "--output-dir", str(output_dir)],
+        env=env,
+    )
 
 
 def wheel_names(wheel: Path) -> list[str]:
@@ -502,6 +552,8 @@ def audit_wheel(wheel: Path, version: str) -> dict[str, object]:
     metadata_entries = [name for name in names if name.endswith(".dist-info/METADATA")]
     rom_payloads = [name for name in names if Path(name).suffix.lower() in ROM_SUFFIXES]
     pycache_entries = [name for name in names if "__pycache__" in Path(name).parts or name.endswith(".pyc")]
+    license_entries = [name for name in names if name.endswith("/LICENSE")]
+    notice_entries = [name for name in names if name.endswith("/NOTICE.md")]
     checks = {
         "version_in_filename": version in wheel.name,
         "abi3_wheel": "abi3" in wheel.name,
@@ -509,6 +561,9 @@ def audit_wheel(wheel: Path, version: str) -> dict[str, object]:
         "has_env_source": f"{IMPORT_NAME}/env.py" in names,
         "has_extension": bool(extension_entries),
         "has_metadata": bool(metadata_entries),
+        "has_license": bool(license_entries),
+        "has_notice": bool(notice_entries),
+        "has_py_typed": f"{IMPORT_NAME}/py.typed" in names,
         "no_rom_payloads": not rom_payloads,
         "no_pycache": not pycache_entries,
     }
@@ -516,6 +571,8 @@ def audit_wheel(wheel: Path, version: str) -> dict[str, object]:
         "wheel": str(wheel),
         "extension_entries": extension_entries,
         "metadata_entries": metadata_entries,
+        "license_entries": license_entries,
+        "notice_entries": notice_entries,
         "rom_payloads": rom_payloads,
         "pycache_entries": pycache_entries,
         "checks": checks,
@@ -535,20 +592,66 @@ def assert_audit_passed(results: list[dict[str, object]]) -> None:
         raise SystemExit(f"wheel audit failed: {failures}")
 
 
+def wheel_release_platform(wheel: Path) -> str | None:
+    name = wheel.name
+    markers = {
+        "macos-arm64": ("macosx", "arm64"),
+        "macos-x86_64": ("macosx", "x86_64"),
+        "linux-x86_64": ("manylinux", "x86_64"),
+        "linux-aarch64": ("manylinux", "aarch64"),
+        "windows-x86_64": ("win_amd64",),
+    }
+    for platform_name, required in markers.items():
+        if all(marker in name for marker in required):
+            return platform_name
+    return None
+
+
+def assert_platform_coverage(wheels: list[Path]) -> None:
+    seen = {platform for wheel in wheels if (platform := wheel_release_platform(wheel))}
+    missing = sorted(set(RELEASE_PLATFORMS) - seen)
+    if missing:
+        raise SystemExit(f"release wheel set is missing platforms: {', '.join(missing)}")
+
+
 def find_wheels(version: str) -> list[Path]:
-    candidates = list(wheelhouse(version, "macos").glob(f"*{version}*.whl"))
-    candidates.extend(wheelhouse(version, "linux").glob(f"*{version}*.whl"))
-    return sorted(candidates)
+    candidates: list[Path] = []
+    for platform_name in (*RELEASE_PLATFORMS, "macos", "linux"):
+        candidates.extend(wheelhouse(version, platform_name).glob(f"*{version}*.whl"))
+    return sorted(set(candidates))
 
 
 def audit_wheels(args: argparse.Namespace) -> None:
     version = args.version or read_version()
     wheels = [Path(wheel) for wheel in args.wheels] if args.wheels else find_wheels(version)
-    if len(wheels) < 2:
-        raise SystemExit(f"expected macOS and Linux wheels for {version}, found {wheels}")
+    if args.require_all_platforms:
+        assert_platform_coverage(wheels)
     results = [audit_wheel(wheel, version) for wheel in wheels]
     assert_audit_passed(results)
     print(json.dumps(results, indent=2))
+
+
+def audit_sdist(args: argparse.Namespace) -> None:
+    version = args.version or read_version()
+    sdist = args.sdist.resolve()
+    with tarfile.open(sdist, "r:gz") as archive:
+        names = archive.getnames()
+    rom_payloads = [name for name in names if Path(name).suffix.lower() in ROM_SUFFIXES]
+    checks = {
+        "version_in_filename": version in sdist.name,
+        "has_pyproject": any(name.endswith("/pyproject.toml") for name in names),
+        "has_cargo_toml": any(name.endswith("/Cargo.toml") for name in names),
+        "has_license": any(name.endswith("/LICENSE") for name in names),
+        "has_notice": any(name.endswith("/NOTICE.md") for name in names),
+        "has_py_typed": any(name.endswith(f"/{IMPORT_NAME}/py.typed") for name in names),
+        "has_packaged_states": any(name.endswith(".state") for name in names),
+        "no_rom_payloads": not rom_payloads,
+    }
+    result = {"sdist": str(sdist), "rom_payloads": rom_payloads, "checks": checks}
+    print(json.dumps(result, indent=2))
+    failed = [key for key, value in checks.items() if not value]
+    if failed:
+        raise SystemExit(f"sdist audit failed: {failed}")
 
 
 def run(args_list: list[str], **kwargs: object) -> None:
@@ -556,12 +659,22 @@ def run(args_list: list[str], **kwargs: object) -> None:
     subprocess.run(args_list, check=True, **kwargs)
 
 
-def smoke_wheel(args: argparse.Namespace) -> None:
-    wheel = args.wheel.resolve()
-    python = args.python
-    with tempfile.TemporaryDirectory(prefix="supermariobrosnes-wheel-smoke.", dir=release_temp_dir()) as tmp:
+def smoke_distribution(distribution: Path, python: Path) -> None:
+    distribution = distribution.resolve()
+    with tempfile.TemporaryDirectory(prefix="supermariobrosnes-distribution-smoke.", dir=release_temp_dir()) as tmp:
         target = Path(tmp)
-        run(["uv", "pip", "install", "--python", str(python), "--no-deps", "--target", str(target), str(wheel)])
+        run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--target",
+                str(target),
+                str(distribution),
+            ]
+        )
         code = f"""
 import {IMPORT_NAME}
 from {IMPORT_NAME} import {EXTENSION_NAME}
@@ -575,6 +688,20 @@ assert hasattr({IMPORT_NAME}, "SuperMarioBrosNesTurboVecEnv")
         run([str(python), "-c", code], cwd=release_temp_dir(), env=env)
 
 
+def smoke_wheel(args: argparse.Namespace) -> None:
+    wheel = args.wheel.resolve()
+    if wheel.is_dir():
+        candidates = sorted(wheel.glob("*.whl"))
+        if len(candidates) != 1:
+            raise SystemExit(f"expected one wheel in {wheel}, found {candidates}")
+        wheel = candidates[0]
+    smoke_distribution(wheel, args.python)
+
+
+def smoke_sdist(args: argparse.Namespace) -> None:
+    smoke_distribution(args.sdist, args.python)
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -585,9 +712,8 @@ def sha256(path: Path) -> str:
 
 def final_check(args: argparse.Namespace) -> None:
     version = args.version or read_version()
-    wheels = find_wheels(version)
-    if len(wheels) < 2:
-        raise SystemExit(f"expected macOS and Linux wheels for {version}, found {wheels}")
+    wheels = [Path(wheel) for wheel in args.wheels] if args.wheels else find_wheels(version)
+    assert_platform_coverage(wheels)
     results = [audit_wheel(wheel, version) for wheel in wheels]
     assert_audit_passed(results)
     run([str(PYTHON), "-m", "twine", "check", *[str(wheel) for wheel in wheels]])
@@ -646,21 +772,33 @@ def main() -> None:
 
     platform = subparsers.add_parser("build-platform", help="Build one release wheel platform")
     platform.add_argument("--version")
-    platform.add_argument("--platform", choices=("macos", "linux"), required=True)
+    platform.add_argument("--platform", choices=RELEASE_PLATFORMS, required=True)
     platform.set_defaults(func=build_platform)
 
     audit = subparsers.add_parser("audit-wheels", help="Audit wheel contents")
     audit.add_argument("--version")
+    audit.add_argument("--require-all-platforms", action="store_true")
     audit.add_argument("wheels", nargs="*")
     audit.set_defaults(func=audit_wheels)
+
+    sdist = subparsers.add_parser("audit-sdist", help="Audit source-distribution contents")
+    sdist.add_argument("sdist", type=Path)
+    sdist.add_argument("--version")
+    sdist.set_defaults(func=audit_sdist)
 
     smoke = subparsers.add_parser("smoke-wheel", help="Install and import-test a built wheel")
     smoke.add_argument("wheel", type=Path)
     smoke.add_argument("--python", type=Path, default=PYTHON)
     smoke.set_defaults(func=smoke_wheel)
 
+    smoke_source = subparsers.add_parser("smoke-sdist", help="Build, install, and import-test a source distribution")
+    smoke_source.add_argument("sdist", type=Path)
+    smoke_source.add_argument("--python", type=Path, default=PYTHON)
+    smoke_source.set_defaults(func=smoke_sdist)
+
     final = subparsers.add_parser("final-check", help="Audit wheels, run twine check, hash, and print upload command")
     final.add_argument("--version")
+    final.add_argument("wheels", nargs="*")
     final.set_defaults(func=final_check)
 
     args = parser.parse_args()

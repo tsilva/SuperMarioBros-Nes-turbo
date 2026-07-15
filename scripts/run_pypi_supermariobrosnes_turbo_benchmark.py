@@ -398,6 +398,7 @@ def require_raw_payload_matches_workload(
         "warmup": workload_payload["warmup"],
         "frame_skip": workload_payload["frame_skip"],
         "frame_stack": workload_payload["frame_stack"],
+        "frame_maxpool": False,
         "grayscale": workload_payload["grayscale"],
         "crop_top": workload_payload["crop_top"],
         "crop_bottom": workload_payload["crop_bottom"],
@@ -405,6 +406,7 @@ def require_raw_payload_matches_workload(
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "obs_layout": "chw",
         "state": None,
         "states": workload_payload["states"],
         "lane_states": [
@@ -419,6 +421,7 @@ def require_raw_payload_matches_workload(
         "terminate_on_flag": False,
         "termination": workload_payload["termination"],
         "start_game": False,
+        "vectorization": "native",
     }
     mismatches = [
         f"config.{key}={config.get(key)!r} expected {value!r}"
@@ -499,6 +502,7 @@ def local_setup(args: argparse.Namespace, run_dir: Path, version: str) -> None:
     shutil.copy2("scripts/benchmark_sps.py", run_dir / "scripts")
     shutil.copy2("scripts/benchmark_rom.py", run_dir / "scripts")
     shutil.copy2("scripts/benchmark_workload.py", run_dir / "scripts")
+    shutil.copy2("scripts/dotenv_utils.py", run_dir / "scripts")
     setup = (
         f"cd {quote(str(run_dir))} && "
         f"uv venv --python {quote(args.python)} .venv && "

@@ -7,13 +7,23 @@ import numpy as np
 import pytest
 
 from rom_helpers import require_rom
-from scripts import compare_supermariobrosnes_turbo_vec_env as compare
-from supermariobrosnes_turbo import Actions, NES_BUTTONS, SuperMarioBrosNesTurboVecEnv
+from scripts.benchmark_sps import (
+    GAME,
+    PreprocessingConfig,
+    create_stable_retro_vector_env,
+    named_action_mask,
+)
+from supermariobrosnes_turbo import (
+    Actions,
+    NES_BUTTONS,
+    SuperMarioBrosNesTurboVecEnv,
+    action_batch,
+)
 from supermariobrosnes_turbo import _supermariobrosnes_turbo as native
 
 
-def test_oracle_version_is_post30() -> None:
-    assert compare.EXPECTED_STABLE_RETRO_VERSION == "1.0.1.post30"
+def test_oracle_is_upstream_stable_retro() -> None:
+    assert importlib.metadata.version("stable-retro") == "1.0.1"
 
 
 def test_native_binding_removed_lifecycle_and_policy_mutators() -> None:
@@ -48,50 +58,63 @@ def test_public_signature_preserves_vector_features() -> None:
 
 
 @pytest.mark.retro_oracle
-def test_post30_oracle_raw_signal_and_observation_parity() -> None:
-    require_rom()
-    assert importlib.metadata.version("stable-retro-turbo") == "1.0.1.post30"
-    config = compare.ComparisonConfig(
-        rom_path=require_rom(),
-        stable_retro_path=None,
-        game=compare.DEFAULT_STABLE_RETRO_GAME,
-        state="Level1-1",
-        num_envs=1,
-        env_threads=1,
-        steps=16,
-        seed=123,
-        frame_skip=4,
-        frame_stack=1,
-        grayscale=True,
-        crop_top=32,
-        crop_bottom=0,
-        resize_width=84,
-        resize_height=84,
-        action_set="simple",
-        frame_maxpool=False,
-        noop_reset_max=0,
-        sticky_action_prob=0.0,
-        obs_copy="copy",
-        terminate_on_flag=False,
-        include_obs=True,
-        include_rewards=True,
-        include_dones=True,
-        include_infos=True,
-        stop_on_done=True,
-        fixed_action="noop",
-        output_json=None,
-        allow_version_mismatch=False,
-        preprocessing_matrix=False,
-        termination_matrix=False,
+@pytest.mark.parametrize("num_envs", [1, 4])
+def test_upstream_oracle_exact_short_sequence_parity(num_envs: int) -> None:
+    rom_path = require_rom()
+    states = [f"Level1-{index + 1}" for index in range(num_envs)]
+    preprocessing = PreprocessingConfig(4, 4, True, 32, 0, "mask", 84, 84)
+    retro_env = create_stable_retro_vector_env(
+        rom_path=rom_path,
+        lane_state_names=states,
+        preprocessing=preprocessing,
+        asynchronous=True,
     )
-    result = compare.run_comparison(config)
-    assert result["status"] == "ok"
-    assert result["compared_steps"] == 16
+    fast_env = SuperMarioBrosNesTurboVecEnv(
+        GAME,
+        state=states,
+        rom_path=rom_path,
+        num_envs=num_envs,
+        use_restricted_actions=Actions.ALL,
+        frame_skip=4,
+        frame_stack=4,
+        obs_grayscale=True,
+        obs_crop=(32, 0, 0, 0),
+        obs_crop_mode="mask",
+        obs_resize=(84, 84),
+        obs_resize_algorithm="area",
+        obs_layout="chw",
+        maxpool_last_two=False,
+    )
+    action_names = ("noop", "right", "right_b", "right_a") * 4
+    try:
+        retro_obs, _ = retro_env.reset()
+        fast_obs, _ = fast_env.reset()
+        assert retro_obs.shape == fast_obs.shape == (num_envs, 4, 84, 84)
+        assert retro_obs.dtype == fast_obs.dtype == np.uint8
+        np.testing.assert_array_equal(retro_obs, fast_obs)
+        for action_name in action_names:
+            retro_action = np.repeat(
+                named_action_mask(action_name, retro_env.buttons)[None, :], num_envs, axis=0
+            )
+            fast_action = action_batch(action_name, num_envs)
+            retro_obs, retro_rewards, retro_terminated, retro_truncated, _ = retro_env.step(
+                retro_action
+            )
+            fast_obs, fast_rewards, fast_terminated, fast_truncated, _ = fast_env.step(
+                fast_action
+            )
+            np.testing.assert_array_equal(retro_obs, fast_obs)
+            np.testing.assert_array_equal(retro_rewards, fast_rewards)
+            np.testing.assert_array_equal(retro_terminated, fast_terminated)
+            np.testing.assert_array_equal(retro_truncated, fast_truncated)
+    finally:
+        retro_env.close()
+        fast_env.close()
 
 
 def test_action_and_layout_runtime_smoke() -> None:
     env = SuperMarioBrosNesTurboVecEnv(
-        "SuperMarioBros-Nes-v0",
+        GAME,
         state="Level1-1",
         rom_path=require_rom(),
         num_envs=1,

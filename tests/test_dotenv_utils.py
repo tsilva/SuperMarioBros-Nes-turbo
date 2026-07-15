@@ -16,39 +16,6 @@ from scripts.benchmark_sps import load_preflight as native_load_preflight
 from scripts.benchmark_sps import package_metadata as native_package_metadata
 from scripts.benchmark_sps import resolve_verified_rom_path as resolve_native_verified_rom_path
 from scripts.dotenv_utils import dotenv_value, env_or_dotenv_path, require_env_or_dotenv_path
-from scripts.benchmark_stable_retro_turbo_pypi import (
-    build_result as build_stable_retro_pypi_result,
-    resolve_required_rom_path as resolve_stable_retro_pypi_rom_path,
-    resolve_verified_rom_path as resolve_stable_retro_pypi_verified_rom_path,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    aggregate as stable_pypi_aggregate,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    cached_aggregate_is_usable as stable_cached_aggregate_is_usable,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    parse_args as parse_stable_pypi_args,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    pypi_version_info_from_json as stable_pypi_version_info_from_json,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    run_invocations as run_stable_pypi_invocations,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    require_measured_load_gate as require_stable_pypi_load_gate,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import workload as stable_pypi_workload
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    stable_hash as stable_pypi_stable_hash,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    validate_args as validate_stable_pypi_args,
-)
-from scripts.run_pypi_stable_retro_turbo_benchmark import (
-    write_manifest_and_index as write_stable_manifest_and_index,
-)
 from scripts.run_pypi_supermariobrosnes_turbo_benchmark import (
     aggregate as smb_pypi_aggregate,
 )
@@ -147,34 +114,12 @@ def test_package_default_rom_path_reads_dotenv(
     assert default_rom_path() == Path("/tmp/from-dotenv.nes")
 
 
-def test_direct_stable_retro_pypi_benchmark_resolves_existing_absolute_rom_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("ROM_PATH", raising=False)
-    rom_path = tmp_path / "relative-rom.nes"
-    rom_path.write_bytes(b"placeholder")
-    (tmp_path / ".env").write_text("ROM_PATH=relative-rom.nes\n")
-
-    assert resolve_stable_retro_pypi_rom_path() == rom_path
-
-
-def test_direct_stable_retro_pypi_benchmark_rejects_bad_rom_path(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="ROM path does not exist"):
-        resolve_stable_retro_pypi_rom_path(tmp_path / "missing.nes")
-
-    with pytest.raises(ValueError, match="ROM path is not a file"):
-        resolve_stable_retro_pypi_rom_path(tmp_path)
-
-
 def test_direct_benchmark_entrypoints_reject_wrong_rom_sha(tmp_path: Path) -> None:
     rom_path = tmp_path / "wrong-rom.nes"
     rom_path.write_bytes(b"not the expected rom")
 
     with pytest.raises(SystemExit, match="ROM SHA-256 mismatch"):
         resolve_native_verified_rom_path(rom_path)
-    with pytest.raises(SystemExit, match="ROM SHA-256 mismatch"):
-        resolve_stable_retro_pypi_verified_rom_path(rom_path)
 
 
 def test_direct_benchmark_results_record_rom_identity(
@@ -227,34 +172,6 @@ def test_direct_benchmark_results_record_rom_identity(
         rom_path,
     )
 
-    stable_args = SimpleNamespace(
-        game="SuperMarioBros-Nes-v0",
-        num_envs=2,
-        num_threads=1,
-        steps=10,
-        repeats=1,
-        warmup=0,
-        frame_skip=4,
-        frame_stack=4,
-        rgb=False,
-        crop_top=32,
-        crop_bottom=0,
-        obs_crop_mode="mask",
-        resize_width=84,
-        resize_height=84,
-        action="noop",
-        obs_copy="safe_view",
-        obs_resize_algorithm="area",
-    )
-    stable = build_stable_retro_pypi_result(
-        stable_args,
-        "1.0.1.post30",
-        obs,
-        runs,
-        ("Level1-1",),
-        rom_path,
-    )
-
     assert native["config"]["rom_path"] == str(rom_path)
     assert native["config"]["rom_sha256"] == expected_sha
     assert native["config"]["rayon_num_threads"] == 12
@@ -262,10 +179,6 @@ def test_direct_benchmark_results_record_rom_identity(
     assert native["config"]["obs_resize_algorithm"] == "area"
     assert native["config"]["termination"] == "provider_native"
     assert native["package"] == native_package_metadata()
-    assert stable["config"]["rom_path"] == str(rom_path)
-    assert stable["config"]["rom_sha256"] == expected_sha
-    assert stable["config"]["obs_crop_mode"] == "mask"
-    assert stable["config"]["termination"] == "provider_native"
 
 
 def test_native_benchmark_load_preflight_uses_strict_boundary(
@@ -302,7 +215,6 @@ def test_pypi_benchmark_wrappers_read_rom_path_from_dotenv(
         f'AUTORESEARCH_ROOT_PATH="{autoresearch_root}"\n'
     )
 
-    assert parse_stable_pypi_args(["--version", "1.0.0"]).rom_path == str(rom_path)
     assert parse_smb_pypi_args(["--version", "1.0.0"]).rom_path == str(rom_path)
 
 
@@ -328,13 +240,7 @@ def test_pypi_workload_hash_inputs_include_rom_digest() -> None:
         measured_invocations=11,
     )
 
-    stable_payload = stable_pypi_workload(args, "1.0.1.post30")
     smb_payload = smb_pypi_workload(args, "0.1.2")
-
-    assert stable_payload["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
-    assert stable_payload["rom_sha256"] == EXPECTED_SMB_ROM_SHA256
-    assert stable_payload["obs_crop_mode"] == "mask"
-    assert stable_payload["termination"] == "provider_native"
     assert smb_payload["expected_rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert smb_payload["rom_sha256"] == EXPECTED_SMB_ROM_SHA256
     assert smb_payload["obs_crop_mode"] == "mask"
@@ -351,21 +257,14 @@ def test_pypi_version_info_uses_requested_release_urls() -> None:
         },
     }
 
-    stable = stable_pypi_version_info_from_json(data, "1.0.0")
     smb = smb_pypi_version_info_from_json(data, "1.0.0")
-
-    assert stable["name"] == "stable-retro-turbo"
-    assert stable["import"] == "stable_retro"
-    assert stable["version"] == "1.0.0"
-    assert stable["urls"] == [{"filename": "pkg-1.0.0.whl"}]
     assert smb["name"] == "supermariobrosnes-turbo"
     assert smb["import"] == "supermariobrosnes_turbo"
     assert smb["version"] == "1.0.0"
     assert smb["urls"] == [{"filename": "pkg-1.0.0.whl"}]
 
-    assert stable_pypi_version_info_from_json(data)["version"] == "2.0.0"
     with pytest.raises(SystemExit, match="version '9.9.9' not found"):
-        stable_pypi_version_info_from_json(data, "9.9.9")
+        smb_pypi_version_info_from_json(data, "9.9.9")
 
 
 def test_pypi_smb_state_hashes_require_all_state_files(tmp_path: Path) -> None:
@@ -384,34 +283,6 @@ def test_pypi_smb_state_hashes_require_all_state_files(tmp_path: Path) -> None:
         state_hashes(state_dir)
 
 
-def stable_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
-    states = list(workload_payload["states"])
-    return {
-        "rom_path": workload_payload["rom_path"],
-        "rom_sha256": workload_payload["rom_sha256"],
-        "game": "SuperMarioBros-Nes-v0",
-        "num_envs": workload_payload["num_envs"],
-        "num_threads": workload_payload["num_threads"],
-        "steps": workload_payload["steps"],
-        "repeats": workload_payload["repeats"],
-        "warmup": workload_payload["warmup"],
-        "frame_skip": workload_payload["frame_skip"],
-        "frame_stack": workload_payload["frame_stack"],
-        "grayscale": workload_payload["grayscale"],
-        "crop_top": workload_payload["crop_top"],
-        "crop_bottom": workload_payload["crop_bottom"],
-        "obs_crop_mode": workload_payload["obs_crop_mode"],
-        "resize_width": workload_payload["resize"][0],
-        "resize_height": workload_payload["resize"][1],
-        "states": states,
-        "lane_states": [states[index % len(states)] for index in range(workload_payload["num_envs"])],
-        "action": workload_payload["action"],
-        "obs_copy": workload_payload["obs_copy"],
-        "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
-        "termination": workload_payload["termination"],
-    }
-
-
 def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
     states = list(workload_payload["states"])
     return {
@@ -425,6 +296,7 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "warmup": workload_payload["warmup"],
         "frame_skip": workload_payload["frame_skip"],
         "frame_stack": workload_payload["frame_stack"],
+        "frame_maxpool": False,
         "grayscale": workload_payload["grayscale"],
         "crop_top": workload_payload["crop_top"],
         "crop_bottom": workload_payload["crop_bottom"],
@@ -432,6 +304,7 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "resize_width": workload_payload["resize"][0],
         "resize_height": workload_payload["resize"][1],
         "obs_resize_algorithm": workload_payload["obs_resize_algorithm"],
+        "obs_layout": "chw",
         "action_set": workload_payload["action_set"],
         "action": workload_payload["action"],
         "actions": workload_payload["actions"],
@@ -443,6 +316,7 @@ def smb_raw_config(workload_payload: dict[str, object]) -> dict[str, object]:
         "terminate_on_flag": False,
         "termination": workload_payload["termination"],
         "start_game": False,
+        "vectorization": "native",
     }
 
 
@@ -472,14 +346,6 @@ def write_pypi_raw_bundle(
     (raw_dir / "load-after-measured.txt").write_text(load_after)
 
 
-def stable_raw_package(version: str = "1.0.0") -> dict[str, str]:
-    return {
-        "name": "stable-retro-turbo",
-        "version": version,
-        "import": "stable_retro",
-    }
-
-
 def smb_raw_package(version: str = "1.0.0") -> dict[str, str]:
     return {
         "name": "supermariobrosnes-turbo",
@@ -490,25 +356,6 @@ def smb_raw_package(version: str = "1.0.0") -> dict[str, str]:
 
 def test_pypi_aggregates_reject_raw_workload_mismatches(tmp_path: Path) -> None:
     cases = (
-        (
-            stable_pypi_aggregate,
-            stable_pypi_workload,
-            stable_raw_config,
-            stable_raw_package(),
-            SimpleNamespace(
-                python="3.14",
-                rom_path="/roms/SuperMarioBros.nes",
-                rom_sha256=EXPECTED_SMB_ROM_SHA256,
-                num_envs=16,
-                num_threads=12,
-                steps=50000,
-                repeats=3,
-                warmup=100,
-                warmup_invocations=1,
-                measured_invocations=1,
-                force_busy=False,
-            ),
-        ),
         (
             smb_pypi_aggregate,
             smb_pypi_workload,
@@ -598,25 +445,6 @@ def test_pypi_aggregates_reject_raw_workload_mismatches(tmp_path: Path) -> None:
 def test_pypi_force_busy_keeps_validity_separate_from_load_gate(tmp_path: Path) -> None:
     cases = (
         (
-            stable_pypi_aggregate,
-            stable_pypi_workload,
-            stable_raw_config,
-            stable_raw_package(),
-            SimpleNamespace(
-                python="3.14",
-                rom_path="/roms/SuperMarioBros.nes",
-                rom_sha256=EXPECTED_SMB_ROM_SHA256,
-                num_envs=16,
-                num_threads=12,
-                steps=50000,
-                repeats=3,
-                warmup=100,
-                warmup_invocations=1,
-                measured_invocations=1,
-                force_busy=True,
-            ),
-        ),
-        (
             smb_pypi_aggregate,
             smb_pypi_workload,
             smb_raw_config,
@@ -666,9 +494,7 @@ def test_pypi_force_busy_keeps_validity_separate_from_load_gate(tmp_path: Path) 
 @pytest.mark.parametrize(
     ("validator", "field", "value", "message"),
     [
-        (validate_stable_pypi_args, "steps", 0, "--steps must be positive"),
         (validate_smb_pypi_args, "measured_invocations", 0, "--measured-invocations must be positive"),
-        (validate_stable_pypi_args, "warmup", -1, "--warmup must be non-negative"),
         (validate_smb_pypi_args, "warmup", -1, "--warmup must be non-negative"),
     ],
 )
@@ -700,10 +526,7 @@ def test_pypi_indexes_preserve_rom_digest(tmp_path: Path) -> None:
         "Level1-3": "sha-Level1-3",
         "Level1-4": "sha-Level1-4",
     }
-    for writer, package in (
-        (write_stable_manifest_and_index, "stable-retro-turbo"),
-        (write_smb_manifest_and_index, "supermariobrosnes-turbo"),
-    ):
+    for writer, package in ((write_smb_manifest_and_index, "supermariobrosnes-turbo"),):
         cache_root = tmp_path / package
         cache_dir = cache_root / "1.0.0" / "abcdef"
         cache_dir.mkdir(parents=True)
@@ -748,26 +571,6 @@ def test_pypi_cache_hits_require_valid_aggregate(tmp_path: Path) -> None:
         "Level1-4": "sha-Level1-4",
     }
     cases = (
-        (
-            stable_cached_aggregate_is_usable,
-            stable_pypi_stable_hash,
-            stable_pypi_workload,
-            stable_raw_config,
-            stable_raw_package(),
-            {"name": "stable-retro-turbo", "import": "stable_retro"},
-            SimpleNamespace(
-                python="3.14",
-                rom_path="/roms/SuperMarioBros.nes",
-                rom_sha256=EXPECTED_SMB_ROM_SHA256,
-                num_envs=16,
-                num_threads=12,
-                steps=50000,
-                repeats=3,
-                warmup=100,
-                warmup_invocations=1,
-                measured_invocations=1,
-            ),
-        ),
         (
             smb_cached_aggregate_is_usable,
             smb_pypi_stable_hash,
@@ -1039,7 +842,6 @@ def test_pypi_wrappers_capture_load_after_warmups(
     )
 
     for runner, run_symbol in (
-        (run_stable_pypi_invocations, "scripts.run_pypi_stable_retro_turbo_benchmark.run"),
         (run_smb_pypi_invocations, "scripts.run_pypi_supermariobrosnes_turbo_benchmark.run"),
     ):
         commands: list[str] = []
@@ -1078,26 +880,20 @@ def test_pypi_wrappers_capture_load_after_warmups(
             "Level1-1,Level1-2,Level1-3,Level1-4",
         ):
             assert expected in measured_command
-        if runner is run_smb_pypi_invocations:
-            for expected in (
-                "--action-set simple",
-                "--actions",
-                "noop,right,right_b,right_a",
-                "--action-seed 0",
-                "--no-start-game",
-            ):
-                assert expected in measured_command
-        else:
-            assert (
-                "--action noop --obs-copy safe_view --obs-resize-algorithm area"
-                in measured_command
-            )
+        for expected in (
+            "--action-set simple",
+            "--actions",
+            "noop,right,right_b,right_a",
+            "--action-seed 0",
+            "--no-start-game",
+        ):
+            assert expected in measured_command
 
 
 def test_pypi_measured_load_gate_blocks_busy_or_unknown_load(tmp_path: Path) -> None:
     load_path = tmp_path / "load-before-measured.txt"
 
-    for load_gate in (require_stable_pypi_load_gate, require_smb_pypi_load_gate):
+    for load_gate in (require_smb_pypi_load_gate,):
         load_path.write_text("10:00 up 1 day, load average: 4.01, 3.00, 2.00\n")
         with pytest.raises(SystemExit, match="benchmark load 4.01 meets or exceeds max 4.00"):
             load_gate(SimpleNamespace(force_busy=False), load_path)

@@ -28,19 +28,35 @@ from play import (
     load_sdl2,
 )
 from supermariobrosnes_turbo import (
-    ACTION_BUTTONS,
     ACTION_SETS,
     Actions,
     SuperMarioBrosNesTurboVecEnv,
     action_mask,
     resolve_required_rom_path,
 )
-from supermariobrosnes_turbo.ppo import load_policy_checkpoint
+from supermariobrosnes_turbo.jerk import load_jerk_checkpoint
+
+try:
+    from benchmark_sps import (
+        PreprocessingConfig,
+        create_stable_retro_vector_env,
+        named_action_mask,
+        stable_retro_buttons,
+    )
+except ModuleNotFoundError:
+    from scripts.benchmark_sps import (
+        PreprocessingConfig,
+        create_stable_retro_vector_env,
+        named_action_mask,
+        stable_retro_buttons,
+    )
 
 
-DEFAULT_HF_FILENAME = "ppo_supermariobros-nes-v0_4500000_steps.zip"
+DEFAULT_HF_FILENAME = "final_policy.json"
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
 HF_URL_RE = re.compile(r"^https?://huggingface\.co/(?P<repo>[^/]+/[^/]+)(?:/(?P<rest>.*))?$")
+
+
 class ModelResolutionError(RuntimeError):
     pass
 
@@ -56,7 +72,7 @@ def parse_hf_source(source: str) -> tuple[str, str | None, str | None] | None:
             filename = "/".join(parts[2:])
             return repo_id, filename, revision
         return repo_id, None, None
-    if "/" in source and not source.endswith(".zip") and not Path(source).expanduser().exists():
+    if "/" in source and not source.endswith(".json") and not Path(source).expanduser().exists():
         return source, None, None
     return None
 
@@ -73,8 +89,14 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
     repo_id, source_filename, revision = hf_source
     target_filename = filename or source_filename
     if target_filename is None:
-        cached_filename = find_cached_hf_zip_filename(repo_id, revision=revision, cache_dir=cache_dir)
-        target_filename = cached_filename or find_hf_zip_filename(repo_id, revision=revision) or DEFAULT_HF_FILENAME
+        cached_filename = find_cached_hf_checkpoint_filename(
+            repo_id, revision=revision, cache_dir=cache_dir
+        )
+        target_filename = (
+            cached_filename
+            or find_hf_checkpoint_filename(repo_id, revision=revision)
+            or DEFAULT_HF_FILENAME
+        )
 
     cached_path = cached_hf_file(repo_id, filename=target_filename, revision=revision, cache_dir=cache_dir)
     if cached_path is not None:
@@ -127,7 +149,9 @@ def cached_hf_file(repo_id: str, filename: str, revision: str | None, cache_dir:
     return None
 
 
-def find_cached_hf_zip_filename(repo_id: str, revision: str | None, cache_dir: Path) -> str | None:
+def find_cached_hf_checkpoint_filename(
+    repo_id: str, revision: str | None, cache_dir: Path
+) -> str | None:
     repo_cache = cache_dir.expanduser() / f"models--{repo_id.replace('/', '--')}"
     snapshot_dirs: list[Path] = []
     if revision is not None:
@@ -144,32 +168,34 @@ def find_cached_hf_zip_filename(repo_id: str, revision: str | None, cache_dir: P
         if snapshot_root.exists():
             snapshot_dirs.extend(sorted(path for path in snapshot_root.iterdir() if path.is_dir()))
 
-    zip_files: list[str] = []
+    checkpoint_files: list[str] = []
     seen_dirs: set[Path] = set()
     for snapshot_dir in snapshot_dirs:
         if snapshot_dir in seen_dirs or not snapshot_dir.exists():
             continue
         seen_dirs.add(snapshot_dir)
-        zip_files.extend(str(path.relative_to(snapshot_dir)) for path in snapshot_dir.rglob("*.zip"))
+        checkpoint_files.extend(
+            str(path.relative_to(snapshot_dir)) for path in snapshot_dir.rglob("*.json")
+        )
 
-    unique_zip_files = sorted(set(zip_files))
-    if len(unique_zip_files) == 1:
-        return unique_zip_files[0]
-    if DEFAULT_HF_FILENAME in unique_zip_files:
+    unique_checkpoint_files = sorted(set(checkpoint_files))
+    if len(unique_checkpoint_files) == 1:
+        return unique_checkpoint_files[0]
+    if DEFAULT_HF_FILENAME in unique_checkpoint_files:
         return DEFAULT_HF_FILENAME
     return None
 
 
-def find_hf_zip_filename(repo_id: str, revision: str | None) -> str | None:
+def find_hf_checkpoint_filename(repo_id: str, revision: str | None) -> str | None:
     try:
         from huggingface_hub import list_repo_files
     except ImportError:
         return None
     files = list_repo_files(repo_id, revision=revision)
-    zip_files = sorted(path for path in files if path.endswith(".zip"))
-    if len(zip_files) == 1:
-        return zip_files[0]
-    if DEFAULT_HF_FILENAME in zip_files:
+    checkpoint_files = sorted(path for path in files if path.endswith(".json"))
+    if len(checkpoint_files) == 1:
+        return checkpoint_files[0]
+    if DEFAULT_HF_FILENAME in checkpoint_files:
         return DEFAULT_HF_FILENAME
     return None
 
@@ -187,20 +213,9 @@ def download_direct_hf_file(repo_id: str, filename: str, revision: str, cache_di
 
 
 def stable_action_masks(action_names: tuple[str, ...], rom_path: Path) -> np.ndarray:
-    import stable_retro
-
-    system = stable_retro.get_romfile_system(str(rom_path))
-    core = stable_retro.get_system_info(system)
-    buttons = tuple(None if name is None else str(name).upper() for name in core["buttons"])
-    button_to_index = {name: index for index, name in enumerate(buttons) if name is not None}
-    masks = np.zeros((len(action_names), len(buttons)), dtype=np.uint8)
-    for action_index, action_name in enumerate(action_names):
-        for button in ACTION_BUTTONS[action_name]:
-            try:
-                masks[action_index, button_to_index[button]] = 1
-            except KeyError as exc:
-                raise ValueError(f"Retro core buttons {buttons!r} do not include {button!r}") from exc
-    return masks
+    del rom_path
+    buttons = stable_retro_buttons()
+    return np.stack([named_action_mask(name, buttons) for name in action_names])
 
 
 def json_default(value):
@@ -231,25 +246,25 @@ def lane_info(infos: dict[str, object], lane: int = 0) -> dict[str, object]:
 
 def apply_checkpoint_defaults(args: argparse.Namespace, model_path: Path) -> None:
     """Select the preprocessing contract used to create the checkpoint."""
-    plain_checkpoint = model_path.suffix != ".zip"
+    del model_path
     if args.backend == "auto":
-        args.backend = "native" if plain_checkpoint else "stable-retro"
+        args.backend = "native"
     if args.max_pool_frames is None:
-        args.max_pool_frames = not plain_checkpoint
+        args.max_pool_frames = False
     if args.crop_mode is None:
-        args.crop_mode = "mask" if plain_checkpoint else "remove"
-    if args.backend == "stable-retro" and args.crop_mode == "mask":
-        raise ValueError(
-            "stable-retro playback cannot reproduce obs_crop_mode='mask'; "
-            "use --backend native for plain PPO checkpoints",
-        )
+        args.crop_mode = "remove"
 
 
 class SdlPolicyPlayer:
     def __init__(self, args: argparse.Namespace) -> None:
         self.model_path = resolve_model_path(args.model, args.filename, args.cache_dir)
         apply_checkpoint_defaults(args, self.model_path)
-        self.model = load_policy_checkpoint(self.model_path, device=args.device)
+        self.model = load_jerk_checkpoint(self.model_path)
+        if self.model.action_set != args.action_set:
+            raise ValueError(
+                f"checkpoint action_set={self.model.action_set!r} does not match "
+                f"--action-set={args.action_set!r}"
+            )
         if self.model.action_count != len(ACTION_SETS[args.action_set]):
             raise ValueError(
                 f"model action count {self.model.action_count} does not match "
@@ -266,7 +281,8 @@ class SdlPolicyPlayer:
         else:
             self.action_masks = stable_action_masks(self.action_names, self.rom_path)
         self.env = self.make_env()
-        self.obs, _infos = self.env.reset()
+        self.obs, infos = self.env.reset()
+        self.model.reset()
         self.display_env = self.make_display_env() if args.view == "raw" else None
         if self.display_env is not None:
             self.display_obs, _display_infos = self.display_env.reset()
@@ -281,7 +297,13 @@ class SdlPolicyPlayer:
         self.step = 0
         self.reward = 0.0
         self.max_x = 0
-        self.info: dict[str, object] = {}
+        self.info = lane_info(infos, 0)
+        self.last_lives = int(self.info.get("lives", 0))
+        self.last_level = (
+            int(self.info.get("levelHi", 0)),
+            int(self.info.get("levelLo", 0)),
+        )
+        self.level_changes = 0
         self.action = 0
         self.frames_rendered = 0
         self.running = True
@@ -355,40 +377,24 @@ class SdlPolicyPlayer:
             env.seed(self.args.seed)
             return env
 
-        import stable_retro
-
-        source_height = 224 - self.args.crop_top - self.args.crop_bottom
-        obs_crop = None
-        if self.args.crop_top != 0 or self.args.crop_bottom != 0:
-            obs_crop = (self.args.crop_top, self.args.crop_bottom, 0, 0)
-        obs_resize = None
-        if self.args.resize_width != 240 or self.args.resize_height != source_height:
-            obs_resize = (self.args.resize_height, self.args.resize_width)
-        env_class = getattr(stable_retro, "Retro" "Vec" "Env")
-        env = env_class(
-            self.args.game,
-            state=self.args.state,
-            num_envs=1,
-            num_threads=1,
-            rom_path=str(self.rom_path),
-            render_mode="rgb_array",
-            use_restricted_actions=stable_retro.Actions.ALL,
-            obs_crop=obs_crop,
-            obs_resize=obs_resize,
-            obs_grayscale=True,
-            obs_resize_algorithm="area",
-            frame_skip=self.args.frame_skip,
-            frame_stack=self.args.frame_stack,
-            maxpool_last_two=self.args.max_pool_frames,
-            noop_reset_max=0,
-            sticky_action_prob=0.0,
-            reward_clip=False,
-            info_filter="all",
-            obs_layout="chw",
-            obs_copy="safe_view",
+        env = create_stable_retro_vector_env(
+            rom_path=self.rom_path,
+            lane_state_names=[self.args.state],
+            state_dir=self.args.state_dir,
+            preprocessing=PreprocessingConfig(
+                frame_skip=self.args.frame_skip,
+                frame_stack=self.args.frame_stack,
+                grayscale=True,
+                crop_top=self.args.crop_top,
+                crop_bottom=self.args.crop_bottom,
+                crop_mode=self.args.crop_mode,
+                resize_width=self.args.resize_width,
+                resize_height=self.args.resize_height,
+                maxpool_last_two=self.args.max_pool_frames,
+            ),
+            asynchronous=False,
         )
-        if hasattr(env, "seed"):
-            env.seed(self.args.seed)
+        env.seed(self.args.seed)
         return env
 
     def make_display_env(self):
@@ -416,33 +422,24 @@ class SdlPolicyPlayer:
             env.seed(self.args.seed)
             return env
 
-        import stable_retro
-
-        env_class = getattr(stable_retro, "Retro" "Vec" "Env")
-        env = env_class(
-            self.args.game,
-            state=self.args.state,
-            num_envs=1,
-            num_threads=1,
-            rom_path=str(self.rom_path),
-            render_mode="rgb_array",
-            use_restricted_actions=stable_retro.Actions.ALL,
-            obs_crop=None,
-            obs_resize=None,
-            obs_grayscale=False,
-            obs_resize_algorithm="area",
-            frame_skip=self.args.frame_skip,
-            frame_stack=1,
-            maxpool_last_two=False,
-            noop_reset_max=0,
-            sticky_action_prob=0.0,
-            reward_clip=False,
-            info_filter="all",
-            obs_layout="chw",
-            obs_copy="safe_view",
+        env = create_stable_retro_vector_env(
+            rom_path=self.rom_path,
+            lane_state_names=[self.args.state],
+            state_dir=self.args.state_dir,
+            preprocessing=PreprocessingConfig(
+                frame_skip=self.args.frame_skip,
+                frame_stack=1,
+                grayscale=False,
+                crop_top=0,
+                crop_bottom=0,
+                crop_mode="remove",
+                resize_width=NES_WIDTH,
+                resize_height=NES_HEIGHT,
+                maxpool_last_two=False,
+            ),
+            asynchronous=False,
         )
-        if hasattr(env, "seed"):
-            env.seed(self.args.seed)
+        env.seed(self.args.seed)
         return env
 
     def run(self) -> None:
@@ -467,7 +464,7 @@ class SdlPolicyPlayer:
             self.close()
 
     def policy_step(self) -> None:
-        action, _ = self.model.predict(self.obs, deterministic=self.args.deterministic)
+        action, _ = self.model.predict(self.obs)
         self.action = int(np.asarray(action).reshape(-1)[0])
         obs, rewards, terminations, truncations, infos = self.env.step(
             self.action_masks[[self.action]]
@@ -481,10 +478,19 @@ class SdlPolicyPlayer:
         self.info = dict(step_info)
         self.step += 1
         self.max_x = max(self.max_x, int(self.info.get("x_pos", 0)))
-        completed = self.is_completed()
-        if terminated_value or truncated_value or completed:
-            self.hold_terminal_frame(completed)
-            self.print_episode_summary(completed, terminated_value, truncated_value)
+        current_lives = int(self.info.get("lives", self.last_lives))
+        life_loss = current_lives < self.last_lives
+        self.last_lives = current_lives
+        current_level = (
+            int(self.info.get("levelHi", self.last_level[0])),
+            int(self.info.get("levelLo", self.last_level[1])),
+        )
+        if current_level != self.last_level:
+            self.level_changes += 1
+        self.last_level = current_level
+        if terminated_value or truncated_value or life_loss:
+            self.hold_terminal_frame()
+            self.print_episode_summary(life_loss, terminated_value, truncated_value)
             if self.args.episodes > 0 and self.episode >= self.args.episodes:
                 self.running = False
                 return
@@ -492,8 +498,15 @@ class SdlPolicyPlayer:
             self.step = 0
             self.reward = 0.0
             self.max_x = 0
-            self.info = {}
-            self.obs, _infos = self.env.reset()
+            self.obs, infos = self.env.reset()
+            self.model.reset()
+            self.info = lane_info(infos, 0)
+            self.last_lives = int(self.info.get("lives", 0))
+            self.last_level = (
+                int(self.info.get("levelHi", 0)),
+                int(self.info.get("levelLo", 0)),
+            )
+            self.level_changes = 0
             if self.display_env is not None:
                 self.display_obs, _display_infos = self.display_env.reset()
             else:
@@ -515,18 +528,8 @@ class SdlPolicyPlayer:
         else:
             self.display_info = step_info
 
-    def is_completed(self) -> bool:
-        if bool(self.info.get("level_complete")) or bool(self.info.get("completion_event")):
-            return True
-        info_events = self.info.get("info_events")
-        if isinstance(info_events, dict) and "level_change" in info_events:
-            return True
-        if int(self.info.get("levelLo", 0)) > 0:
-            return True
-        return self.args.completion_x_threshold > 0 and self.max_x >= self.args.completion_x_threshold
-
-    def hold_terminal_frame(self, completed: bool) -> None:
-        hold_frames = self.args.hold_complete_frames if completed else self.args.hold_done_frames
+    def hold_terminal_frame(self) -> None:
+        hold_frames = self.args.hold_done_frames
         for _ in range(max(0, hold_frames)):
             self.poll_events()
             if not self.running:
@@ -534,13 +537,14 @@ class SdlPolicyPlayer:
             self.render()
             self.sleep_until_next_frame()
 
-    def print_episode_summary(self, completed: bool, terminated: bool, truncated: bool) -> None:
+    def print_episode_summary(self, life_loss: bool, terminated: bool, truncated: bool) -> None:
         summary = {
             "episode": self.episode,
             "steps": self.step,
             "reward": self.reward,
             "max_x": self.max_x,
-            "completed": completed,
+            "life_loss": life_loss,
+            "level_changes": self.level_changes,
             "terminated": terminated,
             "truncated": truncated,
             "final_info": self.info,
@@ -581,7 +585,7 @@ class SdlPolicyPlayer:
         if now >= self.next_status_update:
             self.next_status_update = now + 0.1
             title = (
-                "SuperMarioBros-Nes-turbo policy player  "
+                "SuperMarioBros-Nes-turbo JERK player  "
                 f"episode={self.episode} step={self.step} "
                 f"action={self.action_names[self.action]} "
                 f"x={self.info.get('x_pos', 0)} max_x={self.max_x} "
@@ -626,16 +630,16 @@ class SdlPolicyPlayer:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Play a plain PPO or legacy SB3 Mario policy from disk or Hugging Face.",
+        description="Play a JERK Mario action sequence from disk or Hugging Face.",
     )
-    parser.add_argument("model", help="Local .pt/.zip, HF repo id, or Hugging Face URL")
+    parser.add_argument("model", help="Local JERK .json, HF repo id, or Hugging Face URL")
     parser.add_argument("--filename", default=None, help="Checkpoint filename inside an HF repo")
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/hf_cache"))
     parser.add_argument(
         "--backend",
         choices=("auto", "stable-retro", "native"),
         default="auto",
-        help="auto uses native for plain .pt checkpoints and stable-retro for legacy .zip checkpoints",
+        help="auto selects the native backend",
     )
     parser.add_argument("--game", default=DEFAULT_GAME)
     parser.add_argument(
@@ -651,8 +655,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--episodes", type=int, default=0, help="0 means play forever")
     parser.add_argument("--seed", type=int, default=10007)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="cpu")
-    parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=None)
@@ -662,9 +664,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resize-width", type=int, default=84)
     parser.add_argument("--resize-height", type=int, default=84)
     parser.add_argument("--action-set", choices=tuple(ACTION_SETS), default="simple")
-    parser.add_argument("--completion-x-threshold", type=int, default=3160)
-    parser.add_argument("--terminate-on-flag", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--hold-complete-frames", type=int, default=30)
     parser.add_argument("--hold-done-frames", type=int, default=0)
     parser.add_argument("--auto-close-frames", type=int, default=None)
     return parser.parse_args(argv)

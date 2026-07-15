@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Optional git ref to build"
+        description: Optional git ref to build
         required: false
         type: string
 
@@ -25,33 +25,33 @@ env:
 
 jobs:
   validate:
-    name: Validate release metadata
+    name: Validate release source
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Install release environment
         run: uv sync --frozen --extra dev --group dev
 
-      - name: Configure release ROM tests
+      - name: Configure optional ROM tests
         shell: bash
         run: |
           set -euo pipefail
-          .venv/bin/python - <<'PY' >> "$GITHUB_ENV"
+          uv run python - <<'PY' >> "$GITHUB_ENV"
           import hashlib
           from pathlib import Path
 
@@ -93,23 +93,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Check version consistency
-        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py check-version --version "${{ steps.version.outputs.version }}"
+        run: uv run python .codex/skills/build-release/scripts/release_build.py check-version --version "${{ steps.version.outputs.version }}"
 
       - name: Check PyPI version is unused
         if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py check-pypi --version "${{ steps.version.outputs.version }}"
+        run: uv run python .codex/skills/build-release/scripts/release_build.py check-pypi --version "${{ steps.version.outputs.version }}"
 
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Check Rust release build
-        run: cargo check --release
-
-      - name: Build editable extension
-        run: .venv/bin/python -m maturin develop --release
-
-      - name: Run tests
-        run: make test PYTHON=.venv/bin/python
+      - name: Run source checks
+        run: |
+          cargo fmt --check
+          cargo check --release
+          uv run maturin develop --release
+          make test PYTHON=.venv/bin/python
 
   build:
     name: Build ${{ matrix.platform }} wheel
@@ -118,16 +113,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos
+          - platform: macos-arm64
             runner: macos-15
-            cargo_target_dir: target-release
-          - platform: linux
+            cargo_target_dir: target-release-macos-arm64
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            cargo_target_dir: target-release-macos-x86_64
+          - platform: linux-x86_64
             runner: ubuntu-24.04
-            cargo_target_dir: target-release-linux
+            cargo_target_dir: target-release-linux-x86_64
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            cargo_target_dir: target-release-linux-aarch64
+          - platform: windows-x86_64
+            runner: windows-2025
+            cargo_target_dir: target-release-windows-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
@@ -138,100 +142,109 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Restore Cargo build cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ matrix.cargo_target_dir }}
-          key: cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-${{ steps.source.outputs.sha }}
+          key: cargo-target-v2-${{ matrix.platform }}-${{ steps.source.outputs.sha }}
           restore-keys: |
-            cargo-target-v1-${{ matrix.platform }}-${{ runner.arch }}-
+            cargo-target-v2-${{ matrix.platform }}-
 
       - name: Install release environment
-        run: uv sync --frozen --extra dev --group dev
+        run: uv sync --frozen --no-default-groups --group release
 
       - name: Build wheel
-        run: |
-          .venv/bin/python .codex/skills/build-release/scripts/release_build.py build-platform \
-            --platform "${{ matrix.platform }}" \
-            --version "${{ needs.validate.outputs.version }}"
+        run: >-
+          uv run python .codex/skills/build-release/scripts/release_build.py build-platform
+          --platform "${{ matrix.platform }}"
+          --version "${{ needs.validate.outputs.version }}"
 
       - name: Smoke built wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          wheels=(wheelhouse-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}/*.whl)
-          if (( ${#wheels[@]} != 1 )); then
-            printf 'expected one wheel, found %s\n' "${#wheels[@]}" >&2
-            printf '%s\n' "${wheels[@]}" >&2
-            exit 1
-          fi
-          .venv/bin/python .codex/skills/build-release/scripts/release_build.py smoke-wheel "${wheels[0]}"
+        run: >-
+          uv run python .codex/skills/build-release/scripts/release_build.py smoke-wheel
+          "wheelhouse-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}"
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.platform }}-wheel-v${{ needs.validate.outputs.version }}
+          name: release-wheel-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}
           path: wheelhouse-v${{ needs.validate.outputs.version }}-${{ matrix.platform }}/*.whl
           if-no-files-found: error
 
   final-check:
-    name: Audit release wheels
+    name: Audit release distributions
     needs:
       - validate
       - build
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Install release environment
-        run: uv sync --frozen --extra dev --group dev
+        run: uv sync --frozen --no-default-groups --group release
 
-      - name: Download macOS wheel
-        uses: actions/download-artifact@v4
+      - name: Download wheels
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: macos-wheel-v${{ needs.validate.outputs.version }}
-          path: wheelhouse-v${{ needs.validate.outputs.version }}-macos
+          pattern: release-wheel-v${{ needs.validate.outputs.version }}-*
+          path: wheelhouse
+          merge-multiple: true
 
-      - name: Download Linux wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-wheel-v${{ needs.validate.outputs.version }}
-          path: wheelhouse-v${{ needs.validate.outputs.version }}-linux
+      - name: Audit complete wheel set
+        shell: bash
+        run: >-
+          uv run python .codex/skills/build-release/scripts/release_build.py final-check
+          --version "${{ needs.validate.outputs.version }}"
+          wheelhouse/*.whl
 
-      - name: Final audit
-        run: .venv/bin/python .codex/skills/build-release/scripts/release_build.py final-check --version "${{ needs.validate.outputs.version }}"
-
-      - name: Prepare publish distributions
+      - name: Build and audit source distribution
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp wheelhouse-v${{ needs.validate.outputs.version }}-macos/*.whl dist/
-          cp wheelhouse-v${{ needs.validate.outputs.version }}-linux/*.whl dist/
+          cp wheelhouse/*.whl dist/
+          uv run maturin sdist --out dist
+          uv run python .codex/skills/build-release/scripts/release_build.py audit-sdist \
+            --version "${{ needs.validate.outputs.version }}" \
+            dist/*.tar.gz
+          uv run twine check dist/*
 
-      - name: Upload final wheel bundle
-        uses: actions/upload-artifact@v4
+      - name: Smoke stable ABI on Python 3.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv python install 3.9
+          uv run python .codex/skills/build-release/scripts/release_build.py smoke-wheel \
+            wheelhouse/*manylinux*x86_64*.whl \
+            --python "$(uv python find 3.9)"
+          uv run python .codex/skills/build-release/scripts/release_build.py smoke-sdist \
+            dist/*.tar.gz \
+            --python "$(uv python find 3.9)"
+
+      - name: Upload audited distribution bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-v${{ needs.validate.outputs.version }}
-          path: dist/*.whl
+          path: dist/*
           if-no-files-found: error
 
   publish:
@@ -248,10 +261,37 @@ jobs:
       id-token: write
     steps:
       - name: Download audited distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-v${{ needs.validate.outputs.version }}
           path: dist
 
       - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+
+  github-release:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs:
+      - validate
+      - publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download audited distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-v${{ needs.validate.outputs.version }}
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          dist/*
+          --repo "${GITHUB_REPOSITORY}"
+          --verify-tag
+          --generate-notes
+          --title "${GITHUB_REF_NAME}"

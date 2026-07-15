@@ -15,8 +15,6 @@ CANONICAL_ACTION_SET = "simple"
 CANONICAL_ACTION_NAMES = ("noop", "right", "right_b", "right_a")
 CANONICAL_ACTION_SEED = 0
 CANONICAL_STATE_NAMES = ("Level1-1", "Level1-2", "Level1-3", "Level1-4")
-CANONICAL_TERMINATE_ON_LIFE_LOSS = True
-CANONICAL_TERMINATE_ON_LEVEL_CHANGE = True
 CANONICAL_TERMINATE_ON_FLAG = False
 CANONICAL_START_GAME = False
 
@@ -56,10 +54,6 @@ def canonical_env_args(*, actions: tuple[str, ...] = CANONICAL_ACTION_NAMES) -> 
         "--action-seed",
         str(CANONICAL_ACTION_SEED),
     ]
-    if CANONICAL_TERMINATE_ON_LIFE_LOSS:
-        args.append("--terminate-on-life-loss")
-    if CANONICAL_TERMINATE_ON_LEVEL_CHANGE:
-        args.append("--terminate-on-level-change")
     if not CANONICAL_START_GAME:
         args.append("--no-start-game")
     return args

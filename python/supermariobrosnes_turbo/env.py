@@ -8,7 +8,7 @@ from importlib import resources
 import json
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 import numpy as np
 from gymnasium import spaces
@@ -67,7 +67,7 @@ _BASE_INFO_ARRAYS = (
     ("xscrollHi", "_xscroll_hi"),
     ("xscrollLo", "_xscroll_lo"),
 )
-StateSpec = str | Path | bytes | bytearray | memoryview
+StateSpec = Union[str, Path, bytes, bytearray, memoryview]
 
 
 class Actions(Enum):
@@ -167,15 +167,6 @@ def _packaged_state_dir() -> Path | None:
     return Path(str(state_dir))
 
 
-def _sibling_stable_retro_state_dir() -> Path | None:
-    game_path = Path("stable_retro/data/stable") / DEFAULT_STABLE_RETRO_GAME
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent.parent / "stable-retro-turbo" / game_path
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def _candidate_state_dirs(state_dir: str | Path | None = None) -> list[Path]:
     candidates: list[Path | None] = []
     if state_dir is not None:
@@ -185,8 +176,6 @@ def _candidate_state_dirs(state_dir: str | Path | None = None) -> list[Path]:
         candidates.append(Path(env_dir).expanduser())
     candidates.append(_packaged_state_dir())
     candidates.append(_stable_retro_state_dir())
-    candidates.append(_sibling_stable_retro_state_dir())
-
     dirs: list[Path] = []
     seen: set[Path] = set()
     for candidate in candidates:

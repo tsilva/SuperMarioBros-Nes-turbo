@@ -1,6 +1,6 @@
 ---
 name: build-release
-description: Launch and monitor a SuperMarioBros-Nes-turbo PyPI release. Use when the user says /build-release, asks to cut a release, asks to tag/publish a version, asks whether a release made it to PyPI, or asks for macOS and Linux supermariobrosnes-turbo wheels.
+description: Launch and monitor a SuperMarioBros-Nes-turbo PyPI release. Use when the user says /build-release, asks to cut a release, asks to tag/publish a version, asks whether a release made it to PyPI, or asks for supermariobrosnes-turbo release artifacts.
 ---
 
 # Build Release
@@ -19,8 +19,10 @@ versions unless the user explicitly asks for one.
 `scripts/release.py`. The script enforces a clean tree, configured upstream,
 synced remote state, unused PyPI version, version consistency, lock refresh,
 local checks, release commit, tag creation, and atomic push. The pushed tag
-triggers `.github/workflows/release.yml`, which builds/audits the macOS and
-Linux wheels and publishes via PyPI trusted publishing.
+triggers `.github/workflows/release.yml`, which builds and audits macOS ARM64,
+macOS Intel, Linux x86-64, Linux ARM64, and Windows x86-64 wheels plus a source
+distribution. It publishes through PyPI trusted publishing and then creates a
+GitHub Release with the audited artifacts.
 
 Do not upload to PyPI manually unless the user explicitly asks for a manual
 recovery path after the GitHub Actions publish path fails. Never print or commit
@@ -70,7 +72,7 @@ The command should end with output like:
 
 ```bash
 Released v<version>: pushed <branch> and tag to <remote>.
-GitHub Actions will build and validate the release wheels from the pushed tag.
+GitHub Actions will build, validate, and publish the release distributions from the pushed tag.
 ```
 
 If needed, confirm the tag after the command succeeds:
@@ -164,6 +166,7 @@ release locally unless the user asks for manual recovery.
 ## Final Response
 
 When the release reaches PyPI, lead with the PyPI version URL. Also report the
-tag, GitHub Actions run URL, workflow conclusion, and published wheel filenames.
+tag, GitHub Actions run URL, workflow conclusion, GitHub Release URL, and all
+published wheel and source-distribution filenames.
 If the release did not reach PyPI, report the exact failed command/job/step and
 the next recovery action.

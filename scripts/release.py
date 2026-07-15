@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import os
 import subprocess
 import sys
@@ -13,6 +14,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_HELPER = REPO_ROOT / ".codex" / "skills" / "build-release" / "scripts" / "release_build.py"
 PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+CHANGES = REPO_ROOT / "CHANGES.md"
+CITATION = REPO_ROOT / "CITATION.cff"
 
 
 def run(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -78,6 +81,44 @@ def refresh_locks() -> None:
     run(["cargo", "generate-lockfile"])
 
 
+def promote_changelog(version: str, *, release_date: str | None = None) -> None:
+    text = CHANGES.read_text(encoding="utf-8")
+    prefix = "# Changelog\n\n## Unreleased\n\n"
+    if not text.startswith(prefix):
+        raise SystemExit("CHANGES.md must begin with an Unreleased section")
+    tail = text[len(prefix) :]
+    separator = tail.find("\n## ")
+    if separator < 0:
+        unreleased = tail.strip()
+        history = ""
+    else:
+        unreleased = tail[:separator].strip()
+        history = tail[separator + 1 :].strip()
+    if not unreleased or unreleased == "- Nothing yet.":
+        raise SystemExit("CHANGES.md Unreleased section must describe the release")
+    if f"## {version} " in text:
+        raise SystemExit(f"CHANGES.md already contains release {version}")
+    released = release_date or date.today().isoformat()
+    updated = (
+        f"{prefix}- Nothing yet.\n\n"
+        f"## {version} - {released}\n\n{unreleased}\n"
+    )
+    if history:
+        updated += f"\n{history}\n"
+    CHANGES.write_text(updated, encoding="utf-8")
+
+
+def update_citation_release_date(release_date: str) -> None:
+    lines = CITATION.read_text(encoding="utf-8").splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.startswith("date-released: "):
+            newline = "\n" if line.endswith("\n") else ""
+            lines[index] = f"date-released: {release_date}{newline}"
+            CITATION.write_text("".join(lines), encoding="utf-8")
+            return
+    raise SystemExit("CITATION.cff must contain date-released")
+
+
 def run_checks(skip_checks: bool) -> None:
     if skip_checks:
         return
@@ -94,7 +135,19 @@ def create_commit_and_tag(version: str) -> str:
     tag = f"v{version}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", tag], cwd=REPO_ROOT).returncode == 0:
         raise SystemExit(f"tag already exists locally: {tag}")
-    run(["git", "add", "VERSION.txt", "pyproject.toml", "Cargo.toml", "Cargo.lock", "uv.lock"])
+    run(
+        [
+            "git",
+            "add",
+            "VERSION.txt",
+            "pyproject.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+            "uv.lock",
+            "CITATION.cff",
+            "CHANGES.md",
+        ]
+    )
     run(["git", "commit", "-m", f"Release {tag}"])
     run(["git", "tag", tag, "HEAD"])
     return tag
@@ -134,6 +187,9 @@ def main() -> None:
     remote, branch = ensure_synced()
     version = target_version(args)
     helper("bump-version", "--to", version, "--write")
+    release_date = date.today().isoformat()
+    promote_changelog(version, release_date=release_date)
+    update_citation_release_date(release_date)
     refresh_locks()
     helper("check-version", "--version", version)
     run_checks(args.skip_checks)
@@ -141,7 +197,7 @@ def main() -> None:
     push_release(remote, branch, tag, args.dry_run_push)
     print()
     print(f"Released {tag}: pushed {branch} and tag to {remote}.")
-    print("GitHub Actions will build and validate the release wheels from the pushed tag.")
+    print("GitHub Actions will build, validate, and publish the release distributions from the pushed tag.")
 
 
 if __name__ == "__main__":

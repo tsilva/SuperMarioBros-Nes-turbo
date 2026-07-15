@@ -1,4 +1,4 @@
-.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local develop develop-release play release test test-python test-rust test-retro-oracle
+.PHONY: autoresearch-accept autoresearch-accept-full autoresearch-calibrate autoresearch-checks autoresearch-diagnose autoresearch-profile autoresearch-screen benchmark benchmark-local benchmark-report develop develop-release play release test test-python test-rust test-retro-oracle
 
 PYTHON ?= .venv/bin/python
 UV_CACHE_DIR ?= .uv-cache
@@ -14,6 +14,7 @@ BENCHMARK_WARMUP ?= 500
 BENCHMARK_ENV_ARGS ?= $(shell $(PYTHON) scripts/benchmark_workload.py)
 BENCHMARK_LOAD_ARGS ?= --skip-load-preflight
 BENCHMARK_ARGS ?=
+BENCHMARK_REPORT_ARGS ?=
 PLAY_ARGS ?=
 BASELINE_REF ?=
 CANDIDATE_REF ?=
@@ -30,6 +31,9 @@ benchmark: develop-release benchmark-local
 
 benchmark-local:
 	$(PYTHON) scripts/benchmark_sps.py $(BENCHMARK_ENV_ARGS) --steps $(BENCHMARK_STEPS) --repeats $(BENCHMARK_REPEATS) --warmup $(BENCHMARK_WARMUP) $(BENCHMARK_LOAD_ARGS) $(BENCHMARK_ARGS)
+
+benchmark-report: develop-release
+	$(PYTHON) scripts/benchmark_report.py $(BENCHMARK_REPORT_ARGS)
 
 play: develop-release
 	$(PYTHON) scripts/play.py --mode external $(PLAY_ARGS)

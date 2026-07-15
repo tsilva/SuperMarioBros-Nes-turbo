@@ -62,6 +62,7 @@ def benchmark_raw_config(
         "warmup": 100,
         "frame_skip": 4,
         "frame_stack": 4,
+        "frame_maxpool": False,
         "grayscale": True,
         "crop_top": 32,
         "crop_bottom": 0,
@@ -69,6 +70,7 @@ def benchmark_raw_config(
         "resize_width": 84,
         "resize_height": 84,
         "obs_resize_algorithm": "area",
+        "obs_layout": "chw",
         "action_set": "simple",
         "action": None,
         "actions": list(ACTION_NAMES),
@@ -81,6 +83,7 @@ def benchmark_raw_config(
         "terminate_on_flag": False,
         "termination": "provider_native",
         "start_game": False,
+        "vectorization": "native",
     }
 
 
@@ -849,7 +852,7 @@ def test_load_raw_rejects_package_identity_mismatch(tmp_path: Path) -> None:
     path = raw_dir / "measured-ref-00.json"
     payload = {
         "package": {
-            "name": "stable-retro-turbo",
+            "name": "wrong-package",
             "version": "1.0.0",
             "import": "stable_retro",
         },

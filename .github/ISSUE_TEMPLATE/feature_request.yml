@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a scoped improvement to the supported environment.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What research or integration problem is currently difficult?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe observable behavior, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and scope
+      description: Explain effects on Gymnasium semantics, determinism, public APIs, checkpoints, states, or throughput.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This proposal stays within the documented mapper 0/NROM project scope.
+          required: true
+        - label: I searched existing issues and discussions.
+          required: true
