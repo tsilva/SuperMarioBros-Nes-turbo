@@ -8,6 +8,7 @@
 /wheelhouse*/
 /media/mario-promo/*
 !/media/mario-promo/mario-throughput-comparison.mp4
+!/media/mario-promo/mario-throughput-comparison.gif
 /.venv/
 /.venv314/
 /.mypy_cache/

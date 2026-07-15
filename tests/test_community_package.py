@@ -21,16 +21,13 @@ def test_public_package_exposes_distribution_version():
     assert supermariobrosnes_turbo.__version__ == (ROOT / "VERSION.txt").read_text().strip()
 
 
-def test_community_health_files_exist():
+def test_project_policy_files_exist():
     expected = (
         "LICENSE",
         "NOTICE.md",
-        "CONTRIBUTING.md",
-        "CODE_OF_CONDUCT.md",
         "SECURITY.md",
         "SUPPORT.md",
         "GOVERNANCE.md",
-        "CITATION.cff",
         ".github/CODEOWNERS",
         ".github/pull_request_template.md",
         ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -55,14 +52,3 @@ def test_release_promotes_unreleased_changelog(tmp_path, monkeypatch):
         "## 0.3.1 - 2026-07-15\n\n- New behavior.\n\n"
         "## 0.3.0 - 2026-07-14\n\n- Old behavior.\n"
     )
-
-
-def test_release_updates_citation_date(tmp_path, monkeypatch):
-    release = _release_module()
-    citation = tmp_path / "CITATION.cff"
-    citation.write_text("version: 0.3.1\ndate-released: 2026-07-14\n")
-    monkeypatch.setattr(release, "CITATION", citation)
-
-    release.update_citation_release_date("2026-07-15")
-
-    assert citation.read_text() == "version: 0.3.1\ndate-released: 2026-07-15\n"

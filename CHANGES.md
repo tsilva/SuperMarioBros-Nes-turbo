@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-- Add an explicit MIT license, legal notices, contributor governance, support
-  and security policies, issue and pull-request templates, and citation
-  metadata.
+- Add an explicit MIT license, legal notices, governance, support and security
+  policies, and issue and pull-request templates.
 - Add pull-request CI, typed-package/version metadata, expanded project
   metadata, platform documentation, source distributions, and macOS Intel,
   Linux ARM64, and Windows wheels.

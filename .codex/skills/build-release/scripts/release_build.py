@@ -29,7 +29,6 @@ VERSION_PATH = REPO_ROOT / "VERSION.txt"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CARGO_TOML = REPO_ROOT / "Cargo.toml"
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
-CITATION_CFF = REPO_ROOT / "CITATION.cff"
 PYTHON = Path(sys.executable)
 PACKAGE_NAME = "supermariobrosnes-turbo"
 IMPORT_NAME = "supermariobrosnes_turbo"
@@ -129,13 +128,6 @@ def cargo_lock_version() -> str:
     return section_version(CARGO_LOCK, "package", package_name=PACKAGE_NAME)
 
 
-def citation_version() -> str:
-    for line in CITATION_CFF.read_text(encoding="utf-8").splitlines():
-        if line.startswith("version: "):
-            return line.split(":", 1)[1].strip().strip('"')
-    raise RuntimeError(f"could not find version in {CITATION_CFF}")
-
-
 def validate_version(version: str) -> None:
     if VERSION_RE.match(version) is None:
         raise SystemExit(f"unsupported version format: {version!r}")
@@ -189,20 +181,6 @@ def replace_section_version(path: Path, section: str, version: str) -> None:
     path.write_text("".join(lines), encoding="utf-8")
 
 
-def replace_citation_version(version: str) -> None:
-    lines = CITATION_CFF.read_text(encoding="utf-8").splitlines(keepends=True)
-    changed = False
-    for index, line in enumerate(lines):
-        if line.startswith("version: "):
-            newline = "\n" if line.endswith("\n") else ""
-            lines[index] = f"version: {version}{newline}"
-            changed = True
-            break
-    if not changed:
-        raise RuntimeError(f"could not replace version in {CITATION_CFF}")
-    CITATION_CFF.write_text("".join(lines), encoding="utf-8")
-
-
 def write_version(version: str) -> None:
     VERSION_PATH.write_text(f"{version}\n", encoding="utf-8")
 
@@ -213,7 +191,6 @@ def check_version(args: argparse.Namespace) -> None:
         "pyproject": pyproject_version(),
         "cargo_toml": cargo_version(),
         "cargo_lock": cargo_lock_version(),
-        "citation_cff": citation_version(),
     }
     expected = args.version
     failures = []
@@ -274,7 +251,6 @@ def bump_version(args: argparse.Namespace) -> None:
         write_version(target)
         replace_section_version(PYPROJECT, "project", target)
         replace_section_version(CARGO_TOML, "package", target)
-        replace_citation_version(target)
     print(target)
 
 
@@ -283,7 +259,6 @@ def sync_version(args: argparse.Namespace) -> None:
     validate_version(version)
     replace_section_version(PYPROJECT, "project", version)
     replace_section_version(CARGO_TOML, "package", version)
-    replace_citation_version(version)
     print(version)
 
 

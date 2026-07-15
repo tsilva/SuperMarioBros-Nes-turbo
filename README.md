@@ -19,7 +19,7 @@ natively in Rust. That delivers environment stepping up to 17× faster than
 
 ## Stable Retro comparison
 
-[![SuperMarioBros-Nes-turbo versus Stable Retro: same Mario, same actions, 14.56× more throughput](https://img.youtube.com/vi/ndWSv5eEoos/maxresdefault.jpg)](https://youtu.be/ndWSv5eEoos)
+[![SuperMarioBros-Nes-turbo versus Stable Retro: same Mario, same actions, 14.56× more throughput](media/mario-promo/mario-throughput-comparison.gif)](https://youtu.be/ndWSv5eEoos)
 
 The [side-by-side video](https://youtu.be/ndWSv5eEoos) replays one deterministic
 Level 1-1 controller trajectory through both backends. Both enter Level 1-2 on

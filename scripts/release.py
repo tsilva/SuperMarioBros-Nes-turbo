@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_HELPER = REPO_ROOT / ".codex" / "skills" / "build-release" / "scripts" / "release_build.py"
 PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 CHANGES = REPO_ROOT / "CHANGES.md"
-CITATION = REPO_ROOT / "CITATION.cff"
 
 
 def run(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -108,17 +107,6 @@ def promote_changelog(version: str, *, release_date: str | None = None) -> None:
     CHANGES.write_text(updated, encoding="utf-8")
 
 
-def update_citation_release_date(release_date: str) -> None:
-    lines = CITATION.read_text(encoding="utf-8").splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        if line.startswith("date-released: "):
-            newline = "\n" if line.endswith("\n") else ""
-            lines[index] = f"date-released: {release_date}{newline}"
-            CITATION.write_text("".join(lines), encoding="utf-8")
-            return
-    raise SystemExit("CITATION.cff must contain date-released")
-
-
 def run_checks(skip_checks: bool) -> None:
     if skip_checks:
         return
@@ -144,7 +132,6 @@ def create_commit_and_tag(version: str) -> str:
             "Cargo.toml",
             "Cargo.lock",
             "uv.lock",
-            "CITATION.cff",
             "CHANGES.md",
         ]
     )
@@ -189,7 +176,6 @@ def main() -> None:
     helper("bump-version", "--to", version, "--write")
     release_date = date.today().isoformat()
     promote_changelog(version, release_date=release_date)
-    update_citation_release_date(release_date)
     refresh_locks()
     helper("check-version", "--version", version)
     run_checks(args.skip_checks)

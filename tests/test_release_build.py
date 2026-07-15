@@ -27,7 +27,6 @@ def test_version_file_is_the_single_source_of_truth():
         "Cargo.toml",
         "Cargo.lock",
         "uv.lock",
-        "CITATION.cff",
         "CHANGES.md",
     ):
         assert f'"{release_file}"' in release_script
