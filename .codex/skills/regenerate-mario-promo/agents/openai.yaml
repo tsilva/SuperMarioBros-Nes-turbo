@@ -1,0 +1,4 @@
+interface:
+  display_name: "Regenerate Mario Promo"
+  short_description: "Rebuild the verified backend comparison video"
+  default_prompt: "Use $regenerate-mario-promo to rebuild the verified Mario throughput comparison video."

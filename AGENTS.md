@@ -10,3 +10,6 @@ Before any task in this repository, use the `$specs-author` skill to read the ro
 - Use `/build-release` to tag a version and build the validated cross-platform
   PyPI wheel set plus source distribution. Skill:
   `.codex/skills/build-release/SKILL.md`.
+- Use `/regenerate-mario-promo` to rebuild the verified Stable Retro versus
+  Turbo Level 1-1 promotional comparison. Skill:
+  `.codex/skills/regenerate-mario-promo/SKILL.md`.

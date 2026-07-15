@@ -10,8 +10,63 @@
 </div>
 
 High-throughput Rust-backed Gymnasium `VectorEnv` for Super Mario Bros NES
-(mapper 0/NROM), with native batched emulation and preprocessing. Bring a
-compatible ROM to train, play, or benchmark.
+(mapper 0/NROM).
+
+Purpose-built for this ROM and recursively auto-tuned with agents, it leverages
+ROM-specific quirks while performing vectorization and all preprocessing
+natively in Rust. That delivers environment stepping up to 17× faster than
+[Stable Retro](https://github.com/Farama-Foundation/stable-retro).
+
+## Stable Retro comparison
+
+[![SuperMarioBros-Nes-turbo versus Stable Retro: same Mario, same actions, 14.56× more throughput](https://img.youtube.com/vi/ndWSv5eEoos/maxresdefault.jpg)](https://youtu.be/ndWSv5eEoos)
+
+The [side-by-side video](https://youtu.be/ndWSv5eEoos) replays one deterministic
+Level 1-1 controller trajectory through both backends. Both enter Level 1-2 on
+action 1,986, all 1,987 raw gameplay frames are pixel-identical, and there are
+no reward, termination, or semantic-state mismatches.
+
+Gameplay time is scaled by the median speedup from a local matched one-environment
+run on an Apple M1 Pro: 8,455 SPS for Turbo versus 580 SPS for Stable Retro, or
+14.56× across five alternating measured pairs (95% bootstrap CI 14.46×–14.84×).
+Video encoding is excluded from the benchmark timing. See [Benchmark](#benchmark)
+for the clean seven-pair benchmark and reproduction details.
+
+## Why it is fast
+
+Throughput comes from the complete normal step path, not from disabling
+preprocessing, infos, or resets:
+
+- **Fixed workload.** It verifies the canonical ROM hash and accepts only
+  mapper 0/NROM, avoiding general mapper and emulator-core dispatch.
+- **One native vector engine.** All lanes live in one Rust process rather than
+  separate environment workers, avoiding per-lane process and IPC overhead.
+- **Direct NumPy buffers.** A single Python-to-Rust `step_into` call reads
+  contiguous actions and writes observations, rewards, terminations, and info
+  fields in place; the GIL is released while the batch runs.
+- **Parallel batched lanes.** At four or more environments, independent lanes
+  step in parallel with Rayon; smaller batches avoid parallel scheduling cost.
+- **Reused memory.** Each lane owns persistent emulator state, action state, and
+  scratch buffers; frame stacks shift in place instead of allocating new frames.
+- **Native rollout bookkeeping.** Frame skip, sticky actions, reward,
+  termination, selective-reset state, and info extraction stay in the Rust loop.
+- **SMB routine summaries.** At known program counters it fast-forwards
+  interpreter-equivalent work for idle jumps, sprite-0 polling, timer control,
+  OAM clearing, controller reads, scroll updates, digit math, collision and
+  off-screen helpers, relative-position math, and sprite-object drawing.
+- **Event-bounded PPU stepping.** CPU cycles accumulate until the next relevant
+  PPU boundary—vblank, pre-render, sprite-0 hit, or frame end—rather than
+  paying a PPU update on every instruction.
+- **Direct observation rendering.** It renders the needed background tiles and
+  OAM sprites from PPU memory directly to grayscale, then applies the canonical
+  crop/mask and integer area resize to `84×84`; it does not first materialize a
+  generic RGB frame.
+- **Canonical resize kernels.** The common grayscale `84×84` area-resize path
+  uses fixed geometry and specialized integer kernels instead of a general
+  resampling pipeline.
+
+ROM- and timing-specific fast paths are guarded by their preconditions;
+unsupported work falls back to the instruction interpreter.
 
 ## Install and run
 
