@@ -2,50 +2,33 @@
   <img src="https://raw.githubusercontent.com/tsilva/SuperMarioBros-Nes-turbo/main/logo.png" alt="SuperMarioBros-Nes-turbo logo" width="320" />
 
   **🚀 Blazing fast SuperMarioBros-Nes environment for Reinforcement Learning 🍄**
+
+  [![CI](https://github.com/tsilva/SuperMarioBros-Nes-turbo/actions/workflows/ci.yml/badge.svg)](https://github.com/tsilva/SuperMarioBros-Nes-turbo/actions/workflows/ci.yml)
+  [![PyPI](https://img.shields.io/pypi/v/supermariobrosnes-turbo.svg)](https://pypi.org/project/supermariobrosnes-turbo/)
+  [![Python](https://img.shields.io/pypi/pyversions/supermariobrosnes-turbo.svg)](https://pypi.org/project/supermariobrosnes-turbo/)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/LICENSE)
 </div>
 
-[![CI](https://github.com/tsilva/SuperMarioBros-Nes-turbo/actions/workflows/ci.yml/badge.svg)](https://github.com/tsilva/SuperMarioBros-Nes-turbo/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/supermariobrosnes-turbo.svg)](https://pypi.org/project/supermariobrosnes-turbo/)
-[![Python](https://img.shields.io/pypi/pyversions/supermariobrosnes-turbo.svg)](https://pypi.org/project/supermariobrosnes-turbo/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/LICENSE)
+High-throughput Rust-backed Gymnasium `VectorEnv` for Super Mario Bros NES
+(mapper 0/NROM), with native batched emulation and preprocessing. Bring a
+compatible ROM to train, play, or benchmark.
 
-SuperMarioBros-Nes-turbo is a Python library for reinforcement-learning researchers who need a fast, vectorized Super Mario Bros NES environment. It provides a Gymnasium `VectorEnv` backed by a Rust emulator specialized for the game's mapper 0/NROM cartridge, keeping batched emulation and observation preprocessing off the Python hot path. Bring a compatible ROM, construct `SuperMarioBrosNesTurboVecEnv`, then train, play, or benchmark with the included scripts.
+## Install and run
 
-The project intentionally supports one game and emulator path. Each vector lane runs its own emulator state, while frame skip, rewards, termination checks, cropping, resizing, grayscale or RGB conversion, and frame stacking run in native code.
-
-## Install
-
-```bash
-python -m pip install supermariobrosnes-turbo
-```
-
-The trainer and local policy playback use the base dependencies. The optional
-Hugging Face client adds authenticated downloads and standard cache handling;
-without it, public policy files use the direct-download fallback:
-
-```bash
-python -m pip install "supermariobrosnes-turbo[playback]"
-```
-
-Release wheels use the CPython 3.9 stable ABI and support Python 3.9 through
-3.14. The release workflow builds these artifacts:
-
-| Platform | Architecture | Artifact |
-| --- | --- | --- |
-| macOS 14+ | Apple Silicon | wheel |
-| macOS 13+ | Intel x86-64 | wheel |
-| Linux with glibc 2.17+ | x86-64 and ARM64 | wheels |
-| Windows | x86-64 | wheel |
-| Other supported source-build systems | platform toolchain | source distribution |
-
-Older PyPI releases may have a smaller wheel set. A source build requires
-Python, `uv`, and Rust:
+Use `uv` from a local checkout:
 
 ```bash
 git clone https://github.com/tsilva/SuperMarioBros-Nes-turbo.git
 cd SuperMarioBros-Nes-turbo
-uv sync --frozen --extra dev
+uv sync --frozen
 uv run maturin develop --release
+```
+
+For authenticated Hugging Face policy downloads, add the optional playback
+extra:
+
+```bash
+uv sync --frozen --extra playback
 ```
 
 ROM files are not included. Pass `--rom-path` to scripts, set `ROM_PATH` in the environment or a repo-root `.env`, or provide `rom_path=` to the constructor. The supported ROM has SHA-256:
@@ -125,33 +108,15 @@ make benchmark-report                         # paired Turbo vs upstream Stable 
 
 ## Benchmark
 
-On an Apple M1 Pro (8 logical CPUs), Turbo `0.3.0` was measured against
-upstream `stable-retro==1.0.1` using the supported SMB ROM, Python 3.14.4, and
-the clean source commit `ae1171e`. The July 15, 2026 paired run passed
-ROM-backed parity checks and the predeclared 2.0x speedup threshold at every
-shape.
+`apple-m1-pro-8c`, Python 3.14.4, clean `ae1171e`: Turbo `0.3.0` vs upstream
+`stable-retro==1.0.1`, seven alternating paired runs per shape. Host-specific;
+reproduce with `make benchmark-report`.
 
-| Envs | Turbo median SPS | Stable Retro median SPS | Median speedup | 95% bootstrap CI | Measured pairs |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 8,574.5 | 584.3 | 14.68x | 14.61x–14.78x | 7 |
-| 16 | 36,675.3 | 2,608.5 | 13.79x | 13.45x–14.55x | 7 |
-| 32 | 43,443.0 | 2,555.0 | 17.23x | 16.38x–17.86x | 7 |
-
-These are host- and configuration-specific measurements, not a universal
-performance guarantee.
-
-SPS is raw environment transitions per second. Each backend runs separately;
-pair order alternates. Both use frame skip 4 without max-pooling, four-frame
-stacking, integer grayscale, a zeroed top-32-row HUD, integer area resize to
-`84×84`, CHW `uint8` observations, the same deterministic sampled actions and
-round-robin `Level1-1` through `Level1-4` states. Timed work includes vector
-stepping, preprocessing, IPC, infos, and terminal-lane resets. Construction,
-initial reset, action generation, and warmup are excluded.
-
-Reproduce a fresh report on a quiet host with `make benchmark-report`. It runs
-one warmup pair and seven measured pairs at each of 1, 16, and 32 environments;
-the report records the source revision, package versions, host metadata,
-session-start load check, raw invocation JSON, and logs.
+| Machine ID | Commit | Envs | Median SPS | Baseline median SPS | Median speedup | 95% bootstrap CI | Measured pairs |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `apple-m1-pro-8c` | `ae1171e` | 1 | 8,574.5 | 584.3 | 14.68x | 14.61x–14.78x | 7 |
+| `apple-m1-pro-8c` | `ae1171e` | 16 | 36,675.3 | 2,608.5 | 13.79x | 13.45x–14.55x | 7 |
+| `apple-m1-pro-8c` | `ae1171e` | 32 | 43,443.0 | 2,555.0 | 17.23x | 16.38x–17.86x | 7 |
 
 ## Notes
 
@@ -164,13 +129,10 @@ session-start load check, raw invocation JSON, and logs.
 - The play scripts require a discoverable native SDL2 library and open local gameplay windows.
 - This is an unofficial research project and is not affiliated with or endorsed by Nintendo. See [NOTICE.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/NOTICE.md).
 
-## Community
+## Forking
 
-- Read [CONTRIBUTING.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/CONTRIBUTING.md) before opening a pull request.
-- Use [GitHub Discussions](https://github.com/tsilva/SuperMarioBros-Nes-turbo/discussions) for usage questions and [GitHub Issues](https://github.com/tsilva/SuperMarioBros-Nes-turbo/issues) for reproducible bugs and scoped feature requests.
-- Report vulnerabilities privately according to [SECURITY.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/SECURITY.md).
-- Release history and compatibility changes are recorded in [CHANGES.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/CHANGES.md).
-- Maintainer responsibilities and decision-making are described in [GOVERNANCE.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/GOVERNANCE.md).
+This project is maintained for its current scope. If you need a different
+direction or behavior, please fork it.
 
 ## Architecture
 
