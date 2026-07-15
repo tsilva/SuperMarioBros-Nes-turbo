@@ -120,7 +120,38 @@ uv run python scripts/smoke_smb.py --rom-path /path/to/SuperMarioBros.nes
 uv run python scripts/play.py --rom-path /path/to/SuperMarioBros.nes --mode external
 uv run python scripts/benchmark_sps.py --rom-path /path/to/SuperMarioBros.nes --num-envs 16 --steps 500 --repeats 3
 uv run python scripts/benchmark_sps.py --stable-retro-baseline --rom-path /path/to/SuperMarioBros.nes --num-envs 16 --steps 500 --repeats 3
+make benchmark-report                         # paired Turbo vs upstream Stable Retro report
 ```
+
+## Benchmark
+
+On an Apple M1 Pro (8 logical CPUs), Turbo `0.3.0` was measured against
+upstream `stable-retro==1.0.1` using the supported SMB ROM, Python 3.14.4, and
+the clean source commit `ae1171e`. The July 15, 2026 paired run passed
+ROM-backed parity checks and the predeclared 2.0x speedup threshold at every
+shape.
+
+| Envs | Turbo median SPS | Stable Retro median SPS | Median speedup | 95% bootstrap CI | Measured pairs |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8,574.5 | 584.3 | 14.68x | 14.61x–14.78x | 7 |
+| 16 | 36,675.3 | 2,608.5 | 13.79x | 13.45x–14.55x | 7 |
+| 32 | 43,443.0 | 2,555.0 | 17.23x | 16.38x–17.86x | 7 |
+
+These are host- and configuration-specific measurements, not a universal
+performance guarantee.
+
+SPS is raw environment transitions per second. Each backend runs separately;
+pair order alternates. Both use frame skip 4 without max-pooling, four-frame
+stacking, integer grayscale, a zeroed top-32-row HUD, integer area resize to
+`84×84`, CHW `uint8` observations, the same deterministic sampled actions and
+round-robin `Level1-1` through `Level1-4` states. Timed work includes vector
+stepping, preprocessing, IPC, infos, and terminal-lane resets. Construction,
+initial reset, action generation, and warmup are excluded.
+
+Reproduce a fresh report on a quiet host with `make benchmark-report`. It runs
+one warmup pair and seven measured pairs at each of 1, 16, and 32 environments;
+the report records the source revision, package versions, host metadata,
+session-start load check, raw invocation JSON, and logs.
 
 ## Notes
 
