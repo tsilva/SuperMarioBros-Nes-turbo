@@ -142,6 +142,17 @@ def test_pair_validation_requires_identical_workload() -> None:
         )
 
 
+def test_invocation_stats_line_reports_run_distribution() -> None:
+    line = benchmark_report.format_invocation_stats(
+        payload("turbo", 1, sps=1_000.0), Path("turbo.json")
+    )
+
+    assert line == (
+        "median_sps=1000.0 mean_sps=1000.0 stdev_sps=1.0 cv_pct=0.10 "
+        "min_sps=999.0 max_sps=1001.0 repeats=3"
+    )
+
+
 def test_shape_aggregation_uses_paired_ratios_and_claim_gates() -> None:
     pairs = [
         {

@@ -334,6 +334,20 @@ def invocation_median(payload: dict[str, Any], path: Path) -> float:
     return median(env_steps_per_sec_samples(payload, path))
 
 
+def format_invocation_stats(payload: dict[str, Any], path: Path) -> str:
+    samples = env_steps_per_sec_samples(payload, path)
+    stats = summary(samples)
+    return (
+        f"median_sps={stats['median']:.1f} "
+        f"mean_sps={stats['mean']:.1f} "
+        f"stdev_sps={stats['stdev']:.1f} "
+        f"cv_pct={stats['cv'] * 100:.2f} "
+        f"min_sps={stats['min']:.1f} "
+        f"max_sps={stats['max']:.1f} "
+        f"repeats={len(samples)}"
+    )
+
+
 def execute_invocation(
     args: argparse.Namespace,
     *,
@@ -342,7 +356,6 @@ def execute_invocation(
     output_json: Path,
 ) -> dict[str, Any]:
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    wait_for_load_headroom(args)
     command = benchmark_command(args, backend=backend, shape=shape, output_json=output_json)
     started = time.perf_counter()
     result = run_capture(command)
@@ -465,14 +478,21 @@ def collect_shape(
         for backend in order:
             filename = f"{phase}-pair-{pair_index + 1:02d}-{backend}.json"
             path = output_dir / "raw" / f"envs-{shape}" / filename
-            print(
-                f"shape={shape} phase={phase} pair={pair_index + 1}/{pair_count} backend={backend}",
-                flush=True,
+            prefix = (
+                f"shape={shape} phase={phase} pair={pair_index + 1}/{pair_count} "
+                f"backend={backend}"
             )
+            wait_for_load_headroom(args)
+            print(prefix, end=" ", flush=True)
             paths[backend] = path
-            payloads[backend] = execute_invocation(
-                args, backend=backend, shape=shape, output_json=path
-            )
+            try:
+                payloads[backend] = execute_invocation(
+                    args, backend=backend, shape=shape, output_json=path
+                )
+            except SystemExit:
+                print("status=failed", flush=True)
+                raise
+            print(format_invocation_stats(payloads[backend], path), flush=True)
         validate_matched_pair(
             payloads["turbo"],
             payloads["stable-retro"],
@@ -481,6 +501,13 @@ def collect_shape(
         )
         turbo_median = invocation_median(payloads["turbo"], paths["turbo"])
         stable_median = invocation_median(payloads["stable-retro"], paths["stable-retro"])
+        print(
+            f"shape={shape} phase={phase} pair={pair_index + 1}/{pair_count} "
+            f"turbo_median_sps={turbo_median:.1f} "
+            f"stable_retro_median_sps={stable_median:.1f} "
+            f"speedup={turbo_median / stable_median:.2f}x",
+            flush=True,
+        )
         collected.append(
             {
                 "pair": pair_index + 1,
