@@ -244,26 +244,74 @@ def benchmark_command(
     ]
     if args.state_dir is not None:
         command.extend(("--state-dir", str(args.state_dir)))
-    if args.force_busy:
-        command.append("--skip-load-preflight")
-    else:
-        command.extend(("--max-start-load", str(args.max_start_load)))
+    command.append("--skip-load-preflight")
     if backend == "stable-retro":
         command.append("--stable-retro-baseline")
     return command
 
 
-def wait_for_load_headroom(args: argparse.Namespace) -> None:
-    if args.force_busy or not hasattr(os, "getloadavg"):
-        return
+def wait_for_load_headroom(args: argparse.Namespace) -> dict[str, Any]:
+    load_available = hasattr(os, "getloadavg")
+    if args.force_busy:
+        current = None
+        if load_available:
+            try:
+                current = os.getloadavg()[0]
+            except OSError:
+                pass
+        return {
+            "enabled": False,
+            "available": current is not None,
+            "initial_1min": current,
+            "accepted_1min": current,
+            "max_start_load": args.max_start_load,
+            "waited_s": 0.0,
+            "load_ok": False,
+        }
+    if not load_available:
+        return {
+            "enabled": True,
+            "available": False,
+            "initial_1min": None,
+            "accepted_1min": None,
+            "max_start_load": args.max_start_load,
+            "waited_s": 0.0,
+            "load_ok": True,
+        }
     started = time.monotonic()
+    initial_load = None
     while True:
         try:
             load = os.getloadavg()[0]
         except OSError:
-            return
+            return {
+                "enabled": True,
+                "available": False,
+                "initial_1min": initial_load,
+                "accepted_1min": None,
+                "max_start_load": args.max_start_load,
+                "waited_s": time.monotonic() - started,
+                "load_ok": True,
+            }
+        if initial_load is None:
+            initial_load = load
         if load < args.max_start_load:
-            return
+            waited = time.monotonic() - started
+            print(
+                f"load_preflight initial_1min={initial_load:.2f} "
+                f"accepted_1min={load:.2f} max_start_load={args.max_start_load:.2f} "
+                f"waited_s={waited:.1f}",
+                flush=True,
+            )
+            return {
+                "enabled": True,
+                "available": True,
+                "initial_1min": initial_load,
+                "accepted_1min": load,
+                "max_start_load": args.max_start_load,
+                "waited_s": waited,
+                "load_ok": True,
+            }
         elapsed = time.monotonic() - started
         if elapsed >= args.max_load_wait_seconds:
             raise SystemExit(
@@ -450,16 +498,6 @@ def aggregate_shape(
     }
 
 
-def load_ok(payload: dict[str, Any], *, force_busy: bool) -> bool:
-    load = payload.get("load")
-    return (
-        not force_busy
-        and isinstance(load, dict)
-        and bool(load.get("enabled"))
-        and bool(load.get("load_ok"))
-    )
-
-
 def collect_shape(
     args: argparse.Namespace,
     *,
@@ -467,6 +505,7 @@ def collect_shape(
     shape: int,
     shape_index: int,
     measured: bool,
+    load_gate_passed: bool,
 ) -> list[dict[str, Any]]:
     pair_count = args.pairs if measured else args.warmup_pairs
     phase = "measured" if measured else "warmup"
@@ -482,7 +521,6 @@ def collect_shape(
                 f"shape={shape} phase={phase} pair={pair_index + 1}/{pair_count} "
                 f"backend={backend}"
             )
-            wait_for_load_headroom(args)
             print(prefix, end=" ", flush=True)
             paths[backend] = path
             try:
@@ -517,8 +555,7 @@ def collect_shape(
                 "turbo_median_sps": turbo_median,
                 "stable_retro_median_sps": stable_median,
                 "speedup": turbo_median / stable_median,
-                "load_ok": load_ok(payloads["turbo"], force_busy=args.force_busy)
-                and load_ok(payloads["stable-retro"], force_busy=args.force_busy),
+                "load_ok": load_gate_passed,
                 "rom_sha256": payloads["turbo"]["config"]["rom_sha256"],
                 "turbo_package": payloads["turbo"]["package"],
                 "stable_retro_package": payloads["stable-retro"]["package"],
@@ -592,6 +629,7 @@ def render_report(aggregate: dict[str, Any]) -> str:
     source = aggregate["source"]
     correctness = aggregate["correctness"]
     packages = aggregate["packages"]
+    load_preflight = aggregate["load_preflight"]
     lines.extend(
         [
             "",
@@ -608,7 +646,8 @@ def render_report(aggregate: dict[str, Any]) -> str:
             "",
             f"- Exact ROM-backed parity checks: **{'PASS' if correctness['passed'] else 'FAIL'}**",
             f"- Clean source tree: **{'PASS' if validity['source_clean'] else 'FAIL'}**",
-            f"- Load gate enforced: **{'PASS' if validity['load_gate_enforced'] else 'FAIL'}**",
+            f"- Session-start load gate: **{'PASS' if validity['load_gate_enforced'] else 'FAIL'}**",
+            f"- Initial/accepted 1-minute load: `{load_preflight['initial_1min']}` / `{load_preflight['accepted_1min']}` (limit `{load_preflight['max_start_load']}`)",
             f"- All shape claims passed: **{'PASS' if validity['all_shape_claims_passed'] else 'FAIL'}**",
             f"- Git commit: `{source.get('commit')}`",
             f"- Working-tree diff SHA-256: `{source['working_tree_diff_sha256']}`",
@@ -657,6 +696,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "refusing a publishable benchmark from a dirty source tree; commit/stash changes "
             "or pass --allow-dirty for diagnostic evidence"
         )
+    load_preflight = wait_for_load_headroom(args)
+    load_gate_passed = bool(load_preflight["enabled"] and load_preflight["load_ok"])
     correctness = run_correctness_checks(args, output_dir)
     results = []
     warmup_records: dict[str, Any] = {}
@@ -667,6 +708,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             shape=shape,
             shape_index=shape_index,
             measured=False,
+            load_gate_passed=load_gate_passed,
         )
         pairs = collect_shape(
             args,
@@ -674,6 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             shape=shape,
             shape_index=shape_index,
             measured=True,
+            load_gate_passed=load_gate_passed,
         )
         results.append(
             aggregate_shape(
@@ -682,14 +725,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 minimum_speedup=args.minimum_speedup,
                 minimum_pairs_for_claim=args.minimum_pairs_for_claim,
                 bootstrap_samples=args.bootstrap_samples,
-                load_gate_enforced=not args.force_busy,
+                load_gate_enforced=bool(load_preflight["enabled"]),
             )
         )
 
     validity = {
         "source_clean": not source["dirty"],
         "correctness_checks_passed": bool(correctness["passed"]),
-        "load_gate_enforced": not args.force_busy,
+        "load_gate_enforced": bool(load_preflight["enabled"]),
         "all_shape_claims_passed": all(result["claim_passed"] for result in results),
     }
     command = [
@@ -725,6 +768,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "source": source,
         "system": system_metadata(),
+        "load_preflight": load_preflight,
         "correctness": correctness,
         "warmup_pairs": warmup_records,
         "results": results,

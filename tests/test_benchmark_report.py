@@ -98,11 +98,46 @@ def test_benchmark_command_delegates_to_canonical_script(tmp_path: Path) -> None
     assert command[:2] == ["python", "scripts/benchmark_sps.py"]
     assert command[command.index("--num-envs") + 1] == "32"
     assert "--stable-retro-baseline" in command
-    assert command[command.index("--max-start-load") + 1] == "4.0"
+    assert "--skip-load-preflight" in command
+    assert "--max-start-load" not in command
     assert command[command.index("--warmup") + 1] == "10"
     assert command.count("10") == 1
     assert "--frame-stack" in command
     assert "--obs-crop-mode" in command
+
+
+def test_load_preflight_waits_once_until_host_is_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = benchmark_args(tmp_path)
+    loads = iter(((6.0, 0.0, 0.0), (3.0, 0.0, 0.0)))
+    monkeypatch.setattr(benchmark_report.os, "getloadavg", lambda: next(loads))
+    monkeypatch.setattr(benchmark_report.time, "sleep", lambda _seconds: None)
+
+    result = benchmark_report.wait_for_load_headroom(args)
+
+    assert result["enabled"] is True
+    assert result["initial_1min"] == 6.0
+    assert result["accepted_1min"] == 3.0
+    assert result["max_start_load"] == 4.0
+    assert result["load_ok"] is True
+    output = capsys.readouterr().out
+    assert output.count("waiting_for_load") == 1
+    assert output.count("load_preflight") == 1
+
+
+def test_forced_busy_preflight_is_recorded_as_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = benchmark_args(tmp_path)
+    args.force_busy = True
+    monkeypatch.setattr(benchmark_report.os, "getloadavg", lambda: (8.0, 0.0, 0.0))
+
+    result = benchmark_report.wait_for_load_headroom(args)
+
+    assert result["enabled"] is False
+    assert result["initial_1min"] == 8.0
+    assert result["load_ok"] is False
 
 
 @pytest.mark.parametrize(
@@ -222,6 +257,11 @@ def test_report_renders_result_and_validity() -> None:
             "processor": "test-cpu",
             "logical_cpus": 8,
             "python": "3.14 test",
+        },
+        "load_preflight": {
+            "initial_1min": 2.0,
+            "accepted_1min": 2.0,
+            "max_start_load": 4.0,
         },
         "reproduction_command": "make benchmark-report",
     }
