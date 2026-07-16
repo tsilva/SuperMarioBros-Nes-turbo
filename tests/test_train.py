@@ -8,6 +8,7 @@ import pytest
 from supermariobrosnes_turbo.jerk import (
     JerkPolicy,
     JerkSearch,
+    JerkSequenceMinimizer,
     RetainedSequence,
     load_jerk_checkpoint,
     save_jerk_checkpoint,
@@ -180,6 +181,58 @@ def test_jerk_duplicate_updates_stats_and_unique_insert_evicts_worst() -> None:
     assert set(search._retained) == {(1,), (2,)}
     assert search._retained[(1,)].mean_return == 3.0
     assert search._retained[(1,)].completed is True
+
+
+def test_completed_candidates_rank_shortest_before_reward_or_progress() -> None:
+    short = _candidate((1, 2), 1.0, completed=True, progress=10.0)
+    long = _candidate((1, 2, 3), 1000.0, completed=True, progress=9999.0)
+
+    assert short.rank > long.rank
+
+
+def test_incomplete_candidates_still_rank_progress_first() -> None:
+    farther = _candidate((1, 2, 3), 1.0, progress=100.0)
+    richer = _candidate((1,), 1000.0, progress=99.0)
+
+    assert farther.rank > richer.rank
+
+
+def test_sequence_minimizer_accepts_only_shorter_completed_mutations() -> None:
+    initial = _candidate(tuple(range(10)), 10.0, completed=True, progress=100.0)
+    minimizer = JerkSequenceMinimizer(
+        initial=initial,
+        n_envs=4,
+        seed=7,
+        max_chunk_steps=4,
+        patience=2,
+    )
+    mutations = minimizer.propose()
+
+    assert len(mutations) == 4
+    assert all(len(mutation.actions) == 6 for mutation in mutations)
+    failed = _candidate(mutations[0].actions, 100.0, completed=False, progress=999.0)
+    successful = _candidate(mutations[1].actions, 1.0, completed=True, progress=100.0)
+
+    assert minimizer.observe([failed, successful])
+    assert minimizer.incumbent.actions == successful.actions
+    assert minimizer.improvements == 1
+
+
+def test_sequence_minimizer_reduces_chunk_after_misses() -> None:
+    initial = _candidate(tuple(range(10)), 10.0, completed=True, progress=100.0)
+    minimizer = JerkSequenceMinimizer(
+        initial=initial,
+        n_envs=2,
+        seed=7,
+        max_chunk_steps=4,
+        patience=2,
+    )
+
+    minimizer.propose()
+    assert not minimizer.observe([])
+    minimizer.propose()
+    assert not minimizer.observe([])
+    assert minimizer.chunk_steps == 2
 
 
 def test_jerk_policy_zip_round_trip_and_lane_resets(tmp_path) -> None:

@@ -61,12 +61,120 @@ class RetainedSequence:
 
     @property
     def rank(self) -> tuple[float, ...]:
+        if self.completed:
+            return (
+                1.0,
+                -float(len(self.actions)),
+                self.mean_return,
+                float(self.progress),
+            )
         return (
-            float(self.completed),
+            0.0,
             float(self.progress),
             self.mean_return,
             -float(len(self.actions)),
         )
+
+
+@dataclass(frozen=True)
+class DeletionMutation:
+    actions: tuple[int, ...]
+    start: int
+    removed_steps: int
+
+
+class JerkSequenceMinimizer:
+    """Generic completion-preserving action-sequence deletion search."""
+
+    def __init__(
+        self,
+        *,
+        initial: RetainedSequence,
+        n_envs: int,
+        seed: int,
+        max_chunk_steps: int,
+        patience: int,
+    ) -> None:
+        if not initial.completed:
+            raise ValueError("JERK minimization requires a completed sequence")
+        if not initial.actions:
+            raise ValueError("JERK minimization requires a non-empty sequence")
+        if n_envs < 1:
+            raise ValueError("JERK minimization requires at least one environment")
+        if max_chunk_steps < 1:
+            raise ValueError("JERK minimization max_chunk_steps must be positive")
+        if patience < 1:
+            raise ValueError("JERK minimization patience must be positive")
+        self.incumbent = initial
+        self.n_envs = int(n_envs)
+        self.max_chunk_steps = int(max_chunk_steps)
+        self.patience = int(patience)
+        self.chunk_steps = min(self.max_chunk_steps, len(initial.actions) - 1)
+        self.misses = 0
+        self.rounds = 0
+        self.attempts = 0
+        self.improvements = 0
+        self._rng = np.random.default_rng(
+            np.random.SeedSequence([seed, 0x4D494E49, len(initial.actions)])
+        )
+
+    @property
+    def done(self) -> bool:
+        return self.chunk_steps < 1
+
+    def propose(self) -> tuple[DeletionMutation, ...]:
+        if self.done:
+            return ()
+        actions = self.incumbent.actions
+        chunk = min(self.chunk_steps, len(actions) - 1)
+        if chunk < 1:
+            self.chunk_steps = 0
+            return ()
+        possible_starts = len(actions) - chunk + 1
+        count = min(self.n_envs, possible_starts)
+        if count == possible_starts:
+            starts = np.arange(possible_starts, dtype=np.int64)
+        else:
+            starts = np.sort(
+                self._rng.choice(possible_starts, size=count, replace=False)
+            )
+        self.rounds += 1
+        self.attempts += count
+        return tuple(
+            DeletionMutation(
+                actions=actions[: int(start)] + actions[int(start) + chunk :],
+                start=int(start),
+                removed_steps=chunk,
+            )
+            for start in starts
+        )
+
+    def observe(self, completed: Sequence[RetainedSequence]) -> bool:
+        shorter = [
+            candidate
+            for candidate in completed
+            if candidate.completed
+            and candidate.actions
+            and len(candidate.actions) < len(self.incumbent.actions)
+        ]
+        if shorter:
+            self.incumbent = max(shorter, key=lambda candidate: candidate.rank)
+            self.improvements += 1
+            self.misses = 0
+            self.chunk_steps = min(
+                self.chunk_steps,
+                self.max_chunk_steps,
+                len(self.incumbent.actions) - 1,
+            )
+            return True
+        self.misses += 1
+        if self.misses >= self.patience:
+            self.misses = 0
+            if self.chunk_steps == 1:
+                self.chunk_steps = 0
+            else:
+                self.chunk_steps = max(1, self.chunk_steps // 2)
+        return False
 
 
 @dataclass

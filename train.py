@@ -22,7 +22,11 @@ from supermariobrosnes_turbo import (
     list_available_states,
 )
 from supermariobrosnes_turbo.jerk import (
+    JerkPolicy,
     JerkSearch,
+    JerkSequenceMinimizer,
+    RetainedSequence,
+    load_jerk_checkpoint,
     normalize_level_name,
     policy_path_for_level,
     run_directory_for_level,
@@ -43,6 +47,10 @@ PROTECTED_PREFIX_STEPS = 128
 MAX_PREFIX_SHORTEN_STEPS = 128
 RETAINED_LIMIT = 256
 FALLBACK_ACTION = "noop"
+MINIMIZE_TIMESTEPS = 1_000_000
+MINIMIZE_MAX_CHUNK_STEPS = 128
+MINIMIZE_PATIENCE = 4
+MINIMIZE_COMPLETION_GRACE_STEPS = 8
 
 
 @dataclass(frozen=True)
@@ -248,10 +256,122 @@ def exploit_probability(total_steps: int, total_timesteps: int) -> float:
     )
 
 
-def _save_policy(search: JerkSearch, path: Path) -> Path:
+def evaluate_action_sequences(
+    task: MarioJerkTask,
+    sequences: list[tuple[int, ...]],
+    *,
+    fallback_action: int,
+    completion_grace_steps: int,
+) -> tuple[list[RetainedSequence], int]:
+    """Replay up to one candidate per lane and return only completed candidates."""
+    if not sequences:
+        return [], 0
+    if len(sequences) > task.n_envs:
+        raise ValueError("candidate batch exceeds the task environment count")
+    if completion_grace_steps < 0:
+        raise ValueError("completion_grace_steps must be non-negative")
+
+    task.reset()
+    active = np.zeros(task.n_envs, dtype=np.bool_)
+    active[: len(sequences)] = True
+    completed: list[RetainedSequence] = []
+    transitions = 0
+    max_steps = max(len(sequence) for sequence in sequences) + completion_grace_steps
+    for step in range(max_steps):
+        actions = np.full(task.n_envs, fallback_action, dtype=np.int64)
+        for lane, sequence in enumerate(sequences):
+            if active[lane] and step < len(sequence):
+                actions[lane] = sequence[step]
+
+        _observations, _rewards, failures, records, successes = task.step(actions)
+        transitions += task.n_envs
+        terminal = failures | successes
+        for lane, sequence in enumerate(sequences):
+            if not active[lane]:
+                continue
+            if successes[lane]:
+                record = records[lane]
+                retained_actions = sequence[: min(step + 1, len(sequence))]
+                completed.append(
+                    RetainedSequence(
+                        actions=retained_actions,
+                        return_sum=record.episode_return,
+                        return_count=1,
+                        completed=True,
+                        progress=record.progress,
+                    )
+                )
+                active[lane] = False
+            elif failures[lane] or step + 1 >= len(sequence) + completion_grace_steps:
+                active[lane] = False
+
+        if not np.any(active):
+            break
+        if np.any(terminal):
+            task.reset_lanes(terminal)
+    return completed, transitions
+
+
+def minimize_completed_sequence(
+    task: MarioJerkTask,
+    initial: RetainedSequence,
+    *,
+    seed: int,
+    transition_budget: int,
+    max_chunk_steps: int,
+    patience: int,
+    fallback_action: int,
+    completion_grace_steps: int,
+    metrics_path: Path,
+) -> tuple[RetainedSequence, int, int]:
+    minimizer = JerkSequenceMinimizer(
+        initial=initial,
+        n_envs=task.n_envs,
+        seed=seed,
+        max_chunk_steps=max_chunk_steps,
+        patience=patience,
+    )
+    transitions = 0
+    while not minimizer.done and transitions < transition_budget:
+        before_steps = len(minimizer.incumbent.actions)
+        chunk_steps = minimizer.chunk_steps
+        mutations = minimizer.propose()
+        completed, used = evaluate_action_sequences(
+            task,
+            [mutation.actions for mutation in mutations],
+            fallback_action=fallback_action,
+            completion_grace_steps=completion_grace_steps,
+        )
+        transitions += used
+        improved = minimizer.observe(completed)
+        row = {
+            "phase": "minimize",
+            "minimization_transitions": transitions,
+            "round": minimizer.rounds,
+            "attempts": minimizer.attempts,
+            "chunk_steps": chunk_steps,
+            "completed_mutations": len(completed),
+            "improved": improved,
+            "previous_sequence_steps": before_steps,
+            "best_sequence_steps": len(minimizer.incumbent.actions),
+        }
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+        if improved:
+            LOGGER.info(
+                "minimized sequence=%d->%d removed=%d transitions=%d",
+                before_steps,
+                len(minimizer.incumbent.actions),
+                before_steps - len(minimizer.incumbent.actions),
+                transitions,
+            )
+    return minimizer.incumbent, transitions, minimizer.improvements
+
+
+def _save_policy(policy: JerkPolicy, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.parent / f".{path.stem}.{uuid.uuid4().hex}.zip"
-    search.policy().save(temporary)
+    policy.save(temporary)
     temporary.replace(path)
     return path
 
@@ -314,6 +434,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--retained-limit", type=int, default=RETAINED_LIMIT)
     parser.add_argument("--fallback-action", default=FALLBACK_ACTION)
+    parser.add_argument("--minimize-timesteps", type=int, default=MINIMIZE_TIMESTEPS)
+    parser.add_argument(
+        "--minimize-max-chunk-steps",
+        type=int,
+        default=MINIMIZE_MAX_CHUNK_STEPS,
+    )
+    parser.add_argument("--minimize-patience", type=int, default=MINIMIZE_PATIENCE)
+    parser.add_argument(
+        "--minimize-completion-grace-steps",
+        type=int,
+        default=MINIMIZE_COMPLETION_GRACE_STEPS,
+    )
     return parser
 
 
@@ -340,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
             args.max_prefix_shorten_steps,
             args.retained_limit,
             args.log_interval_steps,
+            args.minimize_max_chunk_steps,
+            args.minimize_patience,
         )
         <= 0
     ):
@@ -350,10 +484,17 @@ def main(argv: list[str] | None = None) -> int:
         args.stall_steps < 0
         or args.checkpoint_freq < 0
         or args.protected_prefix_steps < 0
+        or args.minimize_timesteps < 0
+        or args.minimize_completion_grace_steps < 0
     ):
         raise SystemExit("JERK non-negative sizes must not be negative")
 
     run_dir = args.output or run_directory_for_level(args.level)
+    target_policy_path = (
+        policy_path_for_level(args.level)
+        if args.output is None
+        else run_dir / f"{args.level}.zip"
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = run_dir / "episodes.jsonl"
     metrics_path.write_text("", encoding="utf-8")
@@ -401,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
                 accepted = True
                 accepted_lane = int(np.flatnonzero(successes)[0])
                 accepted_path = run_dir / "checkpoints" / f"{args.level}-{step}.zip"
-                _save_policy(search, accepted_path)
+                _save_policy(search.policy(), accepted_path)
                 LOGGER.info(
                     "accepted first %s success step=%d lane=%d path=%s",
                     args.level,
@@ -436,23 +577,108 @@ def main(argv: list[str] | None = None) -> int:
 
             while next_checkpoint is not None and step >= next_checkpoint:
                 _save_policy(
-                    search,
+                    search.policy(),
                     run_dir / "checkpoints" / f"{args.level}-{step}.zip",
                 )
                 next_checkpoint += args.checkpoint_freq
 
+        discovery_candidate = search.best_candidate()
+        existing_candidate: RetainedSequence | None = None
+        if target_policy_path.is_file():
+            try:
+                existing_policy = load_jerk_checkpoint(target_policy_path)
+                if existing_policy.action_names != search.action_names:
+                    raise ValueError(
+                        "existing policy action names do not match training"
+                    )
+                existing_completed, _existing_validation_transitions = (
+                    evaluate_action_sequences(
+                        task,
+                        [existing_policy.action_sequence],
+                        fallback_action=existing_policy.fallback_action,
+                        completion_grace_steps=args.minimize_completion_grace_steps,
+                    )
+                )
+                if existing_completed:
+                    existing_candidate = existing_completed[0]
+                    LOGGER.info(
+                        "validated existing %s policy sequence=%d",
+                        args.level,
+                        len(existing_candidate.actions),
+                    )
+                else:
+                    LOGGER.warning(
+                        "ignoring existing %s policy because replay did not complete",
+                        target_policy_path,
+                    )
+            except (OSError, ValueError) as exc:
+                LOGGER.warning(
+                    "ignoring unreadable existing policy %s: %s",
+                    target_policy_path,
+                    exc,
+                )
+
+        completed_candidates = [
+            candidate
+            for candidate in (discovery_candidate, existing_candidate)
+            if candidate is not None and candidate.completed
+        ]
+        final_candidate = (
+            max(completed_candidates, key=lambda candidate: candidate.rank)
+            if completed_candidates
+            else discovery_candidate
+        )
+        minimization_start_steps = (
+            len(final_candidate.actions) if final_candidate is not None else 0
+        )
+        minimization_transitions = 0
+        minimization_improvements = 0
+        if accepted and final_candidate is not None and args.minimize_timesteps > 0:
+            minimization_initial = final_candidate
+            final_candidate, minimization_transitions, minimization_improvements = (
+                minimize_completed_sequence(
+                    task,
+                    minimization_initial,
+                    seed=args.seed,
+                    transition_budget=args.minimize_timesteps,
+                    max_chunk_steps=args.minimize_max_chunk_steps,
+                    patience=args.minimize_patience,
+                    fallback_action=search.fallback_action,
+                    completion_grace_steps=args.minimize_completion_grace_steps,
+                    metrics_path=metrics_path,
+                )
+            )
+            LOGGER.info(
+                "minimization finished sequence=%d->%d transitions=%d improvements=%d",
+                len(minimization_initial.actions),
+                len(final_candidate.actions),
+                minimization_transitions,
+                minimization_improvements,
+            )
+        final_policy = JerkPolicy(
+            action_names=search.action_names,
+            action_sequence=() if final_candidate is None else final_candidate.actions,
+            fallback_action=search.fallback_action,
+        )
         final_path = _save_policy(
-            search,
-            (
-                policy_path_for_level(args.level)
-                if args.output is None
-                else run_dir / f"{args.level}.zip"
-            ),
+            final_policy,
+            target_policy_path,
         )
         final_row = _metric_row(
             search, elapsed=time.perf_counter() - started_at, accepted=accepted
         )
         final_row["accepted_lane"] = accepted_lane
+        final_row["phase"] = "final"
+        final_row["discovery_sequence_steps"] = (
+            len(discovery_candidate.actions) if discovery_candidate is not None else 0
+        )
+        final_row["existing_sequence_steps"] = (
+            len(existing_candidate.actions) if existing_candidate is not None else 0
+        )
+        final_row["minimization_start_sequence_steps"] = minimization_start_steps
+        final_row["best_sequence_steps"] = len(final_policy.action_sequence)
+        final_row["minimization_transitions"] = minimization_transitions
+        final_row["minimization_improvements"] = minimization_improvements
         with metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(final_row, sort_keys=True) + "\n")
     finally:

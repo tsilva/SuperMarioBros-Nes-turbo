@@ -51,7 +51,7 @@ def test_play_command_resolves_level_policy_and_forwards_options(
     policy.parent.mkdir(parents=True)
     policy.touch()
 
-    argv = player.playback_argv(
+    argv = player.policy_playback_argv(
         "Level1-1",
         ["--backend", "native"],
         runs_root=tmp_path,
@@ -61,13 +61,34 @@ def test_play_command_resolves_level_policy_and_forwards_options(
         str(policy),
         "--state",
         "Level1-1",
+        "--level-policy-root",
+        str(tmp_path),
         "--backend",
         "native",
     ]
 
 
-def test_play_command_explains_how_to_create_a_missing_policy(tmp_path: Path) -> None:
+def test_play_command_uses_manual_play_for_a_level_without_a_policy(
+    tmp_path: Path,
+) -> None:
     player = load_level_player()
 
-    with pytest.raises(FileNotFoundError, match=r"train\.py Level1-1"):
-        player.resolve_level_policy("Level1-1", runs_root=tmp_path)
+    assert (
+        player.policy_playback_argv(
+            "Level1-1", ["--rom-path", "mario.nes"], runs_root=tmp_path
+        )
+        is None
+    )
+    assert player.manual_playback_argv("Level1-1", ["--rom-path", "mario.nes"]) == [
+        "--state",
+        "Level1-1",
+        "--rom-path",
+        "mario.nes",
+    ]
+
+
+def test_play_command_rejects_a_separate_state_override() -> None:
+    player = load_level_player()
+
+    with pytest.raises(ValueError, match="derives --state from the level"):
+        player.manual_playback_argv("Level1-2", ["--state", "Level1-1"])

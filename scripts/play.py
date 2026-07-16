@@ -18,7 +18,11 @@ from supermariobrosnes_turbo import (
     CORE_ACTION_MEANINGS as ACTION_MEANINGS,
 )
 from supermariobrosnes_turbo import ROM_PATH_ENV_VAR
-from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv, default_rom_path, resolve_required_rom_path
+from supermariobrosnes_turbo import (
+    SuperMarioBrosNesTurboVecEnv,
+    default_rom_path,
+    resolve_required_rom_path,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -128,7 +132,9 @@ class SdlTextureWindow:
         )
         if not self.window:
             raise SdlUnavailableError(owner.sdl_error())
-        self.renderer = self.sdl.SDL_CreateRenderer(self.window, -1, SDL_RENDERER_ACCELERATED)
+        self.renderer = self.sdl.SDL_CreateRenderer(
+            self.window, -1, SDL_RENDERER_ACCELERATED
+        )
         if not self.renderer:
             error = owner.sdl_error()
             self.close()
@@ -156,12 +162,15 @@ class SdlTextureWindow:
             raise ValueError(
                 f"{self.title} frame size changed from {(self.height, self.width)} to {frame.shape[:2]}"
             )
-        if self.sdl.SDL_UpdateTexture(
-            self.texture,
-            None,
-            frame.ctypes.data_as(ctypes.c_void_p),
-            frame.strides[0],
-        ) != 0:
+        if (
+            self.sdl.SDL_UpdateTexture(
+                self.texture,
+                None,
+                frame.ctypes.data_as(ctypes.c_void_p),
+                frame.strides[0],
+            )
+            != 0
+        ):
             raise RuntimeError(self.owner.sdl_error())
         self.sdl.SDL_RenderClear(self.renderer)
         self.sdl.SDL_RenderCopy(self.renderer, self.texture, None, None)
@@ -269,7 +278,9 @@ class SdlExternalVecPlayer:
             while self.running:
                 self.poll_events()
                 action = self.current_action()
-                self.stack_obs, reward, self.terminated, self.truncated, self.info = self.step_one(action)
+                self.stack_obs, reward, self.terminated, self.truncated, self.info = (
+                    self.step_one(action)
+                )
                 self.reward += reward
                 if self.terminated or self.truncated:
                     self.stack_obs = self.reset_one()
@@ -284,7 +295,10 @@ class SdlExternalVecPlayer:
                     self.display_fps = self.fps_window_frames / elapsed
                     self.fps_window_frames = 0
                     self.fps_window_start = now
-                if self.auto_close_frames is not None and self.frames_rendered >= self.auto_close_frames:
+                if (
+                    self.auto_close_frames is not None
+                    and self.frames_rendered >= self.auto_close_frames
+                ):
                     break
 
                 self.next_tick += self.frame_delay_s
@@ -332,7 +346,9 @@ class SdlExternalVecPlayer:
             self.rgb_window.set_title(gameplay_title)
             self.stack_window.set_title(stack_title)
 
-    def step_one(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
+    def step_one(
+        self, action: int
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, object]]:
         action_name = ACTION_MEANINGS[action]
         action_mask = np.zeros((1, len(NES_BUTTONS)), dtype=np.uint8)
         for button in ACTION_BUTTONS[action_name]:
@@ -460,11 +476,21 @@ def configure_sdl(sdl: ctypes.CDLL) -> None:
     sdl.SDL_CreateTexture.restype = ctypes.c_void_p
     sdl.SDL_DestroyTexture.argtypes = [ctypes.c_void_p]
     sdl.SDL_DestroyTexture.restype = None
-    sdl.SDL_UpdateTexture.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+    sdl.SDL_UpdateTexture.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
     sdl.SDL_UpdateTexture.restype = ctypes.c_int
     sdl.SDL_RenderClear.argtypes = [ctypes.c_void_p]
     sdl.SDL_RenderClear.restype = ctypes.c_int
-    sdl.SDL_RenderCopy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    sdl.SDL_RenderCopy.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
     sdl.SDL_RenderCopy.restype = ctypes.c_int
     sdl.SDL_RenderPresent.argtypes = [ctypes.c_void_p]
     sdl.SDL_RenderPresent.restype = None
@@ -485,7 +511,9 @@ def latest_frame(obs: np.ndarray) -> np.ndarray:
         return np.ascontiguousarray(obs[0])
     if obs.shape[0] == 3:
         return np.ascontiguousarray(np.moveaxis(obs, 0, -1))
-    raise ValueError(f"play mode expects unstacked grayscale or RGB observation, got shape {obs.shape}")
+    raise ValueError(
+        f"play mode expects unstacked grayscale or RGB observation, got shape {obs.shape}"
+    )
 
 
 def display_frame_from_obs(obs: np.ndarray, grayscale: bool) -> np.ndarray:
@@ -512,7 +540,9 @@ def rgb_frame(frame: np.ndarray) -> np.ndarray:
         return np.ascontiguousarray(rgb)
     if frame.ndim == 3 and frame.shape[2] == 3:
         return np.ascontiguousarray(frame)
-    raise ValueError(f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}")
+    raise ValueError(
+        f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}"
+    )
 
 
 def grid_size(n: int) -> tuple[int, int]:
@@ -562,7 +592,9 @@ def png_from_frame(frame: np.ndarray) -> bytes:
         color_type = 2
         row_iter = frame
     else:
-        raise ValueError(f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}")
+        raise ValueError(
+            f"expected HxW grayscale or HxWx3 RGB frame, got shape {frame.shape}"
+        )
 
     rows = bytearray()
     for row in row_iter:
@@ -572,16 +604,23 @@ def png_from_frame(frame: np.ndarray) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         checksum = zlib.crc32(kind)
         checksum = zlib.crc32(data, checksum)
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum & 0xFFFFFFFF)
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", checksum & 0xFFFFFFFF)
+        )
 
     png = bytearray(b"\x89PNG\r\n\x1a\n")
-    png.extend(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)))
+    png.extend(
+        chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0))
+    )
     png.extend(chunk(b"IDAT", zlib.compress(bytes(rows), level=1)))
     png.extend(chunk(b"IEND", b""))
     return bytes(png)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("external",), default="external")
     parser.add_argument(
@@ -591,8 +630,15 @@ def parse_args() -> argparse.Namespace:
         help="Path to the SMB NES ROM. Defaults to ROM_PATH from the environment or .env.",
     )
     parser.add_argument("--fps", type=int, default=60)
-    parser.add_argument("--scale", type=int, default=3, help="Scale for the main RGB gameplay window.")
-    parser.add_argument("--stack-scale", type=int, default=3, help="Scale for the side frame-stack window.")
+    parser.add_argument(
+        "--scale", type=int, default=3, help="Scale for the main RGB gameplay window."
+    )
+    parser.add_argument(
+        "--stack-scale",
+        type=int,
+        default=3,
+        help="Scale for the side frame-stack window.",
+    )
     parser.add_argument("--frame-skip", type=int, default=1)
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--crop-top", type=int, default=32)
@@ -602,7 +648,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state", default=None)
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--auto-close-frames", type=int, default=None)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:

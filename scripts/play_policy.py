@@ -53,6 +53,7 @@ from supermariobrosnes_turbo import (
     resolve_required_rom_path,
 )
 from supermariobrosnes_turbo.jerk import load_jerk_checkpoint
+from supermariobrosnes_turbo.jerk import policy_path_for_level
 
 try:
     from benchmark_sps import (
@@ -295,24 +296,26 @@ def apply_checkpoint_defaults(args: argparse.Namespace, model_path: Path) -> Non
         args.crop_mode = "remove"
 
 
+def level_name_from_counters(level: tuple[int, int]) -> str:
+    level_hi, level_lo = (int(value) for value in level)
+    if level_hi < 0 or level_lo < 0:
+        raise ValueError(f"invalid in-game level counters: {level}")
+    return f"Level{level_hi + 1}-{level_lo + 1}"
+
+
 class SdlPolicyPlayer:
     def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.action_names = ACTION_SETS[args.action_set]
         self.model_path = resolve_model_path(args.model, args.filename, args.cache_dir)
         apply_checkpoint_defaults(args, self.model_path)
         self.model = load_jerk_checkpoint(self.model_path)
-        if self.model.action_set != args.action_set:
-            raise ValueError(
-                f"checkpoint action_set={self.model.action_set!r} does not match "
-                f"--action-set={args.action_set!r}"
-            )
-        if self.model.action_count != len(ACTION_SETS[args.action_set]):
-            raise ValueError(
-                f"model action count {self.model.action_count} does not match "
-                f"action_set={args.action_set!r} with {len(ACTION_SETS[args.action_set])} actions",
-            )
+        self._validate_model(self.model)
+        self.initial_model = self.model
+        self.initial_model_path = self.model_path
+        self.current_policy_level = args.state
+        self.current_state = args.state
 
-        self.args = args
-        self.action_names = ACTION_SETS[args.action_set]
         self.rom_path = resolve_required_rom_path(args.rom_path)
         if args.backend == "native":
             self.action_masks = np.stack(
@@ -392,11 +395,90 @@ class SdlPolicyPlayer:
             self.sdl.SDL_Quit()
             raise SdlUnavailableError(error)
 
-    def make_env(self):
+    def _validate_model(self, model) -> None:
+        if model.action_set != self.args.action_set:
+            raise ValueError(
+                f"checkpoint action_set={model.action_set!r} does not match "
+                f"--action-set={self.args.action_set!r}"
+            )
+        if model.action_count != len(self.action_names):
+            raise ValueError(
+                f"model action count {model.action_count} does not match "
+                f"action_set={self.args.action_set!r} with "
+                f"{len(self.action_names)} actions",
+            )
+
+    def activate_named_level_policy(self, level_name: str) -> bool:
+        if self.args.level_policy_root is None:
+            return False
+        model_path = policy_path_for_level(
+            level_name, runs_root=self.args.level_policy_root
+        )
+        if not model_path.is_file():
+            return False
+        model = load_jerk_checkpoint(model_path)
+        self._validate_model(model)
+        model.reset()
+        self.model = model
+        self.model_path = model_path
+        self.current_policy_level = level_name
+        return True
+
+    def activate_level_policy(self, level: tuple[int, int]) -> bool:
+        return self.activate_named_level_policy(level_name_from_counters(level))
+
+    def advance_to_level_policy(self, level: tuple[int, int]) -> bool:
+        level_name = level_name_from_counters(level)
+        if not self.activate_named_level_policy(level_name):
+            return False
+
+        new_env = self.make_env(level_name)
+        new_display_env = None
+        try:
+            new_obs, new_infos = new_env.reset()
+            new_display_env = (
+                self.make_display_env(level_name) if self.args.view == "raw" else None
+            )
+            if new_display_env is not None:
+                new_display_obs, _display_infos = new_display_env.reset()
+            else:
+                new_display_obs = new_obs
+        except Exception:
+            if new_display_env is not None:
+                new_display_env.close()
+            new_env.close()
+            raise
+
+        old_env = self.env
+        old_display_env = self.display_env
+        self.env = new_env
+        self.display_env = new_display_env
+        self.obs = new_obs
+        self.display_obs = new_display_obs
+        self.display_info = {}
+        self.info = lane_info(new_infos, 0)
+        self.last_lives = int(self.info.get("lives", 0))
+        self.last_level = level
+        self.current_state = level_name
+        old_env.close()
+        if old_display_env is not None:
+            old_display_env.close()
+        return True
+
+    def reset_current_policy(self) -> None:
+        if self.activate_named_level_policy(self.current_state):
+            return
+        self.model = self.initial_model
+        self.model_path = self.initial_model_path
+        self.current_policy_level = self.args.state
+        self.model.reset()
+
+    def make_env(self, state: str | None = None):
+        state = state or self.current_state
         if self.args.backend == "native":
             env = SuperMarioBrosNesTurboVecEnv(
                 self.args.game,
-                state=self.args.state,
+                state=state,
                 rom_path=self.rom_path,
                 num_envs=1,
                 num_threads=1,
@@ -421,7 +503,7 @@ class SdlPolicyPlayer:
 
         env = create_stable_retro_vector_env(
             rom_path=self.rom_path,
-            lane_state_names=[self.args.state],
+            lane_state_names=[state],
             state_dir=self.args.state_dir,
             preprocessing=PreprocessingConfig(
                 frame_skip=self.args.frame_skip,
@@ -439,11 +521,12 @@ class SdlPolicyPlayer:
         env.seed(self.args.seed)
         return env
 
-    def make_display_env(self):
+    def make_display_env(self, state: str | None = None):
+        state = state or self.current_state
         if self.args.backend == "native":
             env = SuperMarioBrosNesTurboVecEnv(
                 self.args.game,
-                state=self.args.state,
+                state=state,
                 rom_path=self.rom_path,
                 num_envs=1,
                 num_threads=1,
@@ -466,7 +549,7 @@ class SdlPolicyPlayer:
 
         env = create_stable_retro_vector_env(
             rom_path=self.rom_path,
-            lane_state_names=[self.args.state],
+            lane_state_names=[state],
             state_dir=self.args.state_dir,
             preprocessing=PreprocessingConfig(
                 frame_skip=self.args.frame_skip,
@@ -532,6 +615,8 @@ class SdlPolicyPlayer:
         )
         if current_level != self.last_level:
             self.level_changes += 1
+            if self.advance_to_level_policy(current_level):
+                return
         self.last_level = current_level
         if terminated_value or truncated_value or life_loss:
             self.hold_terminal_frame()
@@ -544,7 +629,7 @@ class SdlPolicyPlayer:
             self.reward = 0.0
             self.max_x = 0
             self.obs, infos = self.env.reset()
-            self.model.reset()
+            self.reset_current_policy()
             self.info = lane_info(infos, 0)
             self.last_lives = int(self.info.get("lives", 0))
             self.last_level = (
@@ -643,6 +728,7 @@ class SdlPolicyPlayer:
             title = (
                 "SuperMarioBros-Nes-turbo JERK player  "
                 f"episode={self.episode} step={self.step} "
+                f"policy={self.current_policy_level} "
                 f"action={self.action_names[self.action]} "
                 f"x={self.info.get('x_pos', 0)} max_x={self.max_x} "
                 f"lives={self.info.get('lives', 0)} reward={self.reward:.1f} "
@@ -710,6 +796,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument(
+        "--level-policy-root",
+        type=Path,
+        default=None,
+        help="Load a matching runs/<Level>-jerk/<Level>.zip after level changes",
+    )
     parser.add_argument("--view", choices=("raw", "preprocessed"), default="raw")
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--scale", type=int, default=4)
