@@ -11,9 +11,9 @@ import play_policy  # noqa: E402
 
 
 def test_jerk_checkpoint_uses_native_lightweight_contract() -> None:
-    args = play_policy.parse_args(["policy.json"])
+    args = play_policy.parse_args(["final_model.zip"])
 
-    play_policy.apply_checkpoint_defaults(args, Path("policy.json"))
+    play_policy.apply_checkpoint_defaults(args, Path("final_model.zip"))
 
     assert args.backend == "native"
     assert args.max_pool_frames is False

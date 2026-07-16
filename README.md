@@ -132,18 +132,16 @@ env.close()
 
 ## Train and play
 
-Train the included observation-free JERK action-sequence policy from Level 1-1:
+Train the included observation-free JERK action-sequence policy for a named level:
 
 ```bash
-uv run python train.py --rom /path/to/SuperMarioBros.nes
+uv run python train.py Level1-1 --rom /path/to/SuperMarioBros.nes
 ```
 
-The default run writes checkpoints, episode metrics, and `final_policy.json` under `runs/level1-1-jerk/`. Episodes end when Mario loses a life or reaches the step limit; changing levels does not end an episode. Play the retained sequence with:
+The default run matches rlab's vectorized JERK search: 16 lanes uniformly explore the simple action set, retain the best-return prefixes, and increasingly replay shortened archive prefixes. Failed attempts end on life loss, 300 steps without progress, or the 4,500-step limit. A level change does not reset the environment; it accepts the first successful sequence and stops training. The level name deterministically selects both the run directory and policy file, so `Level1-1` writes `runs/Level1-1-jerk/Level1-1.zip`. Play it with:
 
 ```bash
-uv run python scripts/play_policy.py runs/level1-1-jerk/final_policy.json \
-  --rom-path /path/to/SuperMarioBros.nes \
-  --backend native
+uv run python play.py Level1-1 --rom-path /path/to/SuperMarioBros.nes
 ```
 
 ## Commands
@@ -179,7 +177,7 @@ reproduce with `make benchmark-report`.
 - The emulator supports only `SuperMarioBros-Nes-v0` on mapper 0/NROM. It is not a general NES or Stable Retro replacement.
 - Named saved states are packaged from `Level1-1` through `Level8-4`, with additional variants. `state=` also accepts a path, bytes, one state per lane, or a weighted mapping.
 - `Actions.ALL` and `Actions.FILTERED` accept per-button masks. `Actions.DISCRETE` accepts Stable Retro-compatible 36-way discrete actions.
-- `train.py` implements JERK (Just Enough Retained Knowledge): it explores scripted action sequences, retains the best reward-reaching prefix, and increasingly replays it. It does not use observations, PyTorch, or Stable Baselines3.
+- `train.py` implements JERK (Just Enough Retained Knowledge): it uniformly explores action sequences, retains the best reward-reaching prefixes, and increasingly replays shortened archive prefixes. It does not use observations, PyTorch, or Stable Baselines3.
 - `scripts/benchmark_sps.py` benchmarks this package by default or upstream `stable-retro==1.0.1` with `--stable-retro-baseline`. Both use frame skip 4, four grayscale frames, a zeroed 32-row HUD, integer area resize to `84x84`, CHW output, deterministic sampled actions, and manual terminal-lane resets. Stable Retro mode requires Python `>=3.10`.
 - The play scripts require a discoverable native SDL2 library and open local gameplay windows.
 - This is an unofficial research project and is not affiliated with or endorsed by Nintendo. See [NOTICE.md](https://github.com/tsilva/SuperMarioBros-Nes-turbo/blob/main/NOTICE.md).

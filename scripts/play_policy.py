@@ -11,22 +11,40 @@ from pathlib import Path
 
 import numpy as np
 
-from play import (
-    DEFAULT_ROM,
-    NES_HEIGHT,
-    NES_WIDTH,
-    SDL_INIT_VIDEO,
-    SDL_PIXELFORMAT_RGB24,
-    SDL_QUIT,
-    SDL_RENDERER_ACCELERATED,
-    SDL_TEXTUREACCESS_STREAMING,
-    SDL_WINDOWPOS_CENTERED,
-    SDL_WINDOW_SHOWN,
-    SdlUnavailableError,
-    configure_sdl,
-    display_frame_from_obs,
-    load_sdl2,
-)
+try:
+    from scripts.play import (
+        DEFAULT_ROM,
+        NES_HEIGHT,
+        NES_WIDTH,
+        SDL_INIT_VIDEO,
+        SDL_PIXELFORMAT_RGB24,
+        SDL_QUIT,
+        SDL_RENDERER_ACCELERATED,
+        SDL_TEXTUREACCESS_STREAMING,
+        SDL_WINDOWPOS_CENTERED,
+        SDL_WINDOW_SHOWN,
+        SdlUnavailableError,
+        configure_sdl,
+        display_frame_from_obs,
+        load_sdl2,
+    )
+except ModuleNotFoundError:
+    from play import (
+        DEFAULT_ROM,
+        NES_HEIGHT,
+        NES_WIDTH,
+        SDL_INIT_VIDEO,
+        SDL_PIXELFORMAT_RGB24,
+        SDL_QUIT,
+        SDL_RENDERER_ACCELERATED,
+        SDL_TEXTUREACCESS_STREAMING,
+        SDL_WINDOWPOS_CENTERED,
+        SDL_WINDOW_SHOWN,
+        SdlUnavailableError,
+        configure_sdl,
+        display_frame_from_obs,
+        load_sdl2,
+    )
 from supermariobrosnes_turbo import (
     ACTION_SETS,
     Actions,
@@ -52,9 +70,11 @@ except ModuleNotFoundError:
     )
 
 
-DEFAULT_HF_FILENAME = "final_policy.json"
+DEFAULT_HF_FILENAME = "final_model.zip"
 DEFAULT_GAME = "SuperMarioBros-Nes-v0"
-HF_URL_RE = re.compile(r"^https?://huggingface\.co/(?P<repo>[^/]+/[^/]+)(?:/(?P<rest>.*))?$")
+HF_URL_RE = re.compile(
+    r"^https?://huggingface\.co/(?P<repo>[^/]+/[^/]+)(?:/(?P<rest>.*))?$"
+)
 
 
 class ModelResolutionError(RuntimeError):
@@ -72,7 +92,11 @@ def parse_hf_source(source: str) -> tuple[str, str | None, str | None] | None:
             filename = "/".join(parts[2:])
             return repo_id, filename, revision
         return repo_id, None, None
-    if "/" in source and not source.endswith(".json") and not Path(source).expanduser().exists():
+    if (
+        "/" in source
+        and not source.endswith((".json", ".zip"))
+        and not Path(source).expanduser().exists()
+    ):
         return source, None, None
     return None
 
@@ -84,7 +108,9 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
 
     hf_source = parse_hf_source(source)
     if hf_source is None:
-        raise ModelResolutionError(f"model source does not exist and is not a Hugging Face repo/url: {source}")
+        raise ModelResolutionError(
+            f"model source does not exist and is not a Hugging Face repo/url: {source}"
+        )
 
     repo_id, source_filename, revision = hf_source
     target_filename = filename or source_filename
@@ -98,7 +124,9 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
             or DEFAULT_HF_FILENAME
         )
 
-    cached_path = cached_hf_file(repo_id, filename=target_filename, revision=revision, cache_dir=cache_dir)
+    cached_path = cached_hf_file(
+        repo_id, filename=target_filename, revision=revision, cache_dir=cache_dir
+    )
     if cached_path is not None:
         return cached_path
 
@@ -121,7 +149,9 @@ def resolve_model_path(source: str, filename: str | None, cache_dir: Path) -> Pa
     return Path(path)
 
 
-def cached_hf_file(repo_id: str, filename: str, revision: str | None, cache_dir: Path) -> Path | None:
+def cached_hf_file(
+    repo_id: str, filename: str, revision: str | None, cache_dir: Path
+) -> Path | None:
     repo_cache = cache_dir.expanduser() / f"models--{repo_id.replace('/', '--')}"
     snapshot_dirs: list[Path] = []
     if revision is not None:
@@ -136,7 +166,9 @@ def cached_hf_file(repo_id: str, filename: str, revision: str | None, cache_dir:
             snapshot_dirs.append(repo_cache / "snapshots" / main_revision)
         snapshot_root = repo_cache / "snapshots"
         if snapshot_root.exists():
-            snapshot_dirs.extend(sorted(path for path in snapshot_root.iterdir() if path.is_dir()))
+            snapshot_dirs.extend(
+                sorted(path for path in snapshot_root.iterdir() if path.is_dir())
+            )
 
     seen: set[Path] = set()
     for snapshot_dir in snapshot_dirs:
@@ -166,7 +198,9 @@ def find_cached_hf_checkpoint_filename(
             snapshot_dirs.append(repo_cache / "snapshots" / main_revision)
         snapshot_root = repo_cache / "snapshots"
         if snapshot_root.exists():
-            snapshot_dirs.extend(sorted(path for path in snapshot_root.iterdir() if path.is_dir()))
+            snapshot_dirs.extend(
+                sorted(path for path in snapshot_root.iterdir() if path.is_dir())
+            )
 
     checkpoint_files: list[str] = []
     seen_dirs: set[Path] = set()
@@ -175,7 +209,9 @@ def find_cached_hf_checkpoint_filename(
             continue
         seen_dirs.add(snapshot_dir)
         checkpoint_files.extend(
-            str(path.relative_to(snapshot_dir)) for path in snapshot_dir.rglob("*.json")
+            str(path.relative_to(snapshot_dir))
+            for suffix in ("*.zip", "*.json")
+            for path in snapshot_dir.rglob(suffix)
         )
 
     unique_checkpoint_files = sorted(set(checkpoint_files))
@@ -192,7 +228,9 @@ def find_hf_checkpoint_filename(repo_id: str, revision: str | None) -> str | Non
     except ImportError:
         return None
     files = list_repo_files(repo_id, revision=revision)
-    checkpoint_files = sorted(path for path in files if path.endswith(".json"))
+    checkpoint_files = sorted(
+        path for path in files if path.endswith((".zip", ".json"))
+    )
     if len(checkpoint_files) == 1:
         return checkpoint_files[0]
     if DEFAULT_HF_FILENAME in checkpoint_files:
@@ -200,7 +238,9 @@ def find_hf_checkpoint_filename(repo_id: str, revision: str | None) -> str | Non
     return None
 
 
-def download_direct_hf_file(repo_id: str, filename: str, revision: str, cache_dir: Path) -> Path:
+def download_direct_hf_file(
+    repo_id: str, filename: str, revision: str, cache_dir: Path
+) -> Path:
     safe_name = urllib.parse.quote(f"{repo_id}/{revision}/{filename}", safe="")
     target = cache_dir.expanduser() / "direct" / safe_name
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -330,7 +370,9 @@ class SdlPolicyPlayer:
             error = self.sdl_error()
             self.sdl.SDL_Quit()
             raise SdlUnavailableError(error)
-        self.renderer = self.sdl.SDL_CreateRenderer(self.window, -1, SDL_RENDERER_ACCELERATED)
+        self.renderer = self.sdl.SDL_CreateRenderer(
+            self.window, -1, SDL_RENDERER_ACCELERATED
+        )
         if not self.renderer:
             error = self.sdl_error()
             self.sdl.SDL_DestroyWindow(self.window)
@@ -457,7 +499,10 @@ class SdlPolicyPlayer:
                     self.display_fps = self.fps_window_frames / elapsed
                     self.fps_window_frames = 0
                     self.fps_window_start = now
-                if self.args.auto_close_frames is not None and self.frames_rendered >= self.args.auto_close_frames:
+                if (
+                    self.args.auto_close_frames is not None
+                    and self.frames_rendered >= self.args.auto_close_frames
+                ):
                     break
                 self.sleep_until_next_frame()
         finally:
@@ -518,7 +563,13 @@ class SdlPolicyPlayer:
             self.display_obs = self.obs
             self.display_info = self.info
             return
-        display_obs, _rewards, display_terminations, display_truncations, display_infos = self.display_env.step(
+        (
+            display_obs,
+            _rewards,
+            display_terminations,
+            display_truncations,
+            display_infos,
+        ) = self.display_env.step(
             self.action_masks[[self.action]],
         )
         self.display_obs = display_obs
@@ -537,7 +588,9 @@ class SdlPolicyPlayer:
             self.render()
             self.sleep_until_next_frame()
 
-    def print_episode_summary(self, life_loss: bool, terminated: bool, truncated: bool) -> None:
+    def print_episode_summary(
+        self, life_loss: bool, terminated: bool, truncated: bool
+    ) -> None:
         summary = {
             "episode": self.episode,
             "steps": self.step,
@@ -570,12 +623,15 @@ class SdlPolicyPlayer:
         else:
             frame = np.ascontiguousarray(frame)
 
-        if self.sdl.SDL_UpdateTexture(
-            self.texture,
-            None,
-            frame.ctypes.data_as(ctypes.c_void_p),
-            frame.strides[0],
-        ) != 0:
+        if (
+            self.sdl.SDL_UpdateTexture(
+                self.texture,
+                None,
+                frame.ctypes.data_as(ctypes.c_void_p),
+                frame.strides[0],
+            )
+            != 0
+        ):
             raise RuntimeError(self.sdl_error())
         self.sdl.SDL_RenderClear(self.renderer)
         self.sdl.SDL_RenderCopy(self.renderer, self.texture, None, None)
@@ -632,8 +688,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Play a JERK Mario action sequence from disk or Hugging Face.",
     )
-    parser.add_argument("model", help="Local JERK .json, HF repo id, or Hugging Face URL")
-    parser.add_argument("--filename", default=None, help="Checkpoint filename inside an HF repo")
+    parser.add_argument(
+        "model", help="Local JERK .zip/.json, HF repo id, or Hugging Face URL"
+    )
+    parser.add_argument(
+        "--filename", default=None, help="Checkpoint filename inside an HF repo"
+    )
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/hf_cache"))
     parser.add_argument(
         "--backend",
@@ -657,7 +717,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=10007)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--frame-stack", type=int, default=4)
-    parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--max-pool-frames", action=argparse.BooleanOptionalAction, default=None
+    )
     parser.add_argument("--crop-top", type=int, default=32)
     parser.add_argument("--crop-bottom", type=int, default=0)
     parser.add_argument("--crop-mode", choices=("remove", "mask"), default=None)
