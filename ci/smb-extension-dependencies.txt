@@ -31,7 +31,7 @@ pyo3-ffi==0.22.6
 pyo3-macros-backend==0.22.6
 pyo3-macros==0.22.6
 pyo3==0.22.6
-quote==1.0.47
+quote==3.0
 rawpointer==0.2.1
 rayon-core==1.13.0
 rayon==1.12.0
